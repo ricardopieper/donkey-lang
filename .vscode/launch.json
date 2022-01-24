@@ -1,0 +1,48 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'pony'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=pony",
+                    "--package=pony"
+                ],
+                "filter": {
+                    "name": "pony",
+                    "kind": "bin"
+                }
+            },
+            "args": ["example.py"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'pony'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=pony",
+                    "--package=pony"
+                ],
+                "filter": {
+                    "name": "pony",
+                    "kind": "bin"
+                }
+            },
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
+            "args": ["function_call_in_right_binop", "--nocapture"],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
