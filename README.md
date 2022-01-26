@@ -3,17 +3,18 @@ pony
 
 Pony is a python-like, statically typed programming language.
 
-Most of the parsing code was copied from my Horse interpreter at github.com/ricardopieper/horse repository.
+Most of the parsing code was copied from my Horse interpreter at github.com/ricardopieper/horse repository. 
 
-Syntax will be based on python but the VM will be far more lightweight. Preferably in the future we won't have a VM. We wont have classes, just structs and impls like Rust. I will try to implement some trait-like system as well, so there will be syntax for that. While the syntax looks like python, it doesn't follow Python's object model or most of the language's built-in type naming. When it does it's coincidental.
+Syntax will be based on python but the VM will be far more lightweight. Preferably in the future we won't have a VM. We wont have classes, just structs and impls like Rust. I will try to implement some trait-like system as well, so there will be syntax for that. While the syntax looks like python, it doesn't follow Python's object model or most of the language's built-in type naming. When it does it's coincidental. I'm not a fan of the lambda syntax in Python, so I might change that, preferably using more or less the same syntax as regular function definitions.
 
-The features of the language will be implemented purely based on personal interest. Here are the things that, at the moment, I find interesting: uninteresting:
+This means that, compared to other python-like statically typed languages, the differences of this language to these others will be mostly cosmetic. However, this language is *not* to be used in production, it's just for studying purposes. That's why the features of the language will be implemented purely based on personal interest. Here are the things that, at the moment, I find interesting: uninteresting:
 
   - Metaprogramming, or some level of type information available at compile time (or runtime)
   - Trait system, like Rust
   - Functional programming in general
   - Generics
 
+It doesn't mean I'll implement all of these things, but I would like to implement traits and generics at least.
 
 Here are the things that I don't find interesting to implement:
 
@@ -21,7 +22,6 @@ Here are the things that I don't find interesting to implement:
   - Public/private members (everything will be public)
   - Inheritance
 
-It doesn't mean I'll implement all of these things, but I would like to implement traits at least.
 
 The goal is to be faster than the Horse interpreter but it won't be safe at all. You might need to 
 allocate memory manually, take pointers, defend against None (nullptr), etc. I'll try to add some error detecting in the VM, but not much. The VM internally will probably use a ton of `mem::transmute`, and hope for the type checker to do it's job.
