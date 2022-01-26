@@ -6,7 +6,7 @@ use std::collections::HashSet;
 fn make_assignments_into_declarations_in_function(function_name: &str,
     parameters: &[MIRTypedBoundName],
     body: &[MIR],
-    return_type: &MIRType) -> Vec<MIR> {
+    return_type: &MIRTypeDef) -> Vec<MIR> {
 
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
@@ -35,7 +35,11 @@ fn make_assignments_into_declarations_in_function(function_name: &str,
                     assign.clone()
                 } else {
                     declarations_found.insert(var.clone());
-                    MIR::Declare { var: var.clone(), typename: None, expression: expression.clone() }
+                    MIR::Declare { 
+                        var: var.clone(), 
+                        typename: MIRTypeDef::Pending, 
+                        expression: expression.clone() 
+                    }
                 }
             }
             other => other.clone()
@@ -46,7 +50,7 @@ fn make_assignments_into_declarations_in_function(function_name: &str,
     return new_mir;
 }
 
-pub fn check_declared_variables_in_functions(mir: Vec<MIR>) -> Vec<MIR> {
+pub fn transform_first_assignment_into_declaration(mir: Vec<MIR>) -> Vec<MIR> {
 
     let mut new_mir = vec![];
 

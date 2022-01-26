@@ -46,13 +46,13 @@ impl MIRExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MIRTypedBoundName {
     pub name: String,
-    pub typename: MIRType //var name, type
+    pub typename: MIRTypeDef //var name, type
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRType {
     Simple(String),
-    Generic(String, Vec<MIRType>)
+    Generic(String, Vec<MIRTypeDef>)
 }
 
 impl MIRType {
@@ -60,12 +60,22 @@ impl MIRType {
         match typ {
             ASTType::Simple(name) => Self::Simple(name.clone()),
             ASTType::Generic(name, generics) => {
-                let mir_generics = generics.iter().map(|x| Self::from_ast(x)).collect::<Vec<_>>();
+                let mir_generics = generics.iter().map(|x| MIRTypeDef::Unresolved(Self::from_ast(x))).collect::<Vec<_>>();
                 return MIRType::Generic(name.clone(), mir_generics);
             } 
         }
     }
 }
+
+type TypeId = usize;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MIRTypeDef {
+    Pending,
+    Unresolved(MIRType),
+    Resolved(TypeId)
+}
+
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,14 +86,14 @@ pub enum MIR {
     },
     Declare {
         var: String,
-        typename: Option<MIRType>,
+        typename: MIRTypeDef,
         expression: MIRExpr,
     },
     DeclareFunction {
         function_name: String,
         parameters: Vec<MIRTypedBoundName>,
         body: Vec<MIR>,
-        return_type: MIRType
+        return_type: MIRTypeDef
     },
     StructDeclaration {
         struct_name: String,
@@ -92,9 +102,6 @@ pub enum MIR {
     FunctionCall {
         function: TrivialMIRExpr,
         args: Vec<TrivialMIRExpr>,
-    },
-    Array {
-        items: Vec<MIRExpr>
     },
     Return(MIRExpr),
     EmptyReturn
@@ -229,7 +236,7 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
            if is_reducing {
                 let declare = MIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: None,
+                    typename: MIRTypeDef::Pending,
                     expression: fcall.clone()
                 };
                 total_used_interm += 1;
@@ -266,7 +273,7 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
             if is_reducing {
                 let declare = MIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: None,
+                    typename: MIRTypeDef::Pending,
                     expression: binop.clone()
                 };
                 total_used_interm += 1;
@@ -309,7 +316,7 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
             if is_reducing {
                 let declare = MIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: None,
+                    typename: MIRTypeDef::Pending,
                     expression: array.clone()
                 };
                 total_used_interm += 1;
@@ -351,7 +358,7 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
             if is_reducing {
                 let declare = MIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: None,
+                    typename: MIRTypeDef::Pending,
                     expression: index_access_expr.clone()
                 };
                 total_used_interm += 1;
@@ -382,7 +389,7 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
             if is_reducing {
                 let declare = MIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: None,
+                    typename: MIRTypeDef::Pending,
                     expression: unaryop.clone()
                 };
                 total_used_interm += 1;
@@ -414,7 +421,7 @@ pub fn ast_to_mir(ast: &AST, mut intermediary: i32, accum: &mut Vec<MIR>) -> i32
             
             let decl_mir = MIR::Declare {
                 var: var.name.clone(),
-                typename: Some(MIRType::from_ast(&var.name_type)),
+                typename: MIRTypeDef::Unresolved(MIRType::from_ast(&var.name_type)),
                 expression: result_expr
             };
 
@@ -447,13 +454,13 @@ pub fn ast_to_mir(ast: &AST, mut intermediary: i32, accum: &mut Vec<MIR>) -> i32
                 parameters: parameters.iter().map(|param| {
                     let name = param.name.clone();
                     return MIRTypedBoundName {
-                        name, typename: MIRType::from_ast(&param.name_type)
+                        name, typename: MIRTypeDef::Unresolved(MIRType::from_ast(&param.name_type))
                     }
                 }).collect(),
                 body: function_body,
                 return_type: match return_type {
-                    Some(x) => MIRType::from_ast(x),
-                    None => MIRType::Simple("Void".into())
+                    Some(x) => MIRTypeDef::Unresolved(MIRType::from_ast(x)),
+                    None => MIRTypeDef::Unresolved(MIRType::Simple("Void".into()))
                 }
             };
 
@@ -485,7 +492,9 @@ pub fn ast_to_mir(ast: &AST, mut intermediary: i32, accum: &mut Vec<MIR>) -> i32
         }
         AST::StructDeclaration {struct_name, body} => {
             let fields = body.iter().map(|field| {
-                return MIRTypedBoundName { name: field.name.clone(), typename: MIRType::from_ast(&field.name_type) };
+                return MIRTypedBoundName { 
+                    name: field.name.clone(), 
+                    typename: MIRTypeDef::Unresolved(MIRType::from_ast(&field.name_type)) };
             });
             accum.push(MIR::StructDeclaration{ struct_name: struct_name.clone(), body: fields.collect()});
             return 0;

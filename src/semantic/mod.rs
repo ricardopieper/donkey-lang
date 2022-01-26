@@ -1,4 +1,5 @@
-mod check_declared_variables;
-mod info_extract;
+mod first_assignments;
+mod type_db;
+mod undeclared_vars;
 pub mod mir;
 pub mod analysis;

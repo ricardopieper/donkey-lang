@@ -10,10 +10,7 @@ use std::fs;
 use crate::ast::lexer;
 use crate::ast::parser;
 use crate::semantic::mir;
-use crate::semantic::mir::MIR;
-use crate::semantic::mir::MIRExpr;
-use crate::semantic::mir::TrivialMIRExpr;
-use crate::semantic::mir::MIRType;
+use crate::semantic::mir::*;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -75,12 +72,13 @@ fn main() {
             }
         }
 
-        fn mir_type_str(typ: Option<&MIRType>) -> String {
-            
+        fn mir_type_str(typ: &MIRTypeDef) -> String {
             match typ {
-                None => "UNKNOWN_TYPE".into(),
-                Some(MIRType::Simple(s)) => s.clone(),
-                Some(MIRType::Generic(s, g)) => format!("{}<{}>", s, g.iter().map(|x| mir_type_str(Some(x))).collect::<Vec<_>>().join(", "))
+                MIRTypeDef::Pending => "UNKNOWN_TYPE".into(),
+                MIRTypeDef::Unresolved(MIRType::Simple(s)) => s.clone(),
+                MIRTypeDef::Unresolved(MIRType::Generic(s, g)) => format!("{}<{}>", s, 
+                    g.iter().map(|x| mir_type_str(x)).collect::<Vec<_>>().join(", ")),
+                MIRTypeDef::Resolved(id) => format!("RESOLVED_{}", id)
             }
         }
 
@@ -90,15 +88,15 @@ fn main() {
                     println!("{}{} = {}",indent, path.join("."), expr_str(&expression));
                 },
                 MIR::Declare{var, typename, expression} => {
-                    println!("{}{} : {} = {}", indent, var, mir_type_str(typename.as_ref()), expr_str(&expression));
+                    println!("{}{} : {} = {}", indent, var, mir_type_str(typename), expr_str(&expression));
                 },
                 MIR::DeclareFunction{function_name, parameters, body, return_type} => {
                     
                     let parameters = parameters.iter().map(|param| {
-                        return format!("{}{}: {}", indent, param.name, mir_type_str(Some(&param.typename)));
+                        return format!("{}{}: {}", indent, param.name, mir_type_str(&param.typename));
                     }).collect::<Vec<_>>().join(", ");
                     
-                    println!("{}def {}({}) -> {}:", indent, function_name, parameters, mir_type_str(Some(return_type)));
+                    println!("{}def {}({}) -> {}:", indent, function_name, parameters, mir_type_str(return_type));
 
                     for n in body {
                         mir_str(n, format!("{}  ", indent));
@@ -113,7 +111,7 @@ fn main() {
                     println!("{}struct {}:", indent, struct_name);
 
                     for field in body {
-                        println!("{}  {}: {}", indent, field.name, mir_type_str(Some(&field.typename)));
+                        println!("{}  {}: {}", indent, field.name, mir_type_str(&field.typename));
                     }
 
                     println!()

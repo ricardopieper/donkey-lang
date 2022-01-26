@@ -4,18 +4,10 @@ use std::collections::{ HashSet, HashMap };
 
 type TypeId = usize;
 
-//represents the usage of a type. Useful for specific generic instantiations
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeInstance {
-    type_id: TypeId,
-    generic_type_args: Vec<TypeId>
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeKind {
     Simple,
-    Generic,
-    Function
+    Generic
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,9 +16,7 @@ pub struct TypeRecord {
     pub kind: TypeKind,
     pub size: usize,
     pub name: String,
-    pub num_generic_args: i32,
-    pub func_arguments: Vec<TypeInstance>,
-    pub func_return_type: Option<TypeInstance>
+    pub num_generic_args: i32
 }
 
 impl Default for TypeRecord {
@@ -36,9 +26,7 @@ impl Default for TypeRecord {
             kind: TypeKind::Simple,
             size: 0,
             name: "".into(),
-            num_generic_args: 0,
-            func_arguments: vec![],
-            func_return_type: None
+            num_generic_args: 0
         }
     }
 }
@@ -112,63 +100,7 @@ impl TypeDatabase {
         self.add("str", mem::size_of::<usize>() + mem::size_of::<i32>());
 
         //ptr + num items
-        self.add_generic("List", 1,  mem::size_of::<usize>() + mem::size_of::<i32>());
+        self.add_generic("List", 1, mem::size_of::<usize>() + mem::size_of::<i32>());
     } 
 }
 
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GlobalSymbolTypes {
-    //stores global names and types, ex: a function name and its type
-    pub by_name: HashMap<String, TypeInstance>
-}
-
-impl GlobalSymbolTypes {
-    fn new() -> Self {
-        Self {
-            by_name: HashMap::new()
-        }
-    }
-
-    fn register_function(&mut self, name: &str, positional_type_args: &[&str], return_type: TypeId) {
-
-    }
-}
-
-/*
-
-The extraction process goes as follows:
-Each typed element has dependencies on other types. For instance, when typing a function,
-we have arguments and return types, it depends on these other types existing.
-
-Therefore, lets iterate over all MIR elements twice:
-
-    - The first iteration assigns types to all elements, even if they don't 
-
-*/
-
-pub fn extract(mir: Vec<MIR>) {
-    for node in mir {
-        match node {
-            MIR::DeclareFunction {
-                function_name,
-                parameters, //{name, name_type: MIRType}
-                body, 
-                return_type //MIRType
-            } => {
-                //here we have to build a Function type kind
-                //and register it
-                
-                //the arguments of the function are assumed to already exist.
-
-
-
-                //let function_type_kind = TypeData::Function(arguments_type_instances, return_type_instance);
-
-            }
-            _ => {}
-        }
-        
-    }
-    
-}
