@@ -5,20 +5,21 @@ Pony is a python-like, statically typed programming language.
 
 Most of the parsing code was copied from my Horse interpreter at github.com/ricardopieper/horse repository.
 
-Syntax will be based on python but the VM will be far more lightweight. Preferably in the future we won't have a VM. We wont have classes, just structs and impls like Rust. I will try to implement some trait-like system as well, so there will be syntax for that. While the syntax looks like python, it doesn't follow Python's object model or most of the language's built-in type naming. When it does it's coincidental
+Syntax will be based on python but the VM will be far more lightweight. Preferably in the future we won't have a VM. We wont have classes, just structs and impls like Rust. I will try to implement some trait-like system as well, so there will be syntax for that. While the syntax looks like python, it doesn't follow Python's object model or most of the language's built-in type naming. When it does it's coincidental.
 
-The features of the language will be implemented purely based on personal interest. Here are the things that, at the moment, I find particularly uninteresting:
-
-  - Exceptions
-  - Public/private members (everything will be public)
-  - Inheritance
-
-Here are the things that I do find interesting:
+The features of the language will be implemented purely based on personal interest. Here are the things that, at the moment, I find interesting: uninteresting:
 
   - Metaprogramming, or some level of type information available at compile time (or runtime)
   - Trait system, like Rust
   - Functional programming in general
   - Generics
+
+
+Here are the things that I don't find interesting to implement:
+
+  - Exceptions
+  - Public/private members (everything will be public)
+  - Inheritance
 
 It doesn't mean I'll implement all of these things, but I would like to implement traits at least.
 
