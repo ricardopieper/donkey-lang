@@ -144,8 +144,8 @@ impl FighterJet for Su27Flanker
         #We will allow globals
         SoundManager.Play("assets/sounds/sidewinder-growl-tone.wav")
        
-        #Match on runtime types
-        if target.get() is FighterJet: # cannot check for specific type here
+        #Match on trait types
+        if target.get() is FighterJet: # cannot check for concrete type here.
             UIManager.ChangeRadarLockColor(radar_target_id, 255, 0, 0)
         else:
             UIManager.ShowMessage("Warning: Civilian aircraft locked")
