@@ -1,4 +1,4 @@
-def main(args: List<str>):
+def main(args: array<str>):
     minus: i32 = -my_function(99, 999)
     numbers = [1,2, -3, minus]
     r1 = my_function(1, 2)

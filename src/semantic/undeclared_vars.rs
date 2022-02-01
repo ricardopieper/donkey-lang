@@ -1,6 +1,6 @@
 use crate::semantic::mir::*;
 
-use std::collections::HashSet;
+use std::{collections::HashSet};
 
 fn check_trivial_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &TrivialMIRExpr) {
     match expr {
@@ -28,10 +28,6 @@ fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &
                 check_trivial_expr(declarations_found, function_name, fun_arg);
             }
         }
-        MIRExpr::IndexAccess(obj, index_expr) => {
-            check_trivial_expr(declarations_found, function_name, obj);
-            check_trivial_expr(declarations_found, function_name, index_expr);
-        }
         MIRExpr::UnaryExpression(_, unary_expr) => {
             check_trivial_expr(declarations_found, function_name, unary_expr);
         }
@@ -43,11 +39,13 @@ fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &
                 check_trivial_expr(&declarations_found, function_name, array_item);
             }
         }
+        MIRExpr::Cast(typedef, expr) =>
+            check_trivial_expr(&declarations_found, function_name, expr)
     }
 }
 
 
-fn detect_function_undeclared_vars(mut declarations_found: HashSet<String>, function_name: &str,
+fn detect_declaration_errors(mut declarations_found: HashSet<String>, function_name: &str,
     parameters: &[MIRTypedBoundName],
     body: &[MIR],
     return_type: &MIRTypeDef) {
@@ -59,6 +57,9 @@ fn detect_function_undeclared_vars(mut declarations_found: HashSet<String>, func
     for node in body {
         match node {
             MIR::Declare { var, expression, .. } => {
+                if declarations_found.contains(var) {
+                    panic!("Variable {} declared more than once", var);
+                }
                 declarations_found.insert(var.clone());
                 check_expr(&declarations_found, function_name, expression);
             },
@@ -79,7 +80,7 @@ fn detect_function_undeclared_vars(mut declarations_found: HashSet<String>, func
     }
 }
 
-pub fn detect_undeclared_vars(mir: &[MIR]) {
+pub fn detect_undeclared_vars_and_redeclarations(mir: &[MIR]) {
     let mut declarations_found = HashSet::<String>::new();
 
     //@TODO remove these
@@ -101,7 +102,7 @@ pub fn detect_undeclared_vars(mir: &[MIR]) {
     for node in mir.iter() {
         let result = match node {
             MIR::DeclareFunction{ function_name,  parameters, body, return_type} => {
-                detect_function_undeclared_vars(declarations_found.clone(), function_name, parameters, body, return_type);
+                detect_declaration_errors(declarations_found.clone(), function_name, parameters, body, return_type);
             }
             _ => {}
         };

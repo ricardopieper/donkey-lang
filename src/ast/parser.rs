@@ -15,7 +15,11 @@ pub enum Expr {
     Parenthesized(Box<Expr>),
     UnaryExpression(Operator, Box<Expr>),
     MemberAccess(Box<Expr>, String),
-    Array(Vec<Expr>),
+    Array(Vec<Expr>), 
+    //maybe there could be a syntax to specify the type of the array
+    //ex: instead of just x = [1,2,3] it could be x = [1, 2, 3] array<i32>
+    //or like sum = array<i32>[].sum() would return 0
+    //x: array<i32> = [] should work too
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

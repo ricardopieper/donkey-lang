@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["example.py"],
+            "args": ["typecheck.py"],
             "cwd": "${workspaceFolder}"
         },
         {

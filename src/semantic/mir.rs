@@ -2,6 +2,8 @@ use crate::ast::lexer::*;
 use crate::commons::float::*;
 use crate::ast::parser::*;
 
+use super::type_db::TypeDatabase;
+
 
 /**
  * 
@@ -25,11 +27,12 @@ pub enum TrivialMIRExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRExpr {
     Trivial(TrivialMIRExpr),
+    Cast(MIRTypeDef, TrivialMIRExpr),
     BinaryOperation(TrivialMIRExpr, Operator, TrivialMIRExpr),
     FunctionCall(TrivialMIRExpr, Vec<TrivialMIRExpr>),
-    IndexAccess(TrivialMIRExpr, TrivialMIRExpr),
     UnaryExpression(Operator, TrivialMIRExpr),
     MemberAccess(TrivialMIRExpr, String),
+    //maybe the array should have a type hint
     Array(Vec<TrivialMIRExpr>),
 }
 
@@ -49,10 +52,72 @@ pub struct MIRTypedBoundName {
     pub typename: MIRTypeDef //var name, type
 }
 
+/*This enum represents the type as typed in source code. This comes from the AST almost directly, 
+  no fancy transformations are applied. 
+  However we add a Function variant to construct a Function type where needed, but it also could be something coming from the AST in the future, 
+  like functions receiving functions*/
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRType {
     Simple(String),
-    Generic(String, Vec<MIRTypeDef>)
+    Generic(String, Vec<MIRType>),
+    Function(Vec<MIRType>, Box<MIRType>)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/*Represents a fully resolved type, with generics already substituted */
+pub enum TypeInstance {
+    Simple(TypeId), //Built-in types, non-generic structs, etc
+    Generic(TypeId, Vec<TypeInstance>), //each TypeId in the vec is a type parameter used in this specific usage of the type, this is positional.
+    Function(Vec<TypeInstance>, Box<TypeInstance>) //In this case there is not even a base type like in generics, functions are functions 
+}
+
+impl TypeInstance {
+    pub fn get_base_type(&self) -> Option<TypeId> {
+        match self {
+            TypeInstance::Simple(id) => Some(*id),
+            TypeInstance::Generic(id, _) => Some(*id),
+            TypeInstance::Function(_, _) => None,
+        }
+    }
+    pub fn string(&self, type_db: &TypeDatabase) -> String {
+        match self {
+            TypeInstance::Simple(id) => type_db.get_name(*id).into(),
+            TypeInstance::Generic(id, args) => {
+                let args_str = args.iter().map(|x| x.string(type_db).clone()).collect::<Vec<_>>().join(", ");
+                let base_str =type_db.get_name(*id);
+                format!("{}<{}>", base_str, args_str)
+            },
+            TypeInstance::Function(args, return_type) => {
+                let args_str = args.iter().map(|x| x.string(type_db).clone()).collect::<Vec<_>>().join(", ");
+                let return_type_str = return_type.string(type_db);
+                format!("fn ({}) -> {}", args_str, return_type_str)
+            },
+        }
+    }
+}
+
+
+//we need to be able to represent complex stuff, 
+//like a function that receives a function, whose parameters are generic
+//def func(another_func: Function<List<String>>)
+
+//so we can store TypeIds, but we need it to be accompanied by more data depending on the kind of the type,
+//types such as functions and generics need to be "instanced"
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MIRTypeDef {
+    Pending,
+    Unresolved(MIRType),
+    Resolved(TypeInstance)
+}
+
+impl MIRTypeDef {
+    pub fn expect_unresolved(&self) -> MIRType {
+        match self {
+            MIRTypeDef::Pending => panic!("Function parameters must have a type"),
+            MIRTypeDef::Unresolved(e) => e.clone(),
+            MIRTypeDef::Resolved(_) => panic!("Cannot deal with resolved types at this point, this is a bug"),
+        }
+    }
 }
 
 impl MIRType {
@@ -60,23 +125,14 @@ impl MIRType {
         match typ {
             ASTType::Simple(name) => Self::Simple(name.clone()),
             ASTType::Generic(name, generics) => {
-                let mir_generics = generics.iter().map(|x| MIRTypeDef::Unresolved(Self::from_ast(x))).collect::<Vec<_>>();
+                let mir_generics = generics.iter().map(|x| Self::from_ast(x)).collect::<Vec<_>>();
                 return MIRType::Generic(name.clone(), mir_generics);
             } 
         }
     }
 }
 
-type TypeId = usize;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRTypeDef {
-    Pending,
-    Unresolved(MIRType),
-    Resolved(TypeId)
-}
-
-
+pub type TypeId = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIR {
@@ -164,9 +220,8 @@ fn check_if_reducible(expr: &Expr) -> bool {
             return false;
         },
         Expr::IndexAccess(lhs, index_expr) => {
-            return_true_if_non_trivial!(lhs);
-            return_true_if_non_trivial!(index_expr);
-            return false;
+            //return true so that it can be lowered to a __index__ call
+            return true;
         },
         Expr::MemberAccess(path_expr, _member ) => {
             return_true_if_non_trivial!(path_expr);
@@ -183,6 +238,7 @@ fn check_if_reducible(expr: &Expr) -> bool {
 //this function returns the final expression created, and the number of intermediary variables used
 //In the recursive cases, this function should always return a MIRExpr::Trivial
 fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &mut Vec<MIR>, is_reducing: bool) -> (MIRExpr, i32) {
+    println!("Reducing {:?}", expr);
     let trivial_expr = get_trivial_mir_expr(expr);
     match trivial_expr {
         Some(x) => { return (MIRExpr::Trivial(x), 0) },
@@ -208,6 +264,7 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 let mut args_exprs = vec![];
                 let mut args_interm_used = 0;
                 for node in args {
+                    println!("Args: {:?}", node);
                     let (arg_expr, arg_num_interm) = 
                         reduce_expr_to_mir_declarations(node, intermediary, accum, true);
                     intermediary += arg_num_interm;
@@ -326,47 +383,18 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 return (array, total_used_interm);
             }
         },
-        index_access @ Expr::IndexAccess(obj_expr, index_expr) => {
-            let mut total_used_interm = 0;
+        //transforms an index access into a method call on obj
+        //i.e. if obj[0], becomes obj.__index__(0)
+        //i.e. if obj.map[0] becomes obj.map.__index__(0)
+        //will need member access syntax support
+        Expr::IndexAccess(obj_expr, index_expr) => {
+            let owned = index_expr.to_owned();
+            let as_fcall = Expr::FunctionCall(
+                Box::new(Expr::MemberAccess(obj_expr.clone(), "__index__".into())),
+                vec![*owned]
+            );
 
-            let index_access_expr = if check_if_reducible(index_access) {
-                
-                let (obj_reduced_expr, obj_num_interm) = 
-                    reduce_expr_to_mir_declarations(obj_expr, intermediary, accum, true);
-                intermediary += obj_num_interm;
-                total_used_interm += obj_num_interm;
-
-                let (item_expr, item_num_interm) = 
-                    reduce_expr_to_mir_declarations(index_expr, intermediary, accum, true);
-                intermediary += item_num_interm;
-                total_used_interm += item_num_interm;
-                
-                let MIRExpr::Trivial(obj_trivial_expr) = obj_reduced_expr else {
-                    panic!("Index access, object expression: after reduction, expr should be trivial!");
-                };
-                let MIRExpr::Trivial(item_trivial_expr) = item_expr else {
-                    panic!("Index access, index expression: after reduction, expr should be trivial!");
-                };
-
-                MIRExpr::IndexAccess(obj_trivial_expr, item_trivial_expr)
-            } else {
-                MIRExpr::IndexAccess(
-                    get_trivial_mir_expr(obj_expr).unwrap(),
-                    get_trivial_mir_expr(index_expr).unwrap())
-            };
-
-            if is_reducing {
-                let declare = MIR::Declare {
-                    var: make_intermediary(intermediary),
-                    typename: MIRTypeDef::Pending,
-                    expression: index_access_expr.clone()
-                };
-                total_used_interm += 1;
-                accum.push(declare);
-                return (MIRExpr::Trivial(TrivialMIRExpr::Variable(make_intermediary(intermediary))), total_used_interm);
-            } else {
-                return (index_access_expr, total_used_interm);
-            }
+            return reduce_expr_to_mir_declarations(&as_fcall, intermediary, accum, is_reducing);
         },
         unary_expression @ Expr::UnaryExpression(op, expr) => {
             let mut total_used_interm = 0;
@@ -399,6 +427,40 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                     TrivialMIRExpr::Variable(make_intermediary(intermediary))), total_used_interm);
             } else {
                 return (unaryop, total_used_interm);
+            }
+        }
+        Expr::MemberAccess(obj_expr, name) => {
+            let mut total_used_interm = 0;
+            let member_access = if check_if_reducible(obj_expr) {
+                let (expr_intermediary, num_intern) = reduce_expr_to_mir_declarations(obj_expr, intermediary, accum, true);
+                intermediary += num_intern;
+
+                total_used_interm = num_intern;
+
+                MIRExpr::MemberAccess(
+                    expr_intermediary.expect_trivial().clone(), 
+                    name.clone())
+            } else {
+                println!("Member access obj expr: {:?}", obj_expr);
+                MIRExpr::MemberAccess(
+                    get_trivial_mir_expr(obj_expr).unwrap(), 
+                    name.clone()
+                )
+            };
+
+            if is_reducing {
+                let declare = MIR::Declare {
+                    var: make_intermediary(intermediary),
+                    typename: MIRTypeDef::Pending,
+                    expression: member_access.clone()
+                };
+                total_used_interm += 1;
+                accum.push(declare);
+
+                return (MIRExpr::Trivial(
+                    TrivialMIRExpr::Variable(make_intermediary(intermediary))), total_used_interm);
+            } else {
+                return (member_access, total_used_interm);
             }
         }
         exprnode => panic!("Expr to mir not implemented for {:?}", exprnode)
@@ -598,4 +660,6 @@ def my_function2(arg1: i32, arg2: i32) -> i32:
 
         assert_eq!(debug_view_expected, format!("{:?}", result));
     }
+
+    
 }
