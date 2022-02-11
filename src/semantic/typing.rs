@@ -1,31 +1,10 @@
 use crate::semantic::mir::*;
 use crate::semantic::name_registry::NameRegistry;
-use crate::semantic::type_db::{TypeDatabase, TypeKind};
+use crate::semantic::type_db::{TypeDatabase, FunctionSignature};
 use crate::semantic::type_db::Type;
 use either::Either;
 
 use core::panic;
-use std::collections::HashSet;
-
-/**
-
-pub enum TrivialMIRExpr {
-    IntegerValue(i128),
-    FloatValue(Float),
-    StringValue(String),
-    BooleanValue(bool),
-    Variable(String),
-    None,
-}
-
-Trivial(TrivialMIRExpr),
-BinaryOperation(TrivialMIRExpr, Operator, TrivialMIRExpr),
-FunctionCall(TrivialMIRExpr, Vec<TrivialMIRExpr>),
-IndexAccess(TrivialMIRExpr, TrivialMIRExpr),
-UnaryExpression(Operator, TrivialMIRExpr),
-MemberAccess(TrivialMIRExpr, String),
-Array(Vec<TrivialMIRExpr>),
-*/
 
 
 fn instantiate_type(type_db: &TypeDatabase, typedef: &MIRType) -> TypeInstance {
@@ -59,41 +38,93 @@ fn instantiate_type(type_db: &TypeDatabase, typedef: &MIRType) -> TypeInstance {
         },
     }
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypeResolution<'a> {
+    object_type_id: Option<TypeId>,
+    object_instance_generic_args: &'a [TypeInstance]
+}
+
+impl<'a> TypeResolution<'a> {
+    pub fn new(object_type_id: Option<TypeId>,
+        object_instance_generic_args: &'a [TypeInstance]) -> Self {
+            Self {
+                object_type_id, object_instance_generic_args
+            }
+        }
+}
 
 
-fn resolve_type(type_partially_filled: &Type, type_db: &TypeDatabase, base_type_id: TypeId, provided_generic_args: &Vec<TypeInstance>) -> TypeInstance {
-    let type_instance: TypeInstance = match type_partially_filled {
+fn resolve_type<'a>(type_partially_filled: &Type, type_db: &TypeDatabase, type_resolution: TypeResolution<'a>) -> TypeInstance {
+    /*
+     We are continuing the resolution of a generic method call. 
+     Recall that type_partially_filled is named like that because the Type may still have unresolved generics.
+     Also, type_partially_filled is an element of a function signature (either a param, or a return type)
+     This is the case here: type_partially_filled is Type::Simple(Either::Left(GenericParameter("TItem")))
+    */
+
+     let type_instance: TypeInstance = match type_partially_filled {
         Type::Simple(Either::Right(type_id)) => TypeInstance::Simple(*type_id),
         Type::Simple(Either::Left(gen_param)) => {
-            //gen_param will be something like T, a name for a generic parameter
-            //and it cannot be searched in the type DB.
+            /*
+            Finally we have gen_param, which will have a type called TItem.
+            It's a generic parameter, and we can't look it up in the type database.
+            It's a parameter we need to do substitution.
             
-            //we can either look in:
-            //the call site itself, which currently doesnt hold any type info
-            //the struct type arguments
-            //inferred from arguments
+            We can either look in:
+             - The call site itself, which currently doesnt hold any type info, so it's not an option
+             - Inferred from arguments, which we currently don't have argument information... so we can't do that
+             - The struct type arguments, which are positional, so we can match it by position
 
-            //inferring from arguments will be hard to do with the way I did things...
-            //we need to resolve the gen_param, searching a type that is in scope.
+            We will do the 3rd option.
 
-            //to use struct type arguments,
-            //typeof_obj has a type_id, 
-            //which has a record of every generic argument it receives
+            This is equivalent to checking the object type ID onto which we are calling the method.
+            Recall:
+                        fn(u32) -> TItem    
+                        vvvvvvvv  
+                [1,2,3].__index__(0)
+                ^^^^^^^
+               array<TItem>  
             
-            //so the type_id has N generic arguments, the generics object (pattern matched)
-            //has to have N arguments as well 
-            //first let's see the index of this arg
-            let type_data = type_db.find(base_type_id);
+            We already determined in a previous step that the array is typed as array<i32>.
+            */
+ 
+            //So first let's get the array<TItem> type data
+            let type_data = type_db.find(type_resolution.object_type_id.unwrap());
+
+            /*
+            
+            Now we have type_data.type_args, which will be &[GenericParameter("TItem")]
+            
+            Recall the gen_param in this match guard:
+            Type::Simple(Either::Left(gen_param))
+            Scroll the code back to the pattern match and re-read the first comment in this function.
+            If you don't understand, recall: we are matching on an element of the function signature:
+
+                fn __index__(at: u32) -> TItem
+
+            And in this example we are talking about the return type, TItem.
+            So gen__param is &GenericParameter("TItem")    
+
+            The question is: What is TItem?
+
+            The parameter struct_instance_generic_args will contain the positional arguments 
+            in the declaration of array<TItem>. If we have 
+            x = [1,2,3]
+            then typeof(x) = array<i32>, and struct_instance_generic_args will be [TypeInstance::Simple(i32)]
+            
+            Then, what's the index of the TItem parameter? 
+            */
+
             let index_of = type_data.type_args.iter().position(|p| *p == *gen_param).unwrap(); 
-            return provided_generic_args.get(index_of).unwrap().clone();
+            
+            //It will be 0, so we return the 0th value of [TypeInstance::Simple(i32)]. Type is i32. 
+            return type_resolution.object_instance_generic_args.get(index_of).unwrap().clone();
         },
         Type::Generic(type_id, type_args) => {
             let all_args_resolved = type_args.iter().map(|type_arg| 
-                resolve_type(
-                    type_arg,
-                type_db, 
-                *type_id, 
-                provided_generic_args)).collect::<Vec<_>>();
+                resolve_type(type_arg, type_db, 
+                TypeResolution::new(Some(*type_id), type_resolution.object_instance_generic_args)))
+                .collect::<Vec<_>>();
             
             return TypeInstance::Generic(*type_id, all_args_resolved);
         },
@@ -102,20 +133,42 @@ fn resolve_type(type_partially_filled: &Type, type_db: &TypeDatabase, base_type_
                 resolve_type(
                     type_arg,
                     type_db, 
-                    base_type_id, 
-                    provided_generic_args)).collect::<Vec<_>>();
+                    type_resolution.clone())).collect::<Vec<_>>();
             
             let return_type_resolved = resolve_type(
                 &return_type,
                 type_db, 
-                base_type_id, 
-                provided_generic_args);
+                type_resolution);
             
             return TypeInstance::Function(all_args_resolved, Box::new(return_type_resolved));
         },
     };
 
     return type_instance;
+}
+
+fn resolve_function_signature(type_db: &TypeDatabase, signature: FunctionSignature, generics: &[TypeInstance]) -> (Vec<TypeInstance>, TypeInstance) {
+    //if function signature has type parameters
+    //we have to replace them but for now forget about it
+    //we don't have syntax to call functions with their own type params
+    if signature.type_args.len() != 0 {
+        panic!("Function type args not supported yet")
+    }
+    //however, any of the parameters in the function can 
+    //be generic and reference the struct type arg
+
+    //first resolve all type instances in the args
+    let results = signature.args.iter().map(|arg| {
+        return resolve_type(
+            arg, 
+            type_db, TypeResolution { object_type_id: None, object_instance_generic_args: generics });
+    }).collect::<Vec<_>>();
+
+    let return_type = resolve_type(
+        &signature.return_type, 
+        type_db, TypeResolution { object_type_id: None, object_instance_generic_args: generics });
+
+    return (results, return_type);
 }
 
 //maybe add a type hint here for empty arrays in assigns
@@ -170,26 +223,20 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
             let TrivialMIRExpr::Variable(var) = fun_expr else {
                 panic!("Function should be bound to a name! This bug reached the type inference code, maybe this should be expanded to support new language features");
             };
+
             //we have to find the function declaration
-            //the question is whether we find the MIR type and resolve it (instantiate)
-            let function_type = match decls_in_scope.get(&var) {
+            return match decls_in_scope.get(&var) {
                 MIRTypeDef::Pending => panic!("Expr type calculation bug: tried to resolve a type of variable {} in expression, but variable still needs type inference. If the variable was declared before, it should have been inferred before.", &var),
                 MIRTypeDef::Unresolved(mir_type) => {
                     match mir_type {
-                        MIRType::Function(_, return_type) => instantiate_type(type_db, &return_type),
+                        MIRType::Function(_, return_type) => {
+                            instantiate_type(type_db, &return_type)
+                        },
                         _ => panic!("Expr type calculation bug: tried to find a function decl, found, but the returned type is not a function... type is {:?}", mir_type)
                     }
                 },
                 MIRTypeDef::Resolved(resolved) => resolved.clone(),
             };
-
-            match function_type {
-                TypeInstance::Simple(type_id) => panic!("Type is not callable: {}", type_id),
-                TypeInstance::Generic(type_id, _) => panic!("Type is not callable: {}", type_id),
-                TypeInstance::Function(_, return_type) => {
-                    *return_type.clone()
-                },
-            }
 
         },
         MIRExpr::UnaryExpression(op, rhs) => {
@@ -212,101 +259,91 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
 
             panic!("Could not determine type of expression {:?}", expression);
         },
-        //will need support for structs and fields, get their types, etc
         MIRExpr::MemberAccess(obj, name) => {
+
+            //let me guide you through the process of resolving a method call.
+            /*
+            Suppose we have:
+            struct array<TItem>:
+                items: ptr<TItem>
+                length: u32
+            
+            impl<TItem> array<TItem>:
+                def __index__(at: u32) -> TItem:
+                    offset = sizeof(TItem) * at
+                    return *(items + offset)
+            
+            
+            At some point we call:
+
+            arr = [1,2,3] (arr<i32>)
+            y = arr[2]
+
+            which lowers to something like:
+            y = arr.__index__(cast<u32>(2))
+
+            in this case there's a member access on __index__, that's gonna be the name
+            matched in MIRExpr::MemberAccess(obj <-- arr, name <-- __index__) 
+
+            */
+
             let typeof_obj = compute_expr_type(type_db, decls_in_scope, &MIRExpr::Trivial(obj.clone()));
-            match typeof_obj {
-                TypeInstance::Generic(type_id, generics) => { 
-                    let type_data = type_db.find(type_id);
+            
+            let (type_id, generics) = match typeof_obj {
+                TypeInstance::Generic(type_id, generics) => (type_id, generics.clone()),
+                TypeInstance::Simple(type_id) => (type_id, vec![]),
+                TypeInstance::Function(..) => panic!("Member access on functions isn't defined, maybe we could have cool things in the future, like some metaprogramming/run time type info stuff")
+            };
+
+            let type_data = type_db.find(type_id); 
                     
-                    let method = type_data.methods
-                        .iter()
-                        .find(|signature| signature.name == *name);
-                    
-                    if let Some(signature) = method {
-                        //if function signature has type parameters
-                        //we have to replace them but for now forget about it
-                        //we don't have syntax to call functions with their own type params
-                        if signature.type_args.len() != 0 {
-                            panic!("Function type args not supported yet")
-                        }
-                        //however, any of the parameters in the function can 
-                        //be generic and reference the struct type arg
+            //we'll find the method call here by name
+            let method = type_data.methods
+                .iter()
+                .find(|signature| signature.name == *name);
+        
+            if let Some(signature) = method {
+                //if function signature has type parameters
+                //we have to replace them but for now forget about it
+                //we don't have syntax to call functions with their own type params
+                if signature.type_args.len() != 0 {
+                    panic!("Function type args not supported yet")
+                }
+               
+                //Now we have to resolve each element in the type signature. 
+                
+                //Remember that &generics will contain an i32 if we have a __index__(u32): TItem call on arr<i32>
+                //arg is a simple type
+                let results = signature.args.iter().map(|arg| {
+                    return resolve_type(
+                        arg, 
+                        type_db, 
+                        TypeResolution::new(Some(type_id), &generics) );
+                }).collect::<Vec<_>>();
 
-                        //first resolve all type instances in the args
-                        let results = signature.args.iter().map(|arg| {
-                            return resolve_type(
-                                arg, 
-                                type_db, type_id, &generics);
-                        }).collect::<Vec<_>>();
+                //In this case, return_type is generic, specifically Type::Simple(Either::Left(GenericParam("TItem")))
+                let return_type = resolve_type(
+                    &signature.return_type, //this will be  Type::Simple(Either::Left(GenericParam("TItem")))
+                    type_db, //just the type database
+                    TypeResolution::new(Some(type_id),&generics) //typeof array, and i32
+                );
 
-                        let return_type = resolve_type(
-                            &signature.return_type, 
-                            type_db, type_id, &generics);
+                //Continue reading the comments on resolve_type.
 
-                        return TypeInstance::Function(results, Box::new(return_type));
-                    }
-
-                    let field = type_data.fields
-                        .iter()
-                        .find(|field| field.name == *name);
-
-                    if let Some(field) = field {
-                        return resolve_type(
-                            &field.field_type, 
-                            type_db, type_id, &generics);
-                    }
-
-                    panic!("Could not determine type")
-                },
-                TypeInstance::Simple(type_id) => {
-                    //@TODO this code is all duplicated, merge
-                    let type_data = type_db.find(type_id);
-                    
-                    let method = type_data.methods
-                        .iter()
-                        .find(|signature| signature.name == *name);
-                    
-                    if let Some(signature) = method {
-                        //if function signature has type parameters
-                        //we have to replace them but for now forget about it
-                        //we don't have syntax to call functions with their own type params
-                        if signature.type_args.len() != 0 {
-                            panic!("Function type args not supported yet")
-                        }
-                        //however, any of the parameters in the function can 
-                        //be generic and reference the struct type arg
-
-                        //first resolve all type instances in the args
-                        let results = signature.args.iter().map(|arg| {
-                            return resolve_type(
-                                arg, 
-                                type_db, type_id, &vec![]);
-                        }).collect::<Vec<_>>();
-
-                        let return_type = resolve_type(
-                            &signature.return_type, 
-                            type_db, type_id, &vec![]);
-
-                        return TypeInstance::Function(results, Box::new(return_type));
-                    }
-
-                    let field = type_data.fields
-                        .iter()
-                        .find(|field| field.name == *name);
-
-                    if let Some(field) = field {
-                        return resolve_type(
-                            &field.field_type, 
-                            type_db, type_id, &vec![]);
-                    }
-
-                    panic!("Could not determine type");
-                },
-                TypeInstance::Function(args, return_type) =>  {
-                    TypeInstance::Function(args, return_type)
-                },
+                return TypeInstance::Function(results, Box::new(return_type));
             }
+
+            let field = type_data.fields
+                .iter()
+                .find(|field| field.name == *name);
+
+            if let Some(field) = field {
+                return resolve_type(
+                    &field.field_type, 
+                    type_db, TypeResolution::new(Some(type_id), &generics));
+            }
+
+            panic!("Could not determine type");
         }
         //we will get the type of the first item, and use it as a type and instantiate an Array generic type.
         //a later step will do the type checking.
@@ -403,17 +440,28 @@ fn infer_function_parameter_types_and_return(
 
 
 
-pub fn infer_types(globals: &NameRegistry, type_db: &TypeDatabase, mir: Vec<MIR>) -> Vec<MIR> {
+pub fn infer_types(globals: &mut NameRegistry, type_db: &TypeDatabase, mir: Vec<MIR>) -> Vec<MIR> {
 
     let mut new_mir = vec![];
 
     for node in mir.iter() {
         let result = match node {
             MIR::DeclareFunction{ function_name, parameters, body, return_type} => {
-                println!("Function name: {} {:?} {:?}", function_name, parameters, return_type);
                 let (parameters_resolved, return_type_resolved) = infer_function_parameter_types_and_return(type_db, parameters, return_type);
+            
+                let parameter_types = parameters_resolved
+                    .iter()
+                    .map(|f| match &f.typename {
+                        MIRTypeDef::Resolved(r) => r.clone(),
+                        _ => panic!("Could not resolve parameter type for function {:?}", function_name)
+                    })
+                    .collect::<Vec<_>>();
+                
+                globals.insert(function_name.clone(), MIRTypeDef::Resolved(
+                    TypeInstance::Function(parameter_types, Box::new(return_type_resolved.clone()))
+                ));
+
                 let new_body = infer_variable_types_in_functions(type_db, globals, function_name, parameters, body);
-                println!("Function new: {} {:?} {:?}", function_name, parameters_resolved, return_type_resolved);
                 MIR::DeclareFunction {
                     function_name: function_name.clone(), 
                     parameters: parameters_resolved, 
@@ -428,4 +476,45 @@ pub fn infer_types(globals: &NameRegistry, type_db: &TypeDatabase, mir: Vec<MIR>
 
     return new_mir;
 
+} 
+
+
+fn pathcheck(mir: &[MIR]) -> bool {
+    for node in mir.iter() {
+        match node {
+            MIR::DeclareFunction{ .. } => {
+                panic!("Function inside funcion is forbidden for now")
+            }
+            _ => {}
+        };
+    }
+    return true;
+}
+
+
+pub fn check_types(globals: &NameRegistry, type_db: &TypeDatabase, mir: &[MIR]) {
+
+    println!("globals: {:?}", globals);
+
+    for node in mir.iter() {
+        match node {
+            MIR::DeclareFunction{ function_name, parameters, body, return_type} => {
+                /*
+                for each declared function, navigate through its AST
+                and check whether types check:
+
+                variable declarations: type must match expression
+                function calls: number of arguments must match
+                function calls: arguments must match types 
+                return: matches return type of function
+                return: all paths return a type
+                */
+
+                
+
+                check_types(globals, type_db, body)
+            }
+            _ => {}
+        };
+    }
 } 

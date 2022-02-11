@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["typecheck.py"],
+            "args": ["example.py"],
             "cwd": "${workspaceFolder}"
         },
         {
@@ -38,10 +38,7 @@
                     "kind": "bin"
                 }
             },
-            "env": {
-                "RUST_BACKTRACE": "1"
-            },
-            "args": ["function_call_in_right_binop", "--nocapture"],
+            "args": [],
             "cwd": "${workspaceFolder}"
         }
     ]

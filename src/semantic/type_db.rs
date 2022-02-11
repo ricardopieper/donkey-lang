@@ -1,41 +1,45 @@
-use crate::semantic::mir::*;
 use crate::ast::lexer::Operator;
+use crate::semantic::mir::*;
 use either::*;
 
-use std::{collections::{ HashSet, HashMap }, any::Any};
+use std::{
+    any::Any,
+    collections::{HashMap, HashSet},
+};
 
 type TypeId = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 
-//Types arent simple, generic, function.... but rather primitive, struct and trait. 
+//Types arent simple, generic, function.... but rather primitive, struct and trait.
 pub enum TypeKind {
     Primitive,
-    Struct
+    Struct,
 }
 
 //represents a type on a field declaration, method return type, method args, etc
-//this is type information we store during compilation
+//this is type information we store during compilation.
+//It can be a fully resolved type, trivially convertible to TypeInstance, but in some cases there are generic params.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Simple(Either<GenericParameter, TypeId>),
     Generic(TypeId, Vec<Type>), //on generics, the base root type has to be known
-    Function(Vec<Type>, Box<Type>) //on functions, both return or args can use generics
+    Function(Vec<Type>, Box<Type>), //on functions, both return or args can use generics
 }
 
 //@TODO must implement a way to perform generic substitution on every type instance...
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeFunctionSignature  {
-    pub name: String, 
+pub struct FunctionSignature {
+    pub name: String,
     pub type_args: Vec<GenericParameter>,
-    pub args: Vec<Type>, 
-    pub return_type: Type
+    pub args: Vec<Type>,
+    pub return_type: Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeField {
     pub name: String,
-    pub field_type: Type
+    pub field_type: Type,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +53,7 @@ pub struct TypeRecord {
     pub name: String,
     //Type args are just Generic parameters, in the future we can add type bounds, in which we would add a Type enum here as well
     pub type_args: Vec<GenericParameter>,
-    //these fields inform type capabilities, i.e. operators it can deal with, fields and functions it has if its a struct, types it can be casted to, etc 
+    //these fields inform type capabilities, i.e. operators it can deal with, fields and functions it has if its a struct, types it can be casted to, etc
     pub allowed_casts: Vec<TypeInstance>,
     //operator, rhs_type, result_type, for now cannot be generic
     pub rhs_binary_ops: Vec<(Operator, TypeInstance, TypeInstance)>,
@@ -58,7 +62,7 @@ pub struct TypeRecord {
     //fields (name, type)
     pub fields: Vec<TypeField>,
     //method (name, args, return type)
-    pub methods: Vec<TypeFunctionSignature>,
+    pub methods: Vec<FunctionSignature>,
 }
 
 impl TypeRecord {
@@ -66,10 +70,13 @@ impl TypeRecord {
         if self.type_args.len() == 0 {
             return Type::Simple(Either::Right(self.id));
         } else {
-            return Type::Generic(self.id, 
-                self.type_args.iter().map(|x| Type::Simple(Either::Left(x.clone())))
-                .collect::<Vec<_>>()
-            )
+            return Type::Generic(
+                self.id,
+                self.type_args
+                    .iter()
+                    .map(|x| Type::Simple(Either::Left(x.clone())))
+                    .collect::<Vec<_>>(),
+            );
         }
     }
 }
@@ -93,15 +100,12 @@ impl Default for TypeRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDatabase {
-    pub types: Vec<TypeRecord>
+    pub types: Vec<TypeRecord>,
 }
 
 impl TypeDatabase {
-
     pub fn new() -> Self {
-        let mut item = Self {
-            types: vec![]
-        };
+        let mut item = Self { types: vec![] };
         item.init_builtin();
         return item;
     }
@@ -113,90 +117,157 @@ impl TypeDatabase {
             kind: kind,
             name: name.into(),
             size,
-            .. TypeRecord::default()
+            ..TypeRecord::default()
         });
         return next_id;
     }
 
-    pub fn add_binary_operator(&mut self, type_id: TypeId, operator: Operator, rhs_type: TypeInstance, result_type: TypeInstance) {
+    pub fn add_binary_operator(
+        &mut self,
+        type_id: TypeId,
+        operator: Operator,
+        rhs_type: TypeInstance,
+        result_type: TypeInstance,
+    ) {
         let record = self.types.get_mut(type_id).unwrap();
-        record.rhs_binary_ops.push((operator, rhs_type, result_type));
+        record
+            .rhs_binary_ops
+            .push((operator, rhs_type, result_type));
     }
 
-    pub fn add_generic(&mut self,kind: TypeKind, name: &str, type_args: Vec<GenericParameter>, size: usize) -> TypeId {
+    pub fn add_generic(
+        &mut self,
+        kind: TypeKind,
+        name: &str,
+        type_args: Vec<GenericParameter>,
+        size: usize,
+    ) -> TypeId {
         let next_id = self.types.len();
-        
+
         self.types.push(TypeRecord {
             id: next_id,
             kind: kind,
-            name: name.into(), 
+            name: name.into(),
             size,
             type_args,
-            .. TypeRecord::default()
+            ..TypeRecord::default()
         });
         return next_id;
     }
 
+    pub fn add_unary_operator(
+        &mut self,
+        type_id: TypeId,
+        operator: Operator,
+        result_type: TypeInstance,
+    ) {
+        let record = self.types.get_mut(type_id).unwrap();
+        record.unary_ops.push((operator, result_type));
+    }
+
     pub fn get_name(&self, id: TypeId) -> &str {
-        &self.types.get(id).expect(&format!("Type ID not found: {}", id)).name
+        &self
+            .types
+            .get(id)
+            .expect(&format!("Type ID not found: {}", id))
+            .name
     }
 
     pub fn find(&self, id: TypeId) -> &TypeRecord {
-        self.types.get(id).expect(&format!("Type ID not found: {}", id))
+        self.types
+            .get(id)
+            .expect(&format!("Type ID not found: {}", id))
     }
 
     pub fn find_by_name(&self, name: &str) -> Option<&TypeRecord> {
         self.types.iter().find(|t| t.name == name)
     }
 
-    pub fn get_binary_operations(&self, type_instance: &TypeInstance) -> &[(Operator, TypeInstance, TypeInstance)] {
-
+    pub fn get_binary_operations(
+        &self,
+        type_instance: &TypeInstance,
+    ) -> &[(Operator, TypeInstance, TypeInstance)] {
         match type_instance {
-            TypeInstance::Simple(id) => {
-                &self.find(*id).rhs_binary_ops
-            },
+            TypeInstance::Simple(id) => &self.find(*id).rhs_binary_ops,
             TypeInstance::Generic(_, _) => {
                 //@TODO basically we need to check the base type of the type instance,
                 //then make a big list of all operations that it supports
-                //maybe we will need to return an owned type instead of a reference... 
+                //maybe we will need to return an owned type instead of a reference...
                 panic!("Unimplemented, read comment here to see what needs to be done")
-            },
-            TypeInstance::Function(_, _) => panic!("Binary operations on functions are not supported"),
+            }
+            TypeInstance::Function(_, _) => {
+                panic!("Binary operations on functions are not supported")
+            }
         }
     }
 
-    pub fn get_unary_operations(&self, type_instance: &TypeInstance) -> &[(Operator, TypeInstance)] {
-
+    pub fn get_unary_operations(
+        &self,
+        type_instance: &TypeInstance,
+    ) -> &[(Operator, TypeInstance)] {
         match type_instance {
-            TypeInstance::Simple(id) => {
-                &self.find(*id).unary_ops
-            },
+            TypeInstance::Simple(id) => &self.find(*id).unary_ops,
             TypeInstance::Generic(_, _) => {
                 //@TODO basically we need to check the base type of the type instance,
                 //then make a big list of all operations that it supports
-                //maybe we will need to return an owned type instead of a reference... 
+                //maybe we will need to return an owned type instead of a reference...
                 panic!("Unimplemented, read comment here to see what needs to be done")
-            },
-            TypeInstance::Function(_, _) => panic!("Unary operations on functions are not supported"),
+            }
+            TypeInstance::Function(_, _) => {
+                panic!("Unary operations on functions are not supported")
+            }
         }
     }
-
 
     fn register_primitive_integer(&mut self, name: &str) -> TypeId {
         use std::mem;
         let type_id = self.add(TypeKind::Primitive, name, mem::size_of::<i32>());
-        self.add_binary_operator(type_id, Operator::Plus, TypeInstance::Simple(type_id), TypeInstance::Simple(type_id));
-        self.add_binary_operator(type_id, Operator::Multiply, TypeInstance::Simple(type_id), TypeInstance::Simple(type_id));
-        self.add_binary_operator(type_id, Operator::Minus, TypeInstance::Simple(type_id), TypeInstance::Simple(type_id));
-        self.add_binary_operator(type_id, Operator::Divide, TypeInstance::Simple(type_id), TypeInstance::Simple(type_id));
+        self.add_binary_operator(
+            type_id,
+            Operator::Plus,
+            TypeInstance::Simple(type_id),
+            TypeInstance::Simple(type_id),
+        );
+        self.add_binary_operator(
+            type_id,
+            Operator::Multiply,
+            TypeInstance::Simple(type_id),
+            TypeInstance::Simple(type_id),
+        );
+        self.add_binary_operator(
+            type_id,
+            Operator::Minus,
+            TypeInstance::Simple(type_id),
+            TypeInstance::Simple(type_id),
+        );
+        self.add_binary_operator(
+            type_id,
+            Operator::Divide,
+            TypeInstance::Simple(type_id),
+            TypeInstance::Simple(type_id),
+        );
 
         let bool_id = self.find_by_name("bool").unwrap().id;
-        self.add_binary_operator(type_id, Operator::Equals, TypeInstance::Simple(type_id), TypeInstance::Simple(bool_id));
-        self.add_binary_operator(type_id, Operator::NotEquals, TypeInstance::Simple(type_id), TypeInstance::Simple(bool_id));
+        self.add_binary_operator(
+            type_id,
+            Operator::Equals,
+            TypeInstance::Simple(type_id),
+            TypeInstance::Simple(bool_id),
+        );
+        self.add_binary_operator(
+            type_id,
+            Operator::NotEquals,
+            TypeInstance::Simple(type_id),
+            TypeInstance::Simple(bool_id),
+        );
+
+        self.add_unary_operator(type_id, Operator::Plus, TypeInstance::Simple(type_id));
+        self.add_unary_operator(type_id, Operator::Minus, TypeInstance::Simple(type_id));
+
         return type_id;
     }
 
-    pub fn add_method(&mut self, type_id: TypeId, signature: TypeFunctionSignature) {
+    pub fn add_method(&mut self, type_id: TypeId, signature: FunctionSignature) {
         let record = self.types.get_mut(type_id).unwrap();
         record.methods.push(signature)
     }
@@ -204,38 +275,55 @@ impl TypeDatabase {
     fn init_builtin(&mut self) {
         use std::mem;
 
-        self.add(TypeKind::Primitive,"Void", mem::size_of::<()>());
+        self.add(TypeKind::Primitive, "Void", mem::size_of::<()>());
         self.add(TypeKind::Primitive, "None", mem::size_of::<()>());
-        self.add(TypeKind::Primitive,"bool", mem::size_of::<bool>());
+        self.add(TypeKind::Primitive, "bool", mem::size_of::<bool>());
 
         let i32_type = self.register_primitive_integer("i32");
         let u32_type = self.register_primitive_integer("u32");
         self.register_primitive_integer("i64");
         self.register_primitive_integer("u64");
 
-        
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
-        self.add_generic(TypeKind::Primitive,"ptr", vec![GenericParameter("TPtr".into())], mem::size_of::<usize>());
-      
+        self.add_generic(
+            TypeKind::Primitive,
+            "ptr",
+            vec![GenericParameter("TPtr".into())],
+            mem::size_of::<usize>(),
+        );
+
         //ptr + len
-        let str_type = self.add(TypeKind::Struct,"str", mem::size_of::<usize>() + mem::size_of::<i32>());
-        self.add_method(str_type, TypeFunctionSignature {
-            name: "as_i32".to_string(),
-            type_args: vec![],
-            args: vec![Type::Simple(Either::Right(str_type))],
-            return_type: Type::Simple(Either::Right(i32_type)),
-        });
-        
+        let str_type = self.add(
+            TypeKind::Struct,
+            "str",
+            mem::size_of::<usize>() + mem::size_of::<i32>(),
+        );
+        self.add_method(
+            str_type,
+            FunctionSignature {
+                name: "as_i32".to_string(),
+                type_args: vec![],
+                args: vec![Type::Simple(Either::Right(str_type))],
+                return_type: Type::Simple(Either::Right(i32_type)),
+            },
+        );
+
         //ptr + num items
-        let arr_type = self.add_generic(TypeKind::Struct,"array", vec![GenericParameter("TItem".into())], mem::size_of::<usize>() + mem::size_of::<u32>());
-        self.add_method(arr_type, TypeFunctionSignature {
-            name: "__index__".to_string(),
-            type_args: vec![],
-            args: vec![Type::Simple(Either::Right(u32_type))],
-            return_type: Type::Simple(Either::Left(GenericParameter("TItem".into()))),
-        });
+        let arr_type = self.add_generic(
+            TypeKind::Struct,
+            "array",
+            vec![GenericParameter("TItem".into())],
+            mem::size_of::<usize>() + mem::size_of::<u32>(),
+        );
 
-    } 
-
+        self.add_method(
+            arr_type,
+            FunctionSignature {
+                name: "__index__".to_string(),
+                type_args: vec![],
+                args: vec![Type::Simple(Either::Right(u32_type))],
+                return_type: Type::Simple(Either::Left(GenericParameter("TItem".into()))),
+            },
+        );
+    }
 }
-

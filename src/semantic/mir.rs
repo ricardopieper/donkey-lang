@@ -36,6 +36,16 @@ pub enum MIRExpr {
     Array(Vec<TrivialMIRExpr>),
 }
 
+/*This enum represents the type as typed in source code. This comes from the AST almost directly, 
+  no fancy transformations are applied. 
+  However we add a Function variant to construct a Function type where needed, but it also could be something coming from the AST in the future, 
+  like functions receiving functions*/
+  #[derive(Debug, Clone, PartialEq, Eq)]
+  pub enum MIRType {
+      Simple(String),
+      Generic(String, Vec<MIRType>),
+      Function(Vec<MIRType>, Box<MIRType>)
+  }
 
 impl MIRExpr {
     fn expect_trivial(&self) -> &TrivialMIRExpr {
@@ -52,16 +62,7 @@ pub struct MIRTypedBoundName {
     pub typename: MIRTypeDef //var name, type
 }
 
-/*This enum represents the type as typed in source code. This comes from the AST almost directly, 
-  no fancy transformations are applied. 
-  However we add a Function variant to construct a Function type where needed, but it also could be something coming from the AST in the future, 
-  like functions receiving functions*/
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRType {
-    Simple(String),
-    Generic(String, Vec<MIRType>),
-    Function(Vec<MIRType>, Box<MIRType>)
-}
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*Represents a fully resolved type, with generics already substituted */
@@ -72,13 +73,6 @@ pub enum TypeInstance {
 }
 
 impl TypeInstance {
-    pub fn get_base_type(&self) -> Option<TypeId> {
-        match self {
-            TypeInstance::Simple(id) => Some(*id),
-            TypeInstance::Generic(id, _) => Some(*id),
-            TypeInstance::Function(_, _) => None,
-        }
-    }
     pub fn string(&self, type_db: &TypeDatabase) -> String {
         match self {
             TypeInstance::Simple(id) => type_db.get_name(*id).into(),
@@ -136,6 +130,10 @@ pub type TypeId = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIR {
+    Block {
+        num: i32,
+        block: Vec<MIR>
+    },
     Assign {
         path: Vec<String>,
         expression: MIRExpr,
@@ -159,9 +157,11 @@ pub enum MIR {
         function: TrivialMIRExpr,
         args: Vec<TrivialMIRExpr>,
     },
+    If(i32, i32),
     Return(MIRExpr),
     EmptyReturn
 }
+
 
 fn make_intermediary(intermediary: i32) -> String {
     return format!("${}", intermediary);
@@ -238,7 +238,6 @@ fn check_if_reducible(expr: &Expr) -> bool {
 //this function returns the final expression created, and the number of intermediary variables used
 //In the recursive cases, this function should always return a MIRExpr::Trivial
 fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &mut Vec<MIR>, is_reducing: bool) -> (MIRExpr, i32) {
-    println!("Reducing {:?}", expr);
     let trivial_expr = get_trivial_mir_expr(expr);
     match trivial_expr {
         Some(x) => { return (MIRExpr::Trivial(x), 0) },
@@ -264,7 +263,6 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 let mut args_exprs = vec![];
                 let mut args_interm_used = 0;
                 for node in args {
-                    println!("Args: {:?}", node);
                     let (arg_expr, arg_num_interm) = 
                         reduce_expr_to_mir_declarations(node, intermediary, accum, true);
                     intermediary += arg_num_interm;
@@ -441,7 +439,6 @@ fn reduce_expr_to_mir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                     expr_intermediary.expect_trivial().clone(), 
                     name.clone())
             } else {
-                println!("Member access obj expr: {:?}", obj_expr);
                 MIRExpr::MemberAccess(
                     get_trivial_mir_expr(obj_expr).unwrap(), 
                     name.clone()

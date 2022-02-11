@@ -40,21 +40,6 @@ pub struct TypeBoundName {
     pub name_type: ASTType
 }
 
-impl TypeBoundName {
-    fn simple(name: &str, name_type: &str) -> Self {
-        Self {
-            name: name.into(),
-            name_type: ASTType::Simple(name_type.into())
-        }
-    }
-
-    fn generic_1(name: &str, name_type: &str, generic_type: &str) -> Self {
-        Self {
-            name: name.into(),
-            name_type: ASTType::Generic(name_type.into(), vec![ASTType::Simple(generic_type.into())])
-        }
-    }
-}
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -630,7 +615,7 @@ impl Parser {
             return Some(ASTType::Generic(type_name.clone(), 
                 vec![ ASTType::Simple(generic_name.clone())]));
         } else {
-            panic!("For now we don't suport more than 1 generic argument.")
+            panic!("For now we don't suport more than 1 generic argument (i'm lazy).")
         };
     }
 
@@ -1508,6 +1493,23 @@ pub fn parse_ast(tokens: Vec<Token>) -> Vec<AST> {
 
 #[cfg(test)]
 mod tests {
+
+    impl TypeBoundName {
+        //do not delete, used by tests!
+        pub fn simple(name: &str, name_type: &str) -> Self {
+            Self{
+                name: name.to_string(),
+                name_type: ASTType::Simple(name_type.to_string())
+            }
+        }
+        pub fn generic_1(name: &str, name_type: &str, generic: &str) -> Self {
+            Self{
+                name: name.to_string(),
+                name_type: ASTType::Generic(name_type.to_string(), vec![ASTType::Simple(generic.to_string())])
+            }
+        }
+    }
+    
     use super::*;
 
     //Parses a single expression
