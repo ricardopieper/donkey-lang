@@ -1,5 +1,5 @@
 use crate::ast::lexer::Operator;
-use crate::semantic::mir::*;
+use crate::semantic::hir::*;
 use either::*;
 
 use std::{

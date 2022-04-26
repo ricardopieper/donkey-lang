@@ -1,19 +1,19 @@
 use crate::ast::parser::*;
-use crate::semantic::mir::*;
+use crate::semantic::hir::*;
 use crate::semantic::*;
 
 use super::type_db::TypeDatabase;
 
 pub struct AnalysisResult {
-    pub initial_mir: Vec<MIR>,
-    pub after_make_declarations_mir: Vec<MIR>,
-    pub final_mir: Vec<MIR>,
+    pub initial_mir: Vec<HIR>,
+    pub after_make_declarations_mir: Vec<HIR>,
+    pub final_mir: Vec<HIR>,
     pub type_db: TypeDatabase,
 }
 
 pub fn do_analysis(ast: &AST) -> AnalysisResult {
     let mut mir = vec![];
-    ast_to_mir(ast, 0, &mut mir);
+    ast_to_hir(ast, 0, &mut mir);
 
     let initial_mir = mir.clone();
     let type_db = type_db::TypeDatabase::new();
@@ -65,48 +65,48 @@ def my_function(arg1: i32, arg2: i32) -> i32:
         let i32_type = TypeInstance::Simple(type_db.find_by_name("i32").unwrap().id);
         
         let body = vec![
-            MIR::Declare { 
+            HIR::Declare { 
                 var: "$0".into(), 
-                typename: MIRTypeDef::Resolved(i32_type.clone()),
-                expression: MIRExpr::BinaryOperation(
-                    TrivialMIRExpr::Variable("arg1".into()),
+                typename: HIRTypeDef::Resolved(i32_type.clone()),
+                expression: HIRExpr::BinaryOperation(
+                    TrivialHIRExpr::Variable("arg1".into()),
                     Operator::Multiply,
-                    TrivialMIRExpr::Variable("arg2".into())
+                    TrivialHIRExpr::Variable("arg2".into())
                 ) 
             },
-            MIR::Declare { 
+            HIR::Declare { 
                 var: "$1".into(), 
-                typename:  MIRTypeDef::Resolved(i32_type.clone()),
-                expression: MIRExpr::BinaryOperation(
-                    TrivialMIRExpr::Variable("arg2".into()),
+                typename:  HIRTypeDef::Resolved(i32_type.clone()),
+                expression: HIRExpr::BinaryOperation(
+                    TrivialHIRExpr::Variable("arg2".into()),
                     Operator::Minus,
-                    TrivialMIRExpr::Variable("arg1".into())
+                    TrivialHIRExpr::Variable("arg1".into())
                 ) 
             },
-            MIR::Return(MIRExpr::BinaryOperation(
-                    TrivialMIRExpr::Variable("$0".into()),
+            HIR::Return(HIRExpr::BinaryOperation(
+                    TrivialHIRExpr::Variable("$0".into()),
                     Operator::Divide,
-                    TrivialMIRExpr::Variable("$1".into())
+                    TrivialHIRExpr::Variable("$1".into())
                 )
             )
             
         ];
 
         let expected = vec![
-            MIR::DeclareFunction{
+            HIR::DeclareFunction{
                 function_name: "my_function".into(),
                 parameters: vec![
-                    MIRTypedBoundName {
+                    HIRTypedBoundName {
                         name: "arg1".into(),
-                        typename: MIRTypeDef::Resolved(i32_type.clone())
+                        typename: HIRTypeDef::Resolved(i32_type.clone())
                     },
-                    MIRTypedBoundName {
+                    HIRTypedBoundName {
                         name: "arg2".into(),
-                        typename: MIRTypeDef::Resolved(i32_type.clone())
+                        typename: HIRTypeDef::Resolved(i32_type.clone())
                     }
                 ],
                 body,
-                return_type: MIRTypeDef::Resolved(i32_type.clone())
+                return_type: HIRTypeDef::Resolved(i32_type.clone())
             },
         ];
 
@@ -121,7 +121,7 @@ def my_function(arg1: i32, arg2: i32) -> i32:
     return arg1 * arg2 / (arg2 - arg1)",
         );
         
-        let result = mir_printer::print_mir(&analyzed.final_mir, &analyzed.type_db);
+        let result = hir_printer::print_mir(&analyzed.final_mir, &analyzed.type_db);
         
         let expected = "
 def my_function(arg1: i32, arg2: i32) -> i32:

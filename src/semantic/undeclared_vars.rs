@@ -1,14 +1,14 @@
-use crate::semantic::mir::*;
+use crate::semantic::hir::*;
 
 use std::collections::HashSet;
 
 fn check_trivial_expr(
     declarations_found: &HashSet<String>,
     function_name: &str,
-    expr: &TrivialMIRExpr,
+    expr: &TrivialHIRExpr,
 ) {
     match expr {
-        TrivialMIRExpr::Variable(v) => {
+        TrivialHIRExpr::Variable(v) => {
             if declarations_found.get(v).is_none() {
                 panic!("Variable {} not found, function: {}", v, function_name);
             }
@@ -17,33 +17,33 @@ fn check_trivial_expr(
     }
 }
 
-fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &MIRExpr) {
+fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &HIRExpr) {
     match expr {
-        MIRExpr::Trivial(e) => {
+        HIRExpr::Trivial(e) => {
             check_trivial_expr(declarations_found, function_name, e);
         }
-        MIRExpr::BinaryOperation(lhs, _, rhs) => {
+        HIRExpr::BinaryOperation(lhs, _, rhs) => {
             check_trivial_expr(declarations_found, function_name, lhs);
             check_trivial_expr(declarations_found, function_name, rhs);
         }
-        MIRExpr::FunctionCall(name, args) => {
+        HIRExpr::FunctionCall(name, args) => {
             check_trivial_expr(declarations_found, function_name, name);
             for fun_arg in args {
                 check_trivial_expr(declarations_found, function_name, fun_arg);
             }
         }
-        MIRExpr::UnaryExpression(_, unary_expr) => {
+        HIRExpr::UnaryExpression(_, unary_expr) => {
             check_trivial_expr(declarations_found, function_name, unary_expr);
         }
-        MIRExpr::MemberAccess(member_expr, _) => {
+        HIRExpr::MemberAccess(member_expr, _) => {
             check_trivial_expr(declarations_found, function_name, member_expr);
         }
-        MIRExpr::Array(item_exprs) => {
+        HIRExpr::Array(item_exprs) => {
             for array_item in item_exprs {
                 check_trivial_expr(&declarations_found, function_name, array_item);
             }
         }
-        MIRExpr::Cast(typedef, expr) => {
+        HIRExpr::Cast(typedef, expr) => {
             check_trivial_expr(&declarations_found, function_name, expr)
         }
     }
@@ -52,9 +52,9 @@ fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &
 fn detect_declaration_errors(
     mut declarations_found: HashSet<String>,
     function_name: &str,
-    parameters: &[MIRTypedBoundName],
-    body: &[MIR],
-    return_type: &MIRTypeDef,
+    parameters: &[HIRTypedBoundName],
+    body: &[HIR],
+    return_type: &HIRTypeDef,
 ) {
     for p in parameters {
         declarations_found.insert(p.name.clone());
@@ -62,7 +62,7 @@ fn detect_declaration_errors(
 
     for node in body {
         match node {
-            MIR::Declare {
+            HIR::Declare {
                 var, expression, ..
             } => {
                 if declarations_found.contains(var) {
@@ -71,24 +71,24 @@ fn detect_declaration_errors(
                 declarations_found.insert(var.clone());
                 check_expr(&declarations_found, function_name, expression);
             }
-            MIR::Assign { path, expression } => {
+            HIR::Assign { path, expression } => {
                 check_expr(&declarations_found, function_name, expression);
             }
-            MIR::FunctionCall { function, args } => {
+            HIR::FunctionCall { function, args } => {
                 check_expr(
                     &declarations_found,
                     function_name,
-                    &MIRExpr::Trivial(function.clone()),
+                    &HIRExpr::Trivial(function.clone()),
                 );
                 for fun_arg in args {
                     check_expr(
                         &declarations_found,
                         function_name,
-                        &MIRExpr::Trivial(fun_arg.clone()),
+                        &HIRExpr::Trivial(fun_arg.clone()),
                     );
                 }
             }
-            MIR::Return(expr) => {
+            HIR::Return(expr) => {
                 check_expr(&declarations_found, function_name, expr);
             }
             _ => {}
@@ -96,7 +96,7 @@ fn detect_declaration_errors(
     }
 }
 
-pub fn detect_undeclared_vars_and_redeclarations(mir: &[MIR]) {
+pub fn detect_undeclared_vars_and_redeclarations(mir: &[HIR]) {
     let mut declarations_found = HashSet::<String>::new();
 
     //@TODO remove these
@@ -107,7 +107,7 @@ pub fn detect_undeclared_vars_and_redeclarations(mir: &[MIR]) {
     //first collect all globals
     for node in mir.iter() {
         let result = match node {
-            MIR::DeclareFunction { function_name, .. } => {
+            HIR::DeclareFunction { function_name, .. } => {
                 declarations_found.insert(function_name.clone());
             }
             _ => {}
@@ -117,7 +117,7 @@ pub fn detect_undeclared_vars_and_redeclarations(mir: &[MIR]) {
     //then check functions
     for node in mir.iter() {
         let result = match node {
-            MIR::DeclareFunction {
+            HIR::DeclareFunction {
                 function_name,
                 parameters,
                 body,

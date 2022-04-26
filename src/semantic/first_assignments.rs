@@ -1,12 +1,12 @@
-use crate::semantic::mir::*;
+use crate::semantic::hir::*;
 
 use std::collections::HashSet;
 
 
 fn make_assignments_into_declarations_in_function(function_name: &str,
-    parameters: &[MIRTypedBoundName],
-    body: &[MIR],
-    return_type: &MIRTypeDef) -> Vec<MIR> {
+    parameters: &[HIRTypedBoundName],
+    body: &[HIR],
+    return_type: &HIRTypeDef) -> Vec<HIR> {
 
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
@@ -25,19 +25,19 @@ fn make_assignments_into_declarations_in_function(function_name: &str,
     let mut new_mir = vec![];
     for node in body {
         let mir_node = match node {
-            decl @ MIR::Declare { var, .. } => {
+            decl @ HIR::Declare { var, .. } => {
                 declarations_found.insert(var.clone());
                 decl.clone()
             },
-            assign @ MIR::Assign {path, expression} if path.len() == 1 => {
+            assign @ HIR::Assign {path, expression} if path.len() == 1 => {
                 let var = &path[0];
                 if declarations_found.contains(var) {
                     assign.clone()
                 } else {
                     declarations_found.insert(var.clone());
-                    MIR::Declare { 
+                    HIR::Declare { 
                         var: var.clone(), 
-                        typename: MIRTypeDef::Pending, 
+                        typename: HIRTypeDef::Pending, 
                         expression: expression.clone() 
                     }
                 }
@@ -50,15 +50,15 @@ fn make_assignments_into_declarations_in_function(function_name: &str,
     return new_mir;
 }
 
-pub fn transform_first_assignment_into_declaration(mir: Vec<MIR>) -> Vec<MIR> {
+pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {
 
     let mut new_mir = vec![];
 
     for node in mir.iter() {
         let result = match node {
-            MIR::DeclareFunction{ function_name, parameters, body, return_type} => {
+            HIR::DeclareFunction{ function_name, parameters, body, return_type} => {
                 let new_body = make_assignments_into_declarations_in_function(function_name, parameters, body, return_type);
-                MIR::DeclareFunction {
+                HIR::DeclareFunction {
                     function_name: function_name.clone(), 
                     parameters: parameters.clone(), 
                     body: new_body, 

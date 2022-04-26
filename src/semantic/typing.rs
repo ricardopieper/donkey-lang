@@ -1,4 +1,4 @@
-use crate::semantic::mir::*;
+use crate::semantic::hir::*;
 use crate::semantic::name_registry::NameRegistry;
 use crate::semantic::type_db::{TypeDatabase, FunctionSignature};
 use crate::semantic::type_db::Type;
@@ -7,9 +7,9 @@ use either::Either;
 use core::panic;
 
 
-fn instantiate_type(type_db: &TypeDatabase, typedef: &MIRType) -> TypeInstance {
+fn instantiate_type(type_db: &TypeDatabase, typedef: &HIRType) -> TypeInstance {
 
-    fn type_to_instance(type_data: &Type, typedef: &MIRType) -> TypeInstance {
+    fn type_to_instance(type_data: &Type, typedef: &HIRType) -> TypeInstance {
         match type_data {
             Type::Simple(Either::Right(id)) => TypeInstance::Simple(*id),
             Type::Simple(Either::Left(generic)) => panic!("as_type() method shouldn't return a generic parameter {}", generic.0),
@@ -19,19 +19,19 @@ fn instantiate_type(type_db: &TypeDatabase, typedef: &MIRType) -> TypeInstance {
     }
 
     match typedef {
-        MIRType::Simple(type_name) => {
+        HIRType::Simple(type_name) => {
             let type_record = type_db.find_by_name(type_name).unwrap();
             let as_type = type_record.as_type();
             type_to_instance(&as_type, typedef)
         },
-        MIRType::Generic(type_name, args) => {
+        HIRType::Generic(type_name, args) => {
             let base_type_record = type_db.find_by_name(type_name).unwrap();
             TypeInstance::Generic(
                 base_type_record.id,
                 args.iter().map(|x| instantiate_type(type_db, x)).collect::<Vec<_>>()
             )
         },
-        MIRType::Function(args, return_type) => {
+        HIRType::Function(args, return_type) => {
             let args_instances = args.iter().map(|x| instantiate_type(type_db, x)).collect::<Vec<_>>();
             let return_type_instance =  instantiate_type(type_db, return_type);
             TypeInstance::Function(args_instances, Box::new(return_type_instance))
@@ -172,30 +172,30 @@ fn resolve_function_signature(type_db: &TypeDatabase, signature: FunctionSignatu
 }
 
 //maybe add a type hint here for empty arrays in assigns
-fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expression: &MIRExpr) -> TypeInstance {
+fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expression: &HIRExpr) -> TypeInstance {
     match expression {
-        MIRExpr::Trivial(TrivialMIRExpr::Variable(var)) => {
+        HIRExpr::Trivial(TrivialHIRExpr::Variable(var)) => {
             match decls_in_scope.get(&var) {
-                MIRTypeDef::Pending => panic!("Expr type calculation bug: tried to resolve a type of variable {} in expression, but variable still needs type inference. If the variable was declared before, it should have been inferred before.", &var),
-                MIRTypeDef::Unresolved(mir_type) => instantiate_type(type_db, &mir_type),
-                MIRTypeDef::Resolved(resolved) => resolved.clone(),
+                HIRTypeDef::Pending => panic!("Expr type calculation bug: tried to resolve a type of variable {} in expression, but variable still needs type inference. If the variable was declared before, it should have been inferred before.", &var),
+                HIRTypeDef::Unresolved(mir_type) => instantiate_type(type_db, &mir_type),
+                HIRTypeDef::Resolved(resolved) => resolved.clone(),
             }
         }
-        MIRExpr::Trivial(trivial_expr) => {
+        HIRExpr::Trivial(trivial_expr) => {
             let typename = match trivial_expr {
-                TrivialMIRExpr::IntegerValue(_) => "i32",
-                TrivialMIRExpr::FloatValue(_) => "f32",
-                TrivialMIRExpr::StringValue(_) => "str",
-                TrivialMIRExpr::BooleanValue(_) => "bool",
-                TrivialMIRExpr::None => "None",
+                TrivialHIRExpr::IntegerValue(_) => "i32",
+                TrivialHIRExpr::FloatValue(_) => "f32",
+                TrivialHIRExpr::StringValue(_) => "str",
+                TrivialHIRExpr::BooleanValue(_) => "bool",
+                TrivialHIRExpr::None => "None",
                 _ => unreachable!()
             };
             let type_rec = type_db.find_by_name(typename).unwrap();
             TypeInstance::Simple(type_rec.id)
         }
-        MIRExpr::BinaryOperation(lhs, op, rhs) => {
-            let lhs_type = compute_expr_type(type_db, decls_in_scope, &MIRExpr::Trivial(lhs.clone()));
-            let rhs_type = compute_expr_type(type_db, decls_in_scope, &MIRExpr::Trivial(rhs.clone()));
+        HIRExpr::BinaryOperation(lhs, op, rhs) => {
+            let lhs_type = compute_expr_type(type_db, decls_in_scope, &HIRExpr::Trivial(lhs.clone()));
+            let rhs_type = compute_expr_type(type_db, decls_in_scope, &HIRExpr::Trivial(rhs.clone()));
             
             //multiplying, subtracting, etc functions not supported... what does that even mean?
 
@@ -219,28 +219,28 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
             panic!("Could not find implementation for operator {:?} between types {} and {}", op, lhs_type.string(type_db), rhs_type.string(type_db));
         }
         //no function polymorphism supported 
-        MIRExpr::FunctionCall(fun_expr, .. ) => {
-            let TrivialMIRExpr::Variable(var) = fun_expr else {
+        HIRExpr::FunctionCall(fun_expr, .. ) => {
+            let TrivialHIRExpr::Variable(var) = fun_expr else {
                 panic!("Function should be bound to a name! This bug reached the type inference code, maybe this should be expanded to support new language features");
             };
 
             //we have to find the function declaration
             return match decls_in_scope.get(&var) {
-                MIRTypeDef::Pending => panic!("Expr type calculation bug: tried to resolve a type of variable {} in expression, but variable still needs type inference. If the variable was declared before, it should have been inferred before.", &var),
-                MIRTypeDef::Unresolved(mir_type) => {
+                HIRTypeDef::Pending => panic!("Expr type calculation bug: tried to resolve a type of variable {} in expression, but variable still needs type inference. If the variable was declared before, it should have been inferred before.", &var),
+                HIRTypeDef::Unresolved(mir_type) => {
                     match mir_type {
-                        MIRType::Function(_, return_type) => {
+                        HIRType::Function(_, return_type) => {
                             instantiate_type(type_db, &return_type)
                         },
                         _ => panic!("Expr type calculation bug: tried to find a function decl, found, but the returned type is not a function... type is {:?}", mir_type)
                     }
                 },
-                MIRTypeDef::Resolved(resolved) => resolved.clone(),
+                HIRTypeDef::Resolved(resolved) => resolved.clone(),
             };
 
         },
-        MIRExpr::UnaryExpression(op, rhs) => {
-            let rhs_type = compute_expr_type(type_db, decls_in_scope, &MIRExpr::Trivial(rhs.clone()));
+        HIRExpr::UnaryExpression(op, rhs) => {
+            let rhs_type = compute_expr_type(type_db, decls_in_scope, &HIRExpr::Trivial(rhs.clone()));
             
             //multiplying, subtracting, etc functions not supported... what does that even mean?
             
@@ -259,7 +259,7 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
 
             panic!("Could not determine type of expression {:?}", expression);
         },
-        MIRExpr::MemberAccess(obj, name) => {
+        HIRExpr::MemberAccess(obj, name) => {
 
             //let me guide you through the process of resolving a method call.
             /*
@@ -287,7 +287,7 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
 
             */
 
-            let typeof_obj = compute_expr_type(type_db, decls_in_scope, &MIRExpr::Trivial(obj.clone()));
+            let typeof_obj = compute_expr_type(type_db, decls_in_scope, &HIRExpr::Trivial(obj.clone()));
             
             let (type_id, generics) = match typeof_obj {
                 TypeInstance::Generic(type_id, generics) => (type_id, generics.clone()),
@@ -347,15 +347,15 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
         }
         //we will get the type of the first item, and use it as a type and instantiate an Array generic type.
         //a later step will do the type checking.
-        MIRExpr::Array(array_items) => {
+        HIRExpr::Array(array_items) => {
             if array_items.len() == 0 {
                 panic!("Could not infer type of array declaration: no items were found. Please include the type on the declaration")
             }
-            let first_item_type = compute_expr_type(type_db, decls_in_scope, &MIRExpr::Trivial(array_items[0].clone()));
+            let first_item_type = compute_expr_type(type_db, decls_in_scope, &HIRExpr::Trivial(array_items[0].clone()));
             let array_type = type_db.find_by_name("array").unwrap();
             TypeInstance::Generic(array_type.id, vec![first_item_type])
         },
-        MIRExpr::Cast(_, _) => todo!(),
+        HIRExpr::Cast(_, _) => todo!(),
 
         
     }
@@ -364,7 +364,7 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
 fn infer_variable_types_in_functions(
     type_db: &TypeDatabase,
     globals: &NameRegistry,
-    function_name: &str, parameters: &[MIRTypedBoundName], body: &[MIR]) -> Vec<MIR> {
+    function_name: &str, parameters: &[HIRTypedBoundName], body: &[HIR]) -> Vec<HIR> {
 
 
     let mut decls_in_scope = NameRegistry::new();
@@ -380,16 +380,16 @@ fn infer_variable_types_in_functions(
     let mut new_mir = vec![];
     for node in body {
         let mir_node = match node {
-            MIR::Declare { var, typename, expression } => {
+            HIR::Declare { var, typename, expression } => {
                 let typedef = match typename {
-                    MIRTypeDef::Pending => {
+                    HIRTypeDef::Pending => {
                         compute_expr_type(type_db, &decls_in_scope, expression)
                     },
-                    MIRTypeDef::Resolved(resolved) => resolved.clone(),
-                    MIRTypeDef::Unresolved(mir_type) => instantiate_type(type_db, mir_type)
+                    HIRTypeDef::Resolved(resolved) => resolved.clone(),
+                    HIRTypeDef::Unresolved(mir_type) => instantiate_type(type_db, mir_type)
                 };
-                decls_in_scope.insert(var.clone(),  MIRTypeDef::Resolved(typedef.clone()));
-                MIR::Declare { var: var.clone(), typename: MIRTypeDef::Resolved(typedef), expression: expression.clone() }
+                decls_in_scope.insert(var.clone(),  HIRTypeDef::Resolved(typedef.clone()));
+                HIR::Declare { var: var.clone(), typename: HIRTypeDef::Resolved(typedef), expression: expression.clone() }
             }
             other => other.clone()
         };
@@ -403,34 +403,34 @@ fn infer_variable_types_in_functions(
 
 fn infer_function_parameter_types_and_return(
     type_db: &TypeDatabase,
-    parameters: &[MIRTypedBoundName], return_type: &MIRTypeDef) -> (Vec<MIRTypedBoundName>, TypeInstance) {
+    parameters: &[HIRTypedBoundName], return_type: &HIRTypeDef) -> (Vec<HIRTypedBoundName>, TypeInstance) {
     
     let mut new_args = vec![];
     for node in parameters.iter() {
         match &node.typename {
-            MIRTypeDef::Pending => panic!("Function parameters cannot have type inference"),
-            MIRTypeDef::Unresolved(mir_type) => {
+            HIRTypeDef::Pending => panic!("Function parameters cannot have type inference"),
+            HIRTypeDef::Unresolved(mir_type) => {
                 let resolved = instantiate_type(type_db, &mir_type);
-                new_args.push(MIRTypedBoundName {
+                new_args.push(HIRTypedBoundName {
                     name: node.name.clone(),
-                    typename: MIRTypeDef::Resolved(resolved)
+                    typename: HIRTypeDef::Resolved(resolved)
                 })
             },
-            MIRTypeDef::Resolved(resolved) => {
-                new_args.push(MIRTypedBoundName {
+            HIRTypeDef::Resolved(resolved) => {
+                new_args.push(HIRTypedBoundName {
                     name: node.name.clone(),
-                    typename: MIRTypeDef::Resolved(resolved.clone())
+                    typename: HIRTypeDef::Resolved(resolved.clone())
                 })
             },
         }
     }
 
     let instance = match return_type {
-        MIRTypeDef::Pending => panic!("Function parameters cannot have type inference"),
-            MIRTypeDef::Unresolved(mir_type) => {
+        HIRTypeDef::Pending => panic!("Function parameters cannot have type inference"),
+            HIRTypeDef::Unresolved(mir_type) => {
                instantiate_type(type_db, &mir_type)
             },
-            MIRTypeDef::Resolved(resolved) => {
+            HIRTypeDef::Resolved(resolved) => {
                 resolved.clone()
             }
         };
@@ -440,33 +440,33 @@ fn infer_function_parameter_types_and_return(
 
 
 
-pub fn infer_types(globals: &mut NameRegistry, type_db: &TypeDatabase, mir: Vec<MIR>) -> Vec<MIR> {
+pub fn infer_types(globals: &mut NameRegistry, type_db: &TypeDatabase, mir: Vec<HIR>) -> Vec<HIR> {
 
     let mut new_mir = vec![];
 
     for node in mir.iter() {
         let result = match node {
-            MIR::DeclareFunction{ function_name, parameters, body, return_type} => {
+            HIR::DeclareFunction{ function_name, parameters, body, return_type} => {
                 let (parameters_resolved, return_type_resolved) = infer_function_parameter_types_and_return(type_db, parameters, return_type);
             
                 let parameter_types = parameters_resolved
                     .iter()
                     .map(|f| match &f.typename {
-                        MIRTypeDef::Resolved(r) => r.clone(),
+                        HIRTypeDef::Resolved(r) => r.clone(),
                         _ => panic!("Could not resolve parameter type for function {:?}", function_name)
                     })
                     .collect::<Vec<_>>();
                 
-                globals.insert(function_name.clone(), MIRTypeDef::Resolved(
+                globals.insert(function_name.clone(), HIRTypeDef::Resolved(
                     TypeInstance::Function(parameter_types, Box::new(return_type_resolved.clone()))
                 ));
 
                 let new_body = infer_variable_types_in_functions(type_db, globals, function_name, parameters, body);
-                MIR::DeclareFunction {
+                HIR::DeclareFunction {
                     function_name: function_name.clone(), 
                     parameters: parameters_resolved, 
                     body: new_body, 
-                    return_type: MIRTypeDef::Resolved(return_type_resolved) 
+                    return_type: HIRTypeDef::Resolved(return_type_resolved) 
                 }
             }
             other => other.clone()
@@ -479,10 +479,10 @@ pub fn infer_types(globals: &mut NameRegistry, type_db: &TypeDatabase, mir: Vec<
 } 
 
 
-fn pathcheck(mir: &[MIR]) -> bool {
+fn pathcheck(mir: &[HIR]) -> bool {
     for node in mir.iter() {
         match node {
-            MIR::DeclareFunction{ .. } => {
+            HIR::DeclareFunction{ .. } => {
                 panic!("Function inside funcion is forbidden for now")
             }
             _ => {}
@@ -492,13 +492,13 @@ fn pathcheck(mir: &[MIR]) -> bool {
 }
 
 
-pub fn check_types(globals: &NameRegistry, type_db: &TypeDatabase, mir: &[MIR]) {
+pub fn check_types(globals: &NameRegistry, type_db: &TypeDatabase, mir: &[HIR]) {
 
     println!("globals: {:?}", globals);
 
     for node in mir.iter() {
         match node {
-            MIR::DeclareFunction{ function_name, parameters, body, return_type} => {
+            HIR::DeclareFunction{ function_name, parameters, body, return_type} => {
                 /*
                 for each declared function, navigate through its AST
                 and check whether types check:

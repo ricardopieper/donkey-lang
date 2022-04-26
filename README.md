@@ -31,7 +31,7 @@ It's called pony because my previous attempt at writing an interpreter was named
 
  - It will have a smaller VM, or someday even no VM at all (maybe i'll write llvm IR and compile that), just like a pony is, in general, smaller than a grown-up, adult, full-featured horse. Jokes aside, it's interesting to have a working interpreter to allow things like compile-time evaluation by just running the code.
 
- - Ponies stay closer to the ground, or in other words, lower in the air than horses, the same way pony will be a lower level, closer to the metal language. Doesn't mean it will be a low-level language though.
+ - Ponies stay closer to the ground, or in other words, "lower in the air" than horses, the same way pony will be a lower level, closer to the metal language. Doesn't mean it will be a low-level language though.
 
 Having said that, it's probably gonna be a much larger effort than Horse.
 
@@ -82,7 +82,7 @@ trait Aircraft:
     def throttle_down(rate: f32)
 
 trait FighterJet: Aircraft:
-    def send_missile(radar_lock_id: i32) -> bool
+    def lock_missile(radar_lock_id: i32) -> bool
 
 struct Su27Flanker:
     max_speed: f32
@@ -134,12 +134,11 @@ impl FighterJet for Su27Flanker
 
     def lock_missile(self, radar_target_id: i32) -> bool:
         
-        #Here, type inference will be used, suppose get_entity_radar returns i32
+        #Here, type inference will be used, suppose get_entity_id returns i32
         entity_id = self.radar.get_entity_id(radar_target_id)
 
         #Explicitly define type, suppose GetEntity returns Aircraft.
-        #Suppose this is not a high performance entity manager, it's just a big bucket of pointers
-        target: Aircraft = EntityManager.GetEntity(entity)
+        target: Aircraft = EntityManager.GetEntity(entity_id)
   
         #We will allow globals
         SoundManager.Play("assets/sounds/sidewinder-growl-tone.wav")
