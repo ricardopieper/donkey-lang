@@ -118,7 +118,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
         HIR::If(condition, true_body, false_body) => {
             let condition_str = trivial_expr_str(condition);
             let mut ifdecl = format!("{}if {}:\n", indent, condition_str);
-            let indent_block = format!("{}  ", indent);
+            let indent_block = format!("{}    ", indent);
             for statement in true_body {
                 let statement_str = print_hir_str(statement, &indent_block, type_db);
                 ifdecl.push_str(&statement_str);

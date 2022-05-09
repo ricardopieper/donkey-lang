@@ -326,6 +326,6 @@ def main(x: i32) -> i32:
         });
         let err = result.unwrap_err();
         let as_str = err.downcast_ref::<String>().unwrap();
-        assert_eq!(as_str, "Could not find a name for y");
+        assert_eq!(as_str, "Variable y not found, function: main");
     }
 }

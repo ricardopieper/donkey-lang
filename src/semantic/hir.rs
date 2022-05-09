@@ -805,18 +805,43 @@ def my_function2(arg1: i32, arg2: i32) -> i32:
     return my_function(result1, result2)
 ",
         );
-        
-        println!("{}", print_hir(&result, &type_db::TypeDatabase::new()));
+        let result = print_hir(&result, &type_db::TypeDatabase::new());
+        println!("{}", result);
 
-        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"args\", typename: Unresolved(Generic(\"List\", [Simple(\"String\")])) }], body: [Declare { var: \"$0\", typename: Pending, expression: FunctionCall(Variable(\"my_function\"), [IntegerValue(99), IntegerValue(999)]) }, Declare { var: \"minus\", typename: Unresolved(Simple(\"i32\")), expression: UnaryExpression(Minus, Variable(\"$0\")) }, Declare { var: \"$1\", typename: Pending, expression: UnaryExpression(Minus, IntegerValue(3)) }, Assign { path: [\"numbers\"], expression: Array([IntegerValue(1), IntegerValue(2), Variable(\"$1\"), Variable(\"minus\")]) }, Assign { path: [\"r1\"], expression: FunctionCall(Variable(\"my_function\"), [IntegerValue(1), IntegerValue(2)]) }, Assign { path: [\"r2\"], expression: FunctionCall(Variable(\"my_function2\"), [IntegerValue(3), IntegerValue(4)]) }, Declare { var: \"$2\", typename: Pending, expression: MemberAccess(Variable(\"numbers\"), \"__index__\") }, Declare { var: \"$3\", typename: Pending, expression: FunctionCall(Variable(\"$2\"), [IntegerValue(1)]) }, Declare { var: \"$4\", typename: Pending, expression: MemberAccess(Variable(\"numbers\"), \"__index__\") }, Declare { var: \"$5\", typename: Pending, expression: FunctionCall(Variable(\"$4\"), [IntegerValue(2)]) }, Assign { path: [\"r3\"], expression: FunctionCall(Variable(\"my_function\"), [Variable(\"$3\"), Variable(\"$5\")]) }, Declare { var: \"$6\", typename: Pending, expression: BinaryOperation(Variable(\"r1\"), Plus, Variable(\"r2\")) }, Declare { var: \"$7\", typename: Pending, expression: BinaryOperation(Variable(\"$6\"), Plus, Variable(\"r3\")) }, FunctionCall { function: Variable(\"print\"), args: [Variable(\"$7\")] }], return_type: Unresolved(Simple(\"Void\")) }, DeclareFunction { function_name: \"my_function\", parameters: [HIRTypedBoundName { name: \"arg1\", typename: Unresolved(Simple(\"i32\")) }, HIRTypedBoundName { name: \"arg2\", typename: Unresolved(Simple(\"i32\")) }], body: [Declare { var: \"$0\", typename: Pending, expression: BinaryOperation(Variable(\"arg1\"), Multiply, Variable(\"arg2\")) }, Declare { var: \"$1\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Minus, Variable(\"arg1\")) }, Return(BinaryOperation(Variable(\"$0\"), Divide, Variable(\"$1\")))], return_type: Unresolved(Simple(\"i32\")) }, DeclareFunction { function_name: \"my_function2\", parameters: [HIRTypedBoundName { name: \"arg1\", typename: Unresolved(Simple(\"i32\")) }, HIRTypedBoundName { name: \"arg2\", typename: Unresolved(Simple(\"i32\")) }], body: [Declare { var: \"$0\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Plus, IntegerValue(1)) }, Declare { var: \"result1\", typename: Unresolved(Simple(\"i32\")), expression: FunctionCall(Variable(\"my_function\"), [Variable(\"arg1\"), Variable(\"$0\")]) }, Declare { var: \"$1\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Multiply, IntegerValue(9)) }, Assign { path: [\"result2\"], expression: FunctionCall(Variable(\"pow\"), [Variable(\"arg1\"), Variable(\"$1\")]) }, Return(FunctionCall(Variable(\"my_function\"), [Variable(\"result1\"), Variable(\"result2\")]))], return_type: Unresolved(Simple(\"i32\")) }]";
+        let expected = "
+def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
+    $0 : UNKNOWN_TYPE = my_function(99, 999)
+    minus : UNRESOLVED! i32 = -$0
+    $1 : UNKNOWN_TYPE = -3
+    numbers = [1, 2, $1, minus]
+    r1 = my_function(1, 2)
+    r2 = my_function2(3, 4)
+    $2 : UNKNOWN_TYPE = numbers.__index__
+    $3 : UNKNOWN_TYPE = $2(1)
+    $4 : UNKNOWN_TYPE = numbers.__index__
+    $5 : UNKNOWN_TYPE = $4(2)
+    r3 = my_function($3, $5)
+    $6 : UNKNOWN_TYPE = r1 + r2
+    $7 : UNKNOWN_TYPE = $6 + r3
+    print($7)
+def my_function(arg1: UNRESOLVED! i32, arg2: UNRESOLVED! i32) -> UNRESOLVED! i32:
+    $0 : UNKNOWN_TYPE = arg1 * arg2
+    $1 : UNKNOWN_TYPE = arg2 - arg1
+    return $0 / $1
+def my_function2(arg1: UNRESOLVED! i32, arg2: UNRESOLVED! i32) -> UNRESOLVED! i32:
+    $0 : UNKNOWN_TYPE = arg2 + 1
+    result1 : UNRESOLVED! i32 = my_function(arg1, $0)
+    $1 : UNKNOWN_TYPE = arg2 * 9
+    result2 = pow(arg1, $1)
+    return my_function(result1, result2)";
 
-        assert_eq!(debug_view_expected, format!("{:?}", result));
+        assert_eq!(expected.trim(), result.trim());
     }
 
 
     #[test]
     fn if_statement() {
-        let result = parse(
+        let parsed = parse(
             "
 def main(args: List<String>):
     if args[0] == 1:
@@ -825,11 +850,20 @@ def main(args: List<String>):
         print(20)
 ",
         );
+        let expected = "
+def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
+    $0 : UNKNOWN_TYPE = args.__index__
+    $1 : UNKNOWN_TYPE = $0(0)
+    $2 : UNKNOWN_TYPE = $1 == 1
+    if $2:
+        print(10)
+    else:
+        print(20)";
         
-        println!("{}", print_hir(&result, &type_db::TypeDatabase::new()));
+        let result = print_hir(&parsed, &type_db::TypeDatabase::new());
+        println!("{}", result);
 
-        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"args\", typename: Unresolved(Generic(\"List\", [Simple(\"String\")])) }], body: [Declare { var: \"$0\", typename: Pending, expression: MemberAccess(Variable(\"args\"), \"__index__\") }, Declare { var: \"$1\", typename: Pending, expression: FunctionCall(Variable(\"$0\"), [IntegerValue(0)]) }, Declare { var: \"$2\", typename: Pending, expression: BinaryOperation(Variable(\"$1\"), Equals, IntegerValue(1)) }, If(Variable(\"$2\"), [FunctionCall { function: Variable(\"print\"), args: [IntegerValue(10)] }], [FunctionCall { function: Variable(\"print\"), args: [IntegerValue(20)] }])], return_type: Unresolved(Simple(\"Void\")) }]";
-        assert_eq!(debug_view_expected, format!("{:?}", result));
+        assert_eq!(expected.trim(), result.trim());
     }
     
     #[test]
@@ -845,28 +879,49 @@ def main(args: List<String>):
     else:
         if arg == 2:
             print(40)
-",
-        );
-        
-        println!("{}", print_hir(&result, &type_db::TypeDatabase::new()));
+");
 
-        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"args\", typename: Unresolved(Generic(\"List\", [Simple(\"String\")])) }], body: [Declare { var: \"$0\", typename: Pending, expression: MemberAccess(Variable(\"args\"), \"__index__\") }, Assign { path: [\"arg\"], expression: FunctionCall(Variable(\"$0\"), [IntegerValue(0)]) }, Declare { var: \"$1\", typename: Pending, expression: BinaryOperation(Variable(\"arg\"), Equals, IntegerValue(1)) }, If(Variable(\"$1\"), [FunctionCall { function: Variable(\"print\"), args: [IntegerValue(10)] }, Declare { var: \"$2\", typename: Pending, expression: BinaryOperation(Variable(\"arg\"), LessEquals, IntegerValue(0)) }, If(Variable(\"$2\"), [Assign { path: [\"arg\"], expression: BinaryOperation(Variable(\"arg\"), Plus, IntegerValue(1)) }], [])], [Declare { var: \"$2\", typename: Pending, expression: BinaryOperation(Variable(\"arg\"), Equals, IntegerValue(2)) }, If(Variable(\"$2\"), [FunctionCall { function: Variable(\"print\"), args: [IntegerValue(40)] }], [])])], return_type: Unresolved(Simple(\"Void\")) }]";
-        assert_eq!(debug_view_expected, format!("{:?}", result));
+        let expected = "
+def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
+    $0 : UNKNOWN_TYPE = args.__index__
+    arg = $0(0)
+    $1 : UNKNOWN_TYPE = arg == 1
+    if $1:
+        print(10)
+        $2 : UNKNOWN_TYPE = arg <= 0
+        if $2:
+            arg = arg + 1
+        else:
+            pass
+    else:
+        $2 : UNKNOWN_TYPE = arg == 2
+        if $2:
+            print(40)
+        else:
+            pass        
+";
+
+        let final_result = print_hir(&result, &type_db::TypeDatabase::new());
+        println!("{}", final_result);
+
+        assert_eq!(expected.trim(), final_result.trim());
     }
 
     #[test]
     fn return_expr() {
-        let result = parse(
+        let parsed = parse(
             "
 def main(x: i32) -> i32:
     y = 0
     return x + y
 ",
         );
-        
-        println!("{}", print_hir(&result, &type_db::TypeDatabase::new()));
+        let expected = "
+def main(x: UNRESOLVED! i32) -> UNRESOLVED! i32:
+    y = 0
+    return x + y";
+        let result = print_hir(&parsed, &type_db::TypeDatabase::new());
 
-        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"x\", typename: Unresolved(Simple(\"i32\")) }], body: [Assign { path: [\"y\"], expression: Trivial(IntegerValue(0)) }, Return(BinaryOperation(Variable(\"x\"), Plus, Variable(\"y\")))], return_type: Unresolved(Simple(\"i32\")) }]";
-        assert_eq!(debug_view_expected, format!("{:?}", result));
+        assert_eq!(expected.trim(), result.trim());
     }
 }
