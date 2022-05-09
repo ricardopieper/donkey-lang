@@ -179,8 +179,15 @@ impl TypeDatabase {
             .expect(&format!("Type ID not found: {}", id))
     }
 
-    pub fn find_by_name(&self, name: &str) -> Option<&TypeRecord> {
+    fn find_by_name(&self, name: &str) -> Option<&TypeRecord> {
         self.types.iter().find(|t| t.name == name)
+    }
+
+    pub fn expect_find_by_name(&self, name: &str) -> &TypeRecord {
+        match self.types.iter().find(|t| t.name == name){
+            Some(r) => r,
+            None => panic!("Could not find type by name {}", name)
+        }
     }
 
     pub fn get_binary_operations(
@@ -272,6 +279,11 @@ impl TypeDatabase {
         record.methods.push(signature)
     }
 
+    pub fn add_field(&mut self, type_id: TypeId, name: &str, field_type: TypeId) {
+        let record = self.types.get_mut(type_id).unwrap();
+        record.fields.push(TypeField { name: name.to_string(), field_type: Type::Simple(Either::Right(field_type)) })
+    }
+
     fn init_builtin(&mut self) {
         use std::mem;
 
@@ -325,5 +337,8 @@ impl TypeDatabase {
                 return_type: Type::Simple(Either::Left(GenericParameter("TItem".into()))),
             },
         );
+
+        //u32_type
+        self.add_field(arr_type, "length", u32_type);
     }
 }

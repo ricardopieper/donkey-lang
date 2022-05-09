@@ -9,8 +9,10 @@ use std::env;
 use std::fs;
 use crate::ast::lexer;
 use crate::ast::parser;
+use crate::semantic::mir;
 use crate::semantic::hir;
 use crate::semantic::hir::*;
+use crate::semantic::mir::*;
 use crate::semantic::type_db::TypeDatabase;
 
 fn main() {
@@ -28,7 +30,7 @@ fn main() {
 
     //crate::semantic::mir_printer::print_mir(&result.initial_mir, &result.type_db);
     //crate::semantic::mir_printer::print_mir(&result.after_make_declarations_mir, &result.type_db);
-    println!("{}", crate::semantic::hir_printer::print_mir(&result.final_mir, &result.type_db));
+    println!("{}", crate::semantic::hir_printer::print_hir(&result.final_mir, &result.type_db));
 
     return;
 }

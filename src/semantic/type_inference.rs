@@ -20,12 +20,12 @@ fn instantiate_type(type_db: &TypeDatabase, typedef: &HIRType) -> TypeInstance {
 
     match typedef {
         HIRType::Simple(type_name) => {
-            let type_record = type_db.find_by_name(type_name).unwrap();
+            let type_record = type_db.expect_find_by_name(type_name);
             let as_type = type_record.as_type();
             type_to_instance(&as_type, typedef)
         },
         HIRType::Generic(type_name, args) => {
-            let base_type_record = type_db.find_by_name(type_name).unwrap();
+            let base_type_record = type_db.expect_find_by_name(type_name);
             TypeInstance::Generic(
                 base_type_record.id,
                 args.iter().map(|x| instantiate_type(type_db, x)).collect::<Vec<_>>()
@@ -190,7 +190,7 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
                 TrivialHIRExpr::None => "None",
                 _ => unreachable!()
             };
-            let type_rec = type_db.find_by_name(typename).unwrap();
+            let type_rec = type_db.expect_find_by_name(typename);
             TypeInstance::Simple(type_rec.id)
         }
         HIRExpr::BinaryOperation(lhs, op, rhs) => {
@@ -216,7 +216,7 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
                 }
             }
 
-            panic!("Could not find implementation for operator {:?} between types {} and {}", op, lhs_type.string(type_db), rhs_type.string(type_db));
+            panic!("Could not find implementation for operator {:?} between types {} and {}", op, lhs_type.as_string(type_db), rhs_type.as_string(type_db));
         }
         //no function polymorphism supported 
         HIRExpr::FunctionCall(fun_expr, .. ) => {
@@ -235,7 +235,11 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
                         _ => panic!("Expr type calculation bug: tried to find a function decl, found, but the returned type is not a function... type is {:?}", mir_type)
                     }
                 },
-                HIRTypeDef::Resolved(resolved) => resolved.clone(),
+                HIRTypeDef::Resolved(resolved) => match resolved {
+                    TypeInstance::Simple(s) => panic!("Tried to resolve the return type of a function call, but the bound variable is not callable!"),
+                    TypeInstance::Generic(_base_type, _parameters) => panic!("Tried to resolve the return type of a function call, but the bound variable is a generic type!"),
+                    TypeInstance::Function(_params, return_type) => *return_type,
+                }
             };
 
         },
@@ -261,7 +265,7 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
         },
         HIRExpr::MemberAccess(obj, name) => {
 
-            //let me guide you through the process of resolving a method call.
+            //Let me guide you through the process of resolving a method call.
             /*
             Suppose we have:
             struct array<TItem>:
@@ -276,14 +280,14 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
             
             At some point we call:
 
-            arr = [1,2,3] (arr<i32>)
-            y = arr[2]
+            arr: array<i32> = [1,2,3]
+            y: i32 = arr[2]
 
             which lowers to something like:
             y = arr.__index__(cast<u32>(2))
 
-            in this case there's a member access on __index__, that's gonna be the name
-            matched in MIRExpr::MemberAccess(obj <-- arr, name <-- __index__) 
+            In this case there's a member access on __index__.
+            Therefore we are matching on MIRExpr::MemberAccess(TrivialHIRExpr::Variable("arr"), "__index__") 
 
             */
 
@@ -341,9 +345,11 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
                 return resolve_type(
                     &field.field_type, 
                     type_db, TypeResolution::new(Some(type_id), &generics));
+            } else {
+                panic!("Could not find member {} on type {}", name, type_data.name);
             }
 
-            panic!("Could not determine type");
+           
         }
         //we will get the type of the first item, and use it as a type and instantiate an Array generic type.
         //a later step will do the type checking.
@@ -352,7 +358,7 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
                 panic!("Could not infer type of array declaration: no items were found. Please include the type on the declaration")
             }
             let first_item_type = compute_expr_type(type_db, decls_in_scope, &HIRExpr::Trivial(array_items[0].clone()));
-            let array_type = type_db.find_by_name("array").unwrap();
+            let array_type = type_db.expect_find_by_name("array");
             TypeInstance::Generic(array_type.id, vec![first_item_type])
         },
         HIRExpr::Cast(_, _) => todo!(),
@@ -380,7 +386,7 @@ fn infer_variable_types_in_functions(
     let mut new_mir = vec![];
     for node in body {
         let mir_node = match node {
-            HIR::Declare { var, typename, expression } => {
+            HIR::Declare { var, typedef: typename, expression } => {
                 let typedef = match typename {
                     HIRTypeDef::Pending => {
                         compute_expr_type(type_db, &decls_in_scope, expression)
@@ -389,7 +395,7 @@ fn infer_variable_types_in_functions(
                     HIRTypeDef::Unresolved(mir_type) => instantiate_type(type_db, mir_type)
                 };
                 decls_in_scope.insert(var.clone(),  HIRTypeDef::Resolved(typedef.clone()));
-                HIR::Declare { var: var.clone(), typename: HIRTypeDef::Resolved(typedef), expression: expression.clone() }
+                HIR::Declare { var: var.clone(), typedef: HIRTypeDef::Resolved(typedef), expression: expression.clone() }
             }
             other => other.clone()
         };
@@ -479,42 +485,5 @@ pub fn infer_types(globals: &mut NameRegistry, type_db: &TypeDatabase, mir: Vec<
 } 
 
 
-fn pathcheck(mir: &[HIR]) -> bool {
-    for node in mir.iter() {
-        match node {
-            HIR::DeclareFunction{ .. } => {
-                panic!("Function inside funcion is forbidden for now")
-            }
-            _ => {}
-        };
-    }
-    return true;
-}
-
-
-pub fn check_types(globals: &NameRegistry, type_db: &TypeDatabase, mir: &[HIR]) {
-
-    println!("globals: {:?}", globals);
-
-    for node in mir.iter() {
-        match node {
-            HIR::DeclareFunction{ function_name, parameters, body, return_type} => {
-                /*
-                for each declared function, navigate through its AST
-                and check whether types check:
-
-                variable declarations: type must match expression
-                function calls: number of arguments must match
-                function calls: arguments must match types 
-                return: matches return type of function
-                return: all paths return a type
-                */
-
-                
-
-                check_types(globals, type_db, body)
-            }
-            _ => {}
-        };
-    }
-} 
+//Why no tests?
+//This is actually tested in the file analysis.rs!

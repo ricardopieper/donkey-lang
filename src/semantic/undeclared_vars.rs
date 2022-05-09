@@ -72,6 +72,9 @@ fn detect_declaration_errors(
                 check_expr(&declarations_found, function_name, expression);
             }
             HIR::Assign { path, expression } => {
+                if !declarations_found.contains(path.first().unwrap()) {
+                    panic!("Assign to undeclared function {}", path.first().unwrap());
+                }
                 check_expr(&declarations_found, function_name, expression);
             }
             HIR::FunctionCall { function, args } => {

@@ -73,21 +73,22 @@ pub struct HIRTypedBoundName {
 pub enum TypeInstance {
     Simple(TypeId), //Built-in types, non-generic structs, etc
     Generic(TypeId, Vec<TypeInstance>), //each TypeId in the vec is a type parameter used in this specific usage of the type, this is positional.
+    //parameters, return type
     Function(Vec<TypeInstance>, Box<TypeInstance>) //In this case there is not even a base type like in generics, functions are functions 
 }
 
 impl TypeInstance {
-    pub fn string(&self, type_db: &TypeDatabase) -> String {
+    pub fn as_string(&self, type_db: &TypeDatabase) -> String {
         match self {
             TypeInstance::Simple(id) => type_db.get_name(*id).into(),
             TypeInstance::Generic(id, args) => {
-                let args_str = args.iter().map(|x| x.string(type_db).clone()).collect::<Vec<_>>().join(", ");
+                let args_str = args.iter().map(|x| x.as_string(type_db).clone()).collect::<Vec<_>>().join(", ");
                 let base_str =type_db.get_name(*id);
                 format!("{}<{}>", base_str, args_str)
             },
             TypeInstance::Function(args, return_type) => {
-                let args_str = args.iter().map(|x| x.string(type_db).clone()).collect::<Vec<_>>().join(", ");
-                let return_type_str = return_type.string(type_db);
+                let args_str = args.iter().map(|x| x.as_string(type_db).clone()).collect::<Vec<_>>().join(", ");
+                let return_type_str = return_type.as_string(type_db);
                 format!("fn ({}) -> {}", args_str, return_type_str)
             },
         }
@@ -116,6 +117,13 @@ impl HIRTypeDef {
             HIRTypeDef::Resolved(_) => panic!("Cannot deal with resolved types at this point, this is a bug"),
         }
     }
+    pub fn expect_resolved(&self) -> &TypeInstance {
+        match self {
+            HIRTypeDef::Pending => panic!("Expected resolved type, but is Pending"),
+            HIRTypeDef::Unresolved(e) => panic!("Expected resolved type, but is Unresolved {:?}", e),
+            HIRTypeDef::Resolved(r) => r,
+        }
+    }
 }
 
 impl HIRType {
@@ -133,6 +141,19 @@ impl HIRType {
 pub type TypeId = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/*
+The HIR expression is similar to the AST, but simplified. Some language features are reduced to HIR,
+and types declared explicitly are resolved, as well as variables get assigned types through type inference.
+
+Some typechecking is done during this transformation as well.
+
+This representation can be recursive for code blocks (like the scopes for ifs, functions, etc) but expressions
+are decomposed to a single reference. You won't find things like x = a + b / c * d here,
+but rather a decomposed version with many intermediate declarations.
+
+The HIR will be further decomposed into the MIR, where there is no recursion *at all*, all code blocks and scopes will be declared
+and decomposed, and then they will reference each other.
+*/
 pub enum HIR {
     Assign {
         path: Vec<String>,
@@ -140,7 +161,7 @@ pub enum HIR {
     },
     Declare {
         var: String,
-        typename: HIRTypeDef,
+        typedef: HIRTypeDef,
         expression: HIRExpr,
     },
     DeclareFunction {
@@ -157,7 +178,9 @@ pub enum HIR {
         function: TrivialHIRExpr,
         args: Vec<TrivialHIRExpr>,
     },
-    If(Vec<Expr>, Vec<Expr>),
+    //condition, true branch, false branch
+    //this transforms elifs into else: \n\t if ..
+    If(TrivialHIRExpr, Vec<HIR>, Vec<HIR>),
     Return(HIRExpr),
     EmptyReturn
 }
@@ -219,7 +242,7 @@ fn check_if_reducible(expr: &Expr) -> bool {
             }
             return false;
         },
-        Expr::IndexAccess(lhs, index_expr) => {
+        Expr::IndexAccess(_, _) => {
             //return true so that it can be lowered to a __index__ call
             return true;
         },
@@ -237,7 +260,11 @@ fn check_if_reducible(expr: &Expr) -> bool {
 
 //this function returns the final expression created, and the number of intermediary variables used
 //In the recursive cases, this function should always return a HIRExpr::Trivial
-fn reduce_expr_to_hir_declarations(expr: &Expr, mut intermediary: i32, accum: &mut Vec<HIR>, is_reducing: bool) -> (HIRExpr, i32) {
+//force_declare_intermediate_on_nonroot_exprs is a flag (yes I know flags are bad just because Uncle Bob said so) that 
+//forces the function to declare a new intermediate value even if the expression is irreducible, like 1 == 2. 
+//If you pass false the function just returns in the irreducible form without creating new variables. If you pass true
+//then it will always introduce a new intermediate value, like $0 = 1 == 2 and return a variable.
+fn reduce_expr_to_hir_declarations(expr: &Expr, mut intermediary: i32, accum: &mut Vec<HIR>, force_declare_intermediate_on_nonroot_exprs: bool) -> (HIRExpr, i32) {
     let trivial_expr = get_trivial_hir_expr(expr);
     match trivial_expr {
         Some(x) => { return (HIRExpr::Trivial(x), 0) },
@@ -288,10 +315,10 @@ fn reduce_expr_to_hir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 HIRExpr::FunctionCall(get_trivial_hir_expr(function_expr).unwrap(), args)
            };
 
-           if is_reducing {
+           if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::Pending,
                     expression: fcall.clone()
                 };
                 total_used_interm += 1;
@@ -325,10 +352,10 @@ fn reduce_expr_to_hir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 )
             };
                 
-            if is_reducing {
+            if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::Pending,
                     expression: binop.clone()
                 };
                 total_used_interm += 1;
@@ -368,10 +395,10 @@ fn reduce_expr_to_hir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 HIRExpr::Array(args)
             };
 
-            if is_reducing {
+            if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::Pending,
                     expression: array.clone()
                 };
                 total_used_interm += 1;
@@ -392,7 +419,7 @@ fn reduce_expr_to_hir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 vec![*owned]
             );
 
-            return reduce_expr_to_hir_declarations(&as_fcall, intermediary, accum, is_reducing);
+            return reduce_expr_to_hir_declarations(&as_fcall, intermediary, accum, force_declare_intermediate_on_nonroot_exprs);
         },
         unary_expression @ Expr::UnaryExpression(op, expr) => {
             let mut total_used_interm = 0;
@@ -412,10 +439,10 @@ fn reduce_expr_to_hir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 )
             };
                 
-            if is_reducing {
+            if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::Pending,
                     expression: unaryop.clone()
                 };
                 total_used_interm += 1;
@@ -445,10 +472,10 @@ fn reduce_expr_to_hir_declarations(expr: &Expr, mut intermediary: i32, accum: &m
                 )
             };
 
-            if is_reducing {
+            if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typename: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::Pending,
                     expression: member_access.clone()
                 };
                 total_used_interm += 1;
@@ -480,7 +507,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
             
             let decl_hir = HIR::Declare {
                 var: var.name.clone(),
-                typename: HIRTypeDef::Unresolved(HIRType::from_ast(&var.name_type)),
+                typedef: HIRTypeDef::Unresolved(HIRType::from_ast(&var.name_type)),
                 expression: result_expr
             };
 
@@ -524,8 +551,8 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
             };
 
             accum.push(decl_hir);
-            return 0; //yes, the function decls themselves created intermediaries, but they don't 
-            //escape the context
+            return 0; //yes, each function declaration created the intermediares for their body to work, but they don't 
+            //escape the scope of the function!
         }
         AST::Root(ast_nodes) => {
             let mut sum_intermediaries = 0;
@@ -571,6 +598,131 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
             accum.push(HIR::FunctionCall {function: function.clone(), args: args.clone()});
             return num_intermediaries;
         }
+        AST::IfStatement { true_branch, elifs, final_else } => {
+            let (true_branch_result_expr, num_intermediaries) =
+                reduce_expr_to_hir_declarations(&true_branch.expression, intermediary, accum, true);
+            intermediary += num_intermediaries;
+            let HIRExpr::Trivial(trivial_true_branch_expr) = &true_branch_result_expr else {
+                panic!("Lowering of true branch expr returned invalid result: {:?}", true_branch_result_expr);
+            };
+
+            let mut true_body_hir = vec![];
+
+            for node in true_branch.statements.iter() {
+                let created_intermediaries = ast_to_hir(node, intermediary, &mut true_body_hir);
+                intermediary += created_intermediaries;
+            }
+
+            /*
+              The HIR representation is simpler, but that means we have to do work to simplify it.
+              HIR is only condition, true branch, false branch so the rest of the else ifs go inside the false branch.
+
+              Let's just rewrite whatever the user wrote lmao
+
+              First we have to handle some base cases, i.e. no more elifs ou elses, no more elifs but there is an else, etc.
+            */
+
+            if elifs.len() == 0 && final_else.is_none() {
+                /* Just like function declarations, the intermediaries created here don't escape the context.
+                   This is different than python, where all variables declared are scoped to the entire function; 
+                */
+
+                accum.push(HIR::If(trivial_true_branch_expr.clone(), true_body_hir, vec![]));
+
+                return 0;
+            }
+            else if elifs.len() == 0 && final_else.is_some() {
+                //in this case we have a final else, just generate a false branch
+                let mut false_body_hir = vec![];
+
+                match final_else {
+                    None => panic!("Shouldn't happen!"),
+                    Some(nodes) => {
+
+                        for node in nodes.iter() {
+                            let created_intermediaries = ast_to_hir(&node, intermediary, &mut false_body_hir);
+                            intermediary += created_intermediaries;
+                        }
+        
+                        accum.push(HIR::If(trivial_true_branch_expr.clone(), true_body_hir, false_body_hir));
+                 
+                    }
+                }
+                return 0;
+            } else  {
+                //in this case we have elifs, so we build the "tree"
+                //and we don't actually need to store the false body because we'll connect everything later.
+                //it's not actually a tree... it's more like a linked list.
+                
+                //let mut current_if_tree = HIR::If(trivial_true_branch_expr, true_body_hir, ());
+                let mut nodes = vec![];
+                
+                struct IfTreeNode {
+                    condition: TrivialHIRExpr,
+                    true_body: Vec<HIR>
+                }
+
+                let root_node = IfTreeNode {
+                    condition: trivial_true_branch_expr.clone(),
+                    true_body: true_body_hir
+                };
+
+                nodes.push(root_node);
+
+                for item in elifs {
+                   
+                    let (elif_true_branch_result_expr, num_intermediaries) =
+                        reduce_expr_to_hir_declarations(&item.expression, intermediary, accum, true);
+                    intermediary +=num_intermediaries;
+
+                    let HIRExpr::Trivial(elif_trivial_true_branch_result_expr) = &elif_true_branch_result_expr else {
+                        panic!("Lowering of elif true branch expr returned invalid result: {:?}", elif_true_branch_result_expr);
+                    };
+                    let mut if_node = IfTreeNode {
+                        condition: elif_trivial_true_branch_result_expr.clone(), 
+                        true_body: vec![]
+                    };
+
+                    for node in item.statements.iter() {
+                        let created_intermediaries = ast_to_hir(node, intermediary, &mut if_node.true_body);
+                        intermediary += created_intermediaries;
+                    }
+                    nodes.push(if_node);
+                }
+                let mut final_else_body = vec![];
+                if let Some(statements) = final_else {
+                    for node in statements.iter() {
+                        let created_intermediaries = ast_to_hir(node, intermediary, &mut final_else_body);
+                        intermediary += created_intermediaries;
+                    }
+                }
+
+                //trivialexpr, vec<hir>, vec<hir>
+                let mut final_if_chain = None;
+
+                if final_else_body.len() > 0 {
+                    let first_node = nodes.pop().unwrap(); //there MUST be a node here
+                    final_if_chain = Some(HIR::If(first_node.condition, first_node.true_body, final_else_body));
+                }
+                
+                nodes.reverse();
+                //we navigate through the nodes in reverse and build the final HIR tree
+                for node in nodes {
+                   let new_node = match final_if_chain {
+                        None => {
+                            HIR::If(node.condition, node.true_body, vec![])
+                        },
+                        Some(current_chain) => {
+                            HIR::If(node.condition, node.true_body, vec![current_chain])
+                        }
+                    };
+                    final_if_chain = Some(new_node);
+                }
+                accum.push(final_if_chain.unwrap());
+
+                return 0;
+            }
+        }
         ast => panic!("Not implemented HIR for {:?}", ast)
     }
 }
@@ -582,6 +734,7 @@ mod tests {
     use crate::semantic::*;
     use crate::ast::parser::*;
     use crate::ast::lexer::*;
+    use crate::semantic::hir_printer::print_hir;
 
     //Parses a single expression
     fn parse(source: &str) -> Vec<HIR> {
@@ -613,7 +766,7 @@ y = x + str(True)",
             }, 
             HIR::Declare { 
                 var: "$0".into(), 
-                typename: HIRTypeDef::Pending, 
+                typedef: HIRTypeDef::Pending, 
                 expression: HIRExpr::FunctionCall(
                     TrivialHIRExpr::Variable("str".into()), 
                     vec![TrivialHIRExpr::BooleanValue(true)]) 
@@ -653,10 +806,67 @@ def my_function2(arg1: i32, arg2: i32) -> i32:
 ",
         );
         
-        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"args\", typename: Unresolved(Generic(\"List\", [Unresolved(Simple(\"String\"))])) }], body: [Declare { var: \"$0\", typename: Pending, expression: FunctionCall(Variable(\"my_function\"), [IntegerValue(99), IntegerValue(999)]) }, Declare { var: \"minus\", typename: Unresolved(Simple(\"i32\")), expression: UnaryExpression(Minus, Variable(\"$0\")) }, Declare { var: \"$1\", typename: Pending, expression: UnaryExpression(Minus, IntegerValue(3)) }, Assign { path: [\"numbers\"], expression: Array([IntegerValue(1), IntegerValue(2), Variable(\"$1\"), Variable(\"minus\")]) }, Assign { path: [\"r1\"], expression: FunctionCall(Variable(\"my_function\"), [IntegerValue(1), IntegerValue(2)]) }, Assign { path: [\"r2\"], expression: FunctionCall(Variable(\"my_function2\"), [IntegerValue(3), IntegerValue(4)]) }, Declare { var: \"$2\", typename: Pending, expression: IndexAccess(Variable(\"numbers\"), IntegerValue(1)) }, Declare { var: \"$3\", typename: Pending, expression: IndexAccess(Variable(\"numbers\"), IntegerValue(2)) }, Assign { path: [\"r3\"], expression: FunctionCall(Variable(\"my_function\"), [Variable(\"$2\"), Variable(\"$3\")]) }, Declare { var: \"$4\", typename: Pending, expression: BinaryOperation(Variable(\"r1\"), Plus, Variable(\"r2\")) }, Declare { var: \"$5\", typename: Pending, expression: BinaryOperation(Variable(\"$4\"), Plus, Variable(\"r3\")) }, FunctionCall { function: Variable(\"print\"), args: [Variable(\"$5\")] }], return_type: Unresolved(Simple(\"Void\")) }, DeclareFunction { function_name: \"my_function\", parameters: [HIRTypedBoundName { name: \"arg1\", typename: Unresolved(Simple(\"i32\")) }, HIRTypedBoundName { name: \"arg2\", typename: Unresolved(Simple(\"i32\")) }], body: [Declare { var: \"$0\", typename: Pending, expression: BinaryOperation(Variable(\"arg1\"), Multiply, Variable(\"arg2\")) }, Declare { var: \"$1\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Minus, Variable(\"arg1\")) }, Return(BinaryOperation(Variable(\"$0\"), Divide, Variable(\"$1\")))], return_type: Unresolved(Simple(\"i32\")) }, DeclareFunction { function_name: \"my_function2\", parameters: [HIRTypedBoundName { name: \"arg1\", typename: Unresolved(Simple(\"i32\")) }, HIRTypedBoundName { name: \"arg2\", typename: Unresolved(Simple(\"i32\")) }], body: [Declare { var: \"$0\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Plus, IntegerValue(1)) }, Declare { var: \"result1\", typename: Unresolved(Simple(\"i32\")), expression: FunctionCall(Variable(\"my_function\"), [Variable(\"arg1\"), Variable(\"$0\")]) }, Declare { var: \"$1\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Multiply, IntegerValue(9)) }, Assign { path: [\"result2\"], expression: FunctionCall(Variable(\"pow\"), [Variable(\"arg1\"), Variable(\"$1\")]) }, Return(FunctionCall(Variable(\"my_function\"), [Variable(\"result1\"), Variable(\"result2\")]))], return_type: Unresolved(Simple(\"i32\")) }]";
+        println!("{}", print_hir(&result, &type_db::TypeDatabase::new()));
+
+        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"args\", typename: Unresolved(Generic(\"List\", [Simple(\"String\")])) }], body: [Declare { var: \"$0\", typename: Pending, expression: FunctionCall(Variable(\"my_function\"), [IntegerValue(99), IntegerValue(999)]) }, Declare { var: \"minus\", typename: Unresolved(Simple(\"i32\")), expression: UnaryExpression(Minus, Variable(\"$0\")) }, Declare { var: \"$1\", typename: Pending, expression: UnaryExpression(Minus, IntegerValue(3)) }, Assign { path: [\"numbers\"], expression: Array([IntegerValue(1), IntegerValue(2), Variable(\"$1\"), Variable(\"minus\")]) }, Assign { path: [\"r1\"], expression: FunctionCall(Variable(\"my_function\"), [IntegerValue(1), IntegerValue(2)]) }, Assign { path: [\"r2\"], expression: FunctionCall(Variable(\"my_function2\"), [IntegerValue(3), IntegerValue(4)]) }, Declare { var: \"$2\", typename: Pending, expression: MemberAccess(Variable(\"numbers\"), \"__index__\") }, Declare { var: \"$3\", typename: Pending, expression: FunctionCall(Variable(\"$2\"), [IntegerValue(1)]) }, Declare { var: \"$4\", typename: Pending, expression: MemberAccess(Variable(\"numbers\"), \"__index__\") }, Declare { var: \"$5\", typename: Pending, expression: FunctionCall(Variable(\"$4\"), [IntegerValue(2)]) }, Assign { path: [\"r3\"], expression: FunctionCall(Variable(\"my_function\"), [Variable(\"$3\"), Variable(\"$5\")]) }, Declare { var: \"$6\", typename: Pending, expression: BinaryOperation(Variable(\"r1\"), Plus, Variable(\"r2\")) }, Declare { var: \"$7\", typename: Pending, expression: BinaryOperation(Variable(\"$6\"), Plus, Variable(\"r3\")) }, FunctionCall { function: Variable(\"print\"), args: [Variable(\"$7\")] }], return_type: Unresolved(Simple(\"Void\")) }, DeclareFunction { function_name: \"my_function\", parameters: [HIRTypedBoundName { name: \"arg1\", typename: Unresolved(Simple(\"i32\")) }, HIRTypedBoundName { name: \"arg2\", typename: Unresolved(Simple(\"i32\")) }], body: [Declare { var: \"$0\", typename: Pending, expression: BinaryOperation(Variable(\"arg1\"), Multiply, Variable(\"arg2\")) }, Declare { var: \"$1\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Minus, Variable(\"arg1\")) }, Return(BinaryOperation(Variable(\"$0\"), Divide, Variable(\"$1\")))], return_type: Unresolved(Simple(\"i32\")) }, DeclareFunction { function_name: \"my_function2\", parameters: [HIRTypedBoundName { name: \"arg1\", typename: Unresolved(Simple(\"i32\")) }, HIRTypedBoundName { name: \"arg2\", typename: Unresolved(Simple(\"i32\")) }], body: [Declare { var: \"$0\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Plus, IntegerValue(1)) }, Declare { var: \"result1\", typename: Unresolved(Simple(\"i32\")), expression: FunctionCall(Variable(\"my_function\"), [Variable(\"arg1\"), Variable(\"$0\")]) }, Declare { var: \"$1\", typename: Pending, expression: BinaryOperation(Variable(\"arg2\"), Multiply, IntegerValue(9)) }, Assign { path: [\"result2\"], expression: FunctionCall(Variable(\"pow\"), [Variable(\"arg1\"), Variable(\"$1\")]) }, Return(FunctionCall(Variable(\"my_function\"), [Variable(\"result1\"), Variable(\"result2\")]))], return_type: Unresolved(Simple(\"i32\")) }]";
 
         assert_eq!(debug_view_expected, format!("{:?}", result));
     }
 
+
+    #[test]
+    fn if_statement() {
+        let result = parse(
+            "
+def main(args: List<String>):
+    if args[0] == 1:
+        print(10)
+    else:
+        print(20)
+",
+        );
+        
+        println!("{}", print_hir(&result, &type_db::TypeDatabase::new()));
+
+        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"args\", typename: Unresolved(Generic(\"List\", [Simple(\"String\")])) }], body: [Declare { var: \"$0\", typename: Pending, expression: MemberAccess(Variable(\"args\"), \"__index__\") }, Declare { var: \"$1\", typename: Pending, expression: FunctionCall(Variable(\"$0\"), [IntegerValue(0)]) }, Declare { var: \"$2\", typename: Pending, expression: BinaryOperation(Variable(\"$1\"), Equals, IntegerValue(1)) }, If(Variable(\"$2\"), [FunctionCall { function: Variable(\"print\"), args: [IntegerValue(10)] }], [FunctionCall { function: Variable(\"print\"), args: [IntegerValue(20)] }])], return_type: Unresolved(Simple(\"Void\")) }]";
+        assert_eq!(debug_view_expected, format!("{:?}", result));
+    }
     
+    #[test]
+    fn if_chain() {
+        let result = parse(
+            "
+def main(args: List<String>):
+    arg = args[0]
+    if arg == 1:
+        print(10)
+        if arg <= 0:
+            arg = arg + 1
+    else:
+        if arg == 2:
+            print(40)
+",
+        );
+        
+        println!("{}", print_hir(&result, &type_db::TypeDatabase::new()));
+
+        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"args\", typename: Unresolved(Generic(\"List\", [Simple(\"String\")])) }], body: [Declare { var: \"$0\", typename: Pending, expression: MemberAccess(Variable(\"args\"), \"__index__\") }, Assign { path: [\"arg\"], expression: FunctionCall(Variable(\"$0\"), [IntegerValue(0)]) }, Declare { var: \"$1\", typename: Pending, expression: BinaryOperation(Variable(\"arg\"), Equals, IntegerValue(1)) }, If(Variable(\"$1\"), [FunctionCall { function: Variable(\"print\"), args: [IntegerValue(10)] }, Declare { var: \"$2\", typename: Pending, expression: BinaryOperation(Variable(\"arg\"), LessEquals, IntegerValue(0)) }, If(Variable(\"$2\"), [Assign { path: [\"arg\"], expression: BinaryOperation(Variable(\"arg\"), Plus, IntegerValue(1)) }], [])], [Declare { var: \"$2\", typename: Pending, expression: BinaryOperation(Variable(\"arg\"), Equals, IntegerValue(2)) }, If(Variable(\"$2\"), [FunctionCall { function: Variable(\"print\"), args: [IntegerValue(40)] }], [])])], return_type: Unresolved(Simple(\"Void\")) }]";
+        assert_eq!(debug_view_expected, format!("{:?}", result));
+    }
+
+    #[test]
+    fn return_expr() {
+        let result = parse(
+            "
+def main(x: i32) -> i32:
+    y = 0
+    return x + y
+",
+        );
+        
+        println!("{}", print_hir(&result, &type_db::TypeDatabase::new()));
+
+        let debug_view_expected = "[DeclareFunction { function_name: \"main\", parameters: [HIRTypedBoundName { name: \"x\", typename: Unresolved(Simple(\"i32\")) }], body: [Assign { path: [\"y\"], expression: Trivial(IntegerValue(0)) }, Return(BinaryOperation(Variable(\"x\"), Plus, Variable(\"y\")))], return_type: Unresolved(Simple(\"i32\")) }]";
+        assert_eq!(debug_view_expected, format!("{:?}", result));
+    }
 }

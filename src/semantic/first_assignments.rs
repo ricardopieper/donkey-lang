@@ -37,7 +37,7 @@ fn make_assignments_into_declarations_in_function(function_name: &str,
                     declarations_found.insert(var.clone());
                     HIR::Declare { 
                         var: var.clone(), 
-                        typename: HIRTypeDef::Pending, 
+                        typedef: HIRTypeDef::Pending, 
                         expression: expression.clone() 
                     }
                 }
