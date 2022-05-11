@@ -847,4 +847,15 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn cannot_declare_intermediate() -> Result<(), String> {
+        let result = tokenize("$0 = 1");
+
+        assert_eq!(
+            result.unwrap_err(),
+            "Unrecognized token $"
+        );
+        Ok(())
+    }
+
 }

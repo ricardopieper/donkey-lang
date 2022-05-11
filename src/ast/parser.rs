@@ -3299,4 +3299,5 @@ struct SomeStruct:
         ))];
         assert_eq!(expected, result);
     }
+   
 }

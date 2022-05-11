@@ -49,17 +49,11 @@ fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &
     }
 }
 
-fn detect_declaration_errors(
-    mut declarations_found: HashSet<String>,
+fn detect_decl_errors_in_body(
+    declarations_found: &mut HashSet<String>,
     function_name: &str,
-    parameters: &[HIRTypedBoundName],
-    body: &[HIR],
-    return_type: &HIRTypeDef,
+    body: &[HIR]
 ) {
-    for p in parameters {
-        declarations_found.insert(p.name.clone());
-    }
-
     for node in body {
         match node {
             HIR::Declare {
@@ -71,9 +65,9 @@ fn detect_declaration_errors(
                 declarations_found.insert(var.clone());
                 check_expr(&declarations_found, function_name, expression);
             }
-            HIR::Assign { path, expression } => {
+            HIR::Assign { path, expression, .. } => {
                 if !declarations_found.contains(path.first().unwrap()) {
-                    panic!("Assign to undeclared function {}", path.first().unwrap());
+                    panic!("Assign to undeclared variable {}", path.first().unwrap());
                 }
                 check_expr(&declarations_found, function_name, expression);
             }
@@ -87,25 +81,40 @@ fn detect_declaration_errors(
                     check_expr(
                         &declarations_found,
                         function_name,
-                        &HIRExpr::Trivial(fun_arg.clone()),
+                        &HIRExpr::Trivial(fun_arg.0.clone()),
                     );
                 }
             }
-            HIR::Return(expr) => {
+            HIR::Return(expr, _) => {
                 check_expr(&declarations_found, function_name, expr);
             }
+            HIR::If(_, _, true_branch, false_branch) => {
+                //we clone the decls so that the scopes are different
+                detect_decl_errors_in_body(&mut declarations_found.clone(), function_name, &true_branch);
+                detect_decl_errors_in_body(&mut declarations_found.clone(), function_name, &false_branch);
+            }
+
             _ => {}
         };
     }
 }
 
+fn detect_declaration_errors_in_function(
+    mut declarations_found: HashSet<String>,
+    function_name: &str,
+    parameters: &[HIRTypedBoundName],
+    body: &[HIR],
+    return_type: &HIRTypeDef,
+) {
+    for p in parameters {
+        declarations_found.insert(p.name.clone());
+    }
+
+   detect_decl_errors_in_body(&mut declarations_found, function_name, body);
+}
+
 pub fn detect_undeclared_vars_and_redeclarations(mir: &[HIR]) {
     let mut declarations_found = HashSet::<String>::new();
-
-    //@TODO remove these
-    declarations_found.insert("print".into());
-    declarations_found.insert("pow".into());
-    declarations_found.insert("sqrt".into());
 
     //first collect all globals
     for node in mir.iter() {
@@ -126,7 +135,7 @@ pub fn detect_undeclared_vars_and_redeclarations(mir: &[HIR]) {
                 body,
                 return_type,
             } => {
-                detect_declaration_errors(
+                detect_declaration_errors_in_function(
                     declarations_found.clone(),
                     function_name,
                     parameters,

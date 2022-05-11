@@ -8,3 +8,4 @@ pub mod type_db;
 pub mod hir;
 pub mod analysis;
 pub mod mir;
+pub mod type_checker;

@@ -2,8 +2,7 @@ use crate::ast::lexer::*;
 use crate::commons::float::*;
 use crate::ast::parser::*;
 
-use super::type_db::TypeDatabase;
-
+use super::type_db::{TypeDatabase, TypeId};
 
 /**
  * 
@@ -93,6 +92,11 @@ impl TypeInstance {
             },
         }
     }
+
+    pub fn is_compatible(&self, other: &TypeInstance, type_db: &TypeDatabase) -> bool {
+        //for now we just compare by equality
+        return self == other
+    }
 }
 
 
@@ -138,7 +142,6 @@ impl HIRType {
     }
 }
 
-pub type TypeId = usize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*
@@ -158,6 +161,7 @@ pub enum HIR {
     Assign {
         path: Vec<String>,
         expression: HIRExpr,
+        assigned_type: HIRTypeDef
     },
     Declare {
         var: String,
@@ -176,12 +180,12 @@ pub enum HIR {
     },
     FunctionCall {
         function: TrivialHIRExpr,
-        args: Vec<TrivialHIRExpr>,
+        args: Vec<(TrivialHIRExpr, HIRTypeDef)>,
     },
     //condition, true branch, false branch
     //this transforms elifs into else: \n\t if ..
-    If(TrivialHIRExpr, Vec<HIR>, Vec<HIR>),
-    Return(HIRExpr),
+    If(TrivialHIRExpr, HIRTypeDef, Vec<HIR>, Vec<HIR>),
+    Return(HIRExpr, HIRTypeDef),
     EmptyReturn
 }
 
@@ -520,7 +524,8 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
             
             let decl_hir = HIR::Assign {
                 path: path.clone(),
-                expression: result_expr
+                expression: result_expr,
+                assigned_type: HIRTypeDef::Pending
             };
 
             accum.push(decl_hir);
@@ -571,7 +576,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 },
                 Some(e) => {
                     let (result_expr, num_intermediaries) = reduce_expr_to_hir_declarations(e, intermediary, accum, false);
-                    accum.push(HIR::Return(result_expr));
+                    accum.push(HIR::Return(result_expr, HIRTypeDef::Pending));
                     return num_intermediaries;
                 }
             }
@@ -588,14 +593,19 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
         AST::StandaloneExpr(expr) => {
 
             let Expr::FunctionCall(_, _) = expr else {
-                panic!("Can only lower function call standalone expr");
+                panic!("Can only lower function call standalone expr: {:#?}", expr);
             };
 
             let (result_expr, num_intermediaries) = reduce_expr_to_hir_declarations(expr, intermediary, accum, false);
             let HIRExpr::FunctionCall(function, args) = &result_expr else {
                 panic!("Lowering of function call returned invalid result: {:?}", result_expr);
             };
-            accum.push(HIR::FunctionCall {function: function.clone(), args: args.clone()});
+
+            let typed_args = args.iter().map(|x| {
+                (x.clone(), HIRTypeDef::Pending)
+            }).collect::<Vec<_>>();
+
+            accum.push(HIR::FunctionCall {function: function.clone(), args: typed_args.clone()});
             return num_intermediaries;
         }
         AST::IfStatement { true_branch, elifs, final_else } => {
@@ -627,7 +637,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                    This is different than python, where all variables declared are scoped to the entire function; 
                 */
 
-                accum.push(HIR::If(trivial_true_branch_expr.clone(), true_body_hir, vec![]));
+                accum.push(HIR::If(trivial_true_branch_expr.clone(), HIRTypeDef::Pending, true_body_hir, vec![]));
 
                 return 0;
             }
@@ -644,7 +654,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                             intermediary += created_intermediaries;
                         }
         
-                        accum.push(HIR::If(trivial_true_branch_expr.clone(), true_body_hir, false_body_hir));
+                        accum.push(HIR::If(trivial_true_branch_expr.clone(), HIRTypeDef::Pending, true_body_hir, false_body_hir));
                  
                     }
                 }
@@ -702,7 +712,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
 
                 if final_else_body.len() > 0 {
                     let first_node = nodes.pop().unwrap(); //there MUST be a node here
-                    final_if_chain = Some(HIR::If(first_node.condition, first_node.true_body, final_else_body));
+                    final_if_chain = Some(HIR::If(first_node.condition, HIRTypeDef::Pending, first_node.true_body, final_else_body));
                 }
                 
                 nodes.reverse();
@@ -710,10 +720,10 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 for node in nodes {
                    let new_node = match final_if_chain {
                         None => {
-                            HIR::If(node.condition, node.true_body, vec![])
+                            HIR::If(node.condition, HIRTypeDef::Pending, node.true_body, vec![])
                         },
                         Some(current_chain) => {
-                            HIR::If(node.condition, node.true_body, vec![current_chain])
+                            HIR::If(node.condition, HIRTypeDef::Pending, node.true_body, vec![current_chain])
                         }
                     };
                     final_if_chain = Some(new_node);
@@ -759,6 +769,7 @@ y = x + str(True)",
         let expected = vec![
             HIR::Assign { 
                 path: vec!["x".into()], 
+                assigned_type: HIRTypeDef::Pending,
                 expression: HIRExpr::BinaryOperation(
                     TrivialHIRExpr::StringValue("abc".into()), 
                     Operator::Plus, 
@@ -773,6 +784,7 @@ y = x + str(True)",
             }, 
             HIR::Assign { 
                 path: vec!["y".into()], 
+                assigned_type: HIRTypeDef::Pending,
                 expression: HIRExpr::BinaryOperation(
                     TrivialHIRExpr::Variable("x".into()), 
                     Operator::Plus, 
@@ -921,6 +933,38 @@ def main(x: UNRESOLVED! i32) -> UNRESOLVED! i32:
     y = 0
     return x + y";
         let result = print_hir(&parsed, &type_db::TypeDatabase::new());
+
+        assert_eq!(expected.trim(), result.trim());
+    }
+
+
+    #[test]
+    fn if_statements_decls_inside_branches() {
+        let parsed = parse(
+            "
+def main() -> i32:
+    x = 0
+    if True:
+        y = x + 1
+        return y
+    else:
+        x = 1
+        y = 2 + x
+        return x + y
+");
+      
+        let result = print_hir(&parsed, &type_db::TypeDatabase::new());
+        println!("{}", result);
+        let expected = "
+def main() -> UNRESOLVED! i32:
+    x = 0
+    if True:
+        y = x + 1
+        return y
+    else:
+        x = 1
+        y = 2 + x
+        return x + y";
 
         assert_eq!(expected.trim(), result.trim());
     }

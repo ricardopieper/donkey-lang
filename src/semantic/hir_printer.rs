@@ -28,7 +28,8 @@ pub fn trivial_expr_str(expr: &TrivialHIRExpr) -> String {
         TrivialHIRExpr::FloatValue(f) => format!("{:?}", f),
         TrivialHIRExpr::IntegerValue(i) => format!("{}", i),
         TrivialHIRExpr::StringValue(s) => format!("\"{}\"", s),
-        TrivialHIRExpr::BooleanValue(b) => format!("{}", b),
+        TrivialHIRExpr::BooleanValue(true) => format!("{}", "True"),
+        TrivialHIRExpr::BooleanValue(false) => format!("{}", "False"),
         TrivialHIRExpr::None => "None".into(),
     }
 }
@@ -78,7 +79,7 @@ pub fn hir_type_str(typ: &HIRTypeDef, type_db: &TypeDatabase) -> String {
 
 fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
     match node {
-        HIR::Assign {path, expression} => {
+        HIR::Assign {path, expression, ..} => {
             format!("{}{} = {}\n",indent, path.join("."), expr_str(&expression))
         },
         HIR::Declare{var, typedef: typename, expression} => {
@@ -97,7 +98,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
             }
             return function;
         }   
-        HIR::Return(expr) => {
+        HIR::Return(expr, _) => {
             format!("{}return {}\n",indent, expr_str(expr))
         }
         HIR::StructDeclaration { struct_name, body} => {
@@ -111,11 +112,11 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
             structdecl
         }
         HIR::FunctionCall { function, args} => {
-            let args_str = args.iter().map(|x| trivial_expr_str(x)).collect::<Vec<_>>().join(", ");
+            let args_str = args.iter().map(|x| trivial_expr_str(&x.0)).collect::<Vec<_>>().join(", ");
             
             format!("{}{}({})\n", indent, trivial_expr_str(function), args_str)
         },
-        HIR::If(condition, true_body, false_body) => {
+        HIR::If(condition, _, true_body, false_body) => {
             let condition_str = trivial_expr_str(condition);
             let mut ifdecl = format!("{}if {}:\n", indent, condition_str);
             let indent_block = format!("{}    ", indent);

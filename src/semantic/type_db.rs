@@ -7,11 +7,11 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
-type TypeId = usize;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct TypeId(pub usize);
 
 //Types arent simple, generic, function.... but rather primitive, struct and trait.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeKind {
     Primitive,
     Struct,
@@ -79,12 +79,16 @@ impl TypeRecord {
             );
         }
     }
+
+    pub fn to_instance(&self) -> TypeInstance {
+        TypeInstance::Simple(self.id)
+    }
 }
 
 impl Default for TypeRecord {
     fn default() -> TypeRecord {
         TypeRecord {
-            id: 0,
+            id: TypeId(0),
             kind: TypeKind::Primitive,
             size: 0,
             name: "".into(),
@@ -99,19 +103,25 @@ impl Default for TypeRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecialTypes {
+    pub void: TypeInstance
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDatabase {
     pub types: Vec<TypeRecord>,
+    pub special_types: SpecialTypes
 }
 
 impl TypeDatabase {
     pub fn new() -> Self {
-        let mut item = Self { types: vec![] };
+        let mut item = Self { types: vec![], special_types: SpecialTypes { void: TypeInstance::Simple(TypeId(0)) } };
         item.init_builtin();
         return item;
     }
 
     pub fn add(&mut self, kind: TypeKind, name: &str, size: usize) -> TypeId {
-        let next_id = self.types.len();
+        let next_id = TypeId(self.types.len());
         self.types.push(TypeRecord {
             id: next_id,
             kind: kind,
@@ -129,7 +139,7 @@ impl TypeDatabase {
         rhs_type: TypeInstance,
         result_type: TypeInstance,
     ) {
-        let record = self.types.get_mut(type_id).unwrap();
+        let record = self.types.get_mut(type_id.0).unwrap();
         record
             .rhs_binary_ops
             .push((operator, rhs_type, result_type));
@@ -142,7 +152,7 @@ impl TypeDatabase {
         type_args: Vec<GenericParameter>,
         size: usize,
     ) -> TypeId {
-        let next_id = self.types.len();
+        let next_id = TypeId(self.types.len());
 
         self.types.push(TypeRecord {
             id: next_id,
@@ -161,22 +171,22 @@ impl TypeDatabase {
         operator: Operator,
         result_type: TypeInstance,
     ) {
-        let record = self.types.get_mut(type_id).unwrap();
+        let record = self.types.get_mut(type_id.0).unwrap();
         record.unary_ops.push((operator, result_type));
     }
 
     pub fn get_name(&self, id: TypeId) -> &str {
         &self
             .types
-            .get(id)
-            .expect(&format!("Type ID not found: {}", id))
+            .get(id.0)
+            .expect(&format!("Type ID not found: {}", id.0))
             .name
     }
 
     pub fn find(&self, id: TypeId) -> &TypeRecord {
         self.types
-            .get(id)
-            .expect(&format!("Type ID not found: {}", id))
+            .get(id.0)
+            .expect(&format!("Type ID not found: {}", id.0))
     }
 
     fn find_by_name(&self, name: &str) -> Option<&TypeRecord> {
@@ -275,19 +285,21 @@ impl TypeDatabase {
     }
 
     pub fn add_method(&mut self, type_id: TypeId, signature: FunctionSignature) {
-        let record = self.types.get_mut(type_id).unwrap();
+        let record = self.types.get_mut(type_id.0).unwrap();
         record.methods.push(signature)
     }
 
     pub fn add_field(&mut self, type_id: TypeId, name: &str, field_type: TypeId) {
-        let record = self.types.get_mut(type_id).unwrap();
+        let record = self.types.get_mut(type_id.0).unwrap();
         record.fields.push(TypeField { name: name.to_string(), field_type: Type::Simple(Either::Right(field_type)) })
     }
 
     fn init_builtin(&mut self) {
         use std::mem;
 
-        self.add(TypeKind::Primitive, "Void", mem::size_of::<()>());
+        let void_type = self.add(TypeKind::Primitive, "Void", mem::size_of::<()>());
+        self.special_types.void = TypeInstance::Simple(void_type);
+
         self.add(TypeKind::Primitive, "None", mem::size_of::<()>());
         self.add(TypeKind::Primitive, "bool", mem::size_of::<bool>());
 

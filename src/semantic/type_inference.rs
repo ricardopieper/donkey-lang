@@ -6,8 +6,10 @@ use either::Either;
 
 use core::panic;
 
+use super::type_db::TypeId;
 
-fn instantiate_type(type_db: &TypeDatabase, typedef: &HIRType) -> TypeInstance {
+
+pub fn instantiate_type(type_db: &TypeDatabase, typedef: &HIRType) -> TypeInstance {
 
     fn type_to_instance(type_data: &Type, typedef: &HIRType) -> TypeInstance {
         match type_data {
@@ -172,7 +174,7 @@ fn resolve_function_signature(type_db: &TypeDatabase, signature: FunctionSignatu
 }
 
 //maybe add a type hint here for empty arrays in assigns
-fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expression: &HIRExpr) -> TypeInstance {
+pub fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expression: &HIRExpr) -> TypeInstance {
     match expression {
         HIRExpr::Trivial(TrivialHIRExpr::Variable(var)) => {
             match decls_in_scope.get(&var) {
@@ -367,22 +369,11 @@ fn compute_expr_type(type_db: &TypeDatabase, decls_in_scope: &NameRegistry, expr
     }
 }
 
-fn infer_variable_types_in_functions(
+fn infer_types_in_body(
     type_db: &TypeDatabase,
-    globals: &NameRegistry,
-    function_name: &str, parameters: &[HIRTypedBoundName], body: &[HIR]) -> Vec<HIR> {
-
-
-    let mut decls_in_scope = NameRegistry::new();
-    for p in parameters {
-        decls_in_scope.insert(p.name.clone(), p.typename.clone());
-    }
-
-    //add the function itself in the scope, to allow recursion
-    //the function itself is already on the globals!
-    decls_in_scope.include(globals);
-
-    
+    decls_in_scope: &mut NameRegistry,
+    body: &[HIR]
+) -> Vec<HIR> {
     let mut new_mir = vec![];
     for node in body {
         let mir_node = match node {
@@ -396,6 +387,32 @@ fn infer_variable_types_in_functions(
                 };
                 decls_in_scope.insert(var.clone(),  HIRTypeDef::Resolved(typedef.clone()));
                 HIR::Declare { var: var.clone(), typedef: HIRTypeDef::Resolved(typedef), expression: expression.clone() }
+            },
+            HIR::Assign { path, expression, .. } => {
+                HIR::Assign { 
+                    path: path.clone(), 
+                    expression: expression.clone(), 
+                    assigned_type: HIRTypeDef::Resolved(compute_expr_type(type_db, decls_in_scope, expression)) 
+                }
+            },
+            HIR::FunctionCall { function , args } => {
+                HIR::FunctionCall { 
+                    function: function.clone(), 
+                    args: args.iter().map(|(expr, _)| {
+                        let typedef = compute_expr_type(type_db, decls_in_scope, &HIRExpr::Trivial(expr.clone()));
+                        (expr.clone(), HIRTypeDef::Resolved(typedef))
+                    }).collect::<Vec<_>>() 
+                }
+            },
+            HIR::If(condition, _, true_branch, false_branch) => {
+                let true_branch_inferred = infer_types_in_body(type_db,  &mut decls_in_scope.clone(), true_branch);
+                let false_branch_inferred = infer_types_in_body(type_db, &mut decls_in_scope.clone(),  false_branch);
+                let condition_type = compute_expr_type(type_db, decls_in_scope, &HIRExpr::Trivial(condition.clone()));
+                HIR::If(condition.clone(), HIRTypeDef::Resolved(condition_type), true_branch_inferred, false_branch_inferred)
+            },
+            HIR::Return(expr, _) => {
+                let resolved_type = compute_expr_type(type_db, decls_in_scope, expr);
+                HIR::Return(expr.clone(), HIRTypeDef::Resolved(resolved_type))
             }
             other => other.clone()
         };
@@ -403,6 +420,25 @@ fn infer_variable_types_in_functions(
     }
 
     return new_mir;
+}
+
+
+fn infer_variable_types_in_functions(
+    type_db: &TypeDatabase,
+    globals: &NameRegistry,
+    function_name: &str, parameters: &[HIRTypedBoundName], body: &[HIR]) -> Vec<HIR> {
+
+
+    let mut decls_in_scope = NameRegistry::new();
+    for p in parameters {
+        decls_in_scope.insert(p.name.clone(), p.typename.clone());
+    }
+
+    //We should add the function itself in the scope, to allow recursion!
+    //Luckily the function itself is already on the globals!
+    decls_in_scope.include(globals);
+
+    infer_types_in_body(type_db, &mut decls_in_scope, body)
 }
 
 
@@ -463,6 +499,7 @@ pub fn infer_types(globals: &mut NameRegistry, type_db: &TypeDatabase, mir: Vec<
                     })
                     .collect::<Vec<_>>();
                 
+                //Allow calls from other functions and allow recursion
                 globals.insert(function_name.clone(), HIRTypeDef::Resolved(
                     TypeInstance::Function(parameter_types, Box::new(return_type_resolved.clone()))
                 ));

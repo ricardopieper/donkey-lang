@@ -3,7 +3,7 @@ use crate::semantic::type_db::*;
 
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NameRegistry {
     names: HashMap<String, HIRTypeDef>,
 }
@@ -34,8 +34,53 @@ impl NameRegistry {
     }
 }
 
+fn register_builtins(type_db: &TypeDatabase, registry: &mut NameRegistry) {
+    let float64 = type_db.expect_find_by_name("f64").to_instance();
+    let float32 = type_db.expect_find_by_name("f32").to_instance();
+    let int64 = type_db.expect_find_by_name("i64").to_instance();
+    let int32 = type_db.expect_find_by_name("i32").to_instance();
+    let string = type_db.expect_find_by_name("str").to_instance();
+
+    registry.insert("sqrt".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![float64.clone()], Box::new(float64.clone()))
+    ));
+
+    registry.insert("sqrt_f32".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![float32.clone()], Box::new(float32.clone()))
+    ));
+
+    registry.insert("sqrt_i64".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![int64.clone()], Box::new(int64.clone()))
+    ));
+
+    registry.insert("sqrt_i32".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![int32.clone()], Box::new(int32.clone()))
+    ));
+
+    registry.insert("print".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![string.clone()], Box::new(type_db.special_types.void.clone()))
+    ));
+
+    registry.insert("pow".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![float64.clone(), float64.clone()], Box::new(float64.clone()))
+    ));
+
+    registry.insert("pow_f32".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![float32.clone(), float32.clone()], Box::new(float32.clone()))
+    ));
+
+    registry.insert("pow_i64".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![int64.clone(), int64.clone()], Box::new(int64.clone()))
+    ));
+
+    registry.insert("pow_i32".to_string(), HIRTypeDef::Resolved(
+        TypeInstance::Function(vec![int32.clone(), int32.clone()], Box::new(int32.clone()))
+    ));
+}
+
 pub fn build_name_registry(type_db: &TypeDatabase, mir: &[HIR]) -> NameRegistry {
     let mut registry = NameRegistry::new();
+    register_builtins(type_db, &mut registry);
 
     //first collect all globals by navigating through all functions and assigns
     for node in mir.iter() {

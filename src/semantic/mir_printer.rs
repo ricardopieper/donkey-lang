@@ -22,7 +22,7 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
 
     for node in &block.block {
         match node {
-            MIRBlockNode::Assign { path, expression } => {
+            MIRBlockNode::Assign { path, expression, .. } => {
                 buffer.push_str(&format!(
                     "{}{}{} = {}\n",
                     indent,indent,
@@ -33,7 +33,7 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
             MIRBlockNode::FunctionCall { function, args } => {
                 let args_str = args
                     .iter()
-                    .map(|x| trivial_expr_str(x))
+                    .map(|x| trivial_expr_str(&x.0))
                     .collect::<Vec<_>>()
                     .join(", ");
                 buffer.push_str(&format!("{}{}{}({})\n", indent, indent,function, args_str));
@@ -42,24 +42,20 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
     }
 
     match &block.finish {
-        super::mir::MIRBlockFinal::If(condition, true_branch, false_branch) => {
+        super::mir::MIRBlockFinal::If(condition, _, true_branch, false_branch) => {
             buffer.push_str(&format!(
-                "{}if {}:\n{}{}gotoblock {}\n{}else:{}{}gotoblock {}",
-                indent,
-                trivial_expr_str(&condition), //if condition:
-                indent,
-                indent,
-                true_branch.0, //gotoblock 0
-                indent,        //else:
-                indent,
-                indent,
+                "{}{}if {}:\n{}{}{}gotoblock {}\n{}{}else:\n{}{}{}gotoblock {}\n",
+                indent, indent, trivial_expr_str(&condition), //if condition:
+                indent, indent, indent, true_branch.0, //gotoblock 0
+                indent, indent, //else:
+                indent, indent, indent,
                 false_branch.0
             )); //gotoblock 1
         }
         super::mir::MIRBlockFinal::GotoBlock(block) => {
             buffer.push_str(&format!("{}{}gotoblock {}\n", indent, indent, block.0));
         }
-        super::mir::MIRBlockFinal::Return(expr) => {
+        super::mir::MIRBlockFinal::Return(expr, type_instance) => {
             buffer.push_str(&format!("{}{}return {}\n", indent,indent, expr_str(&expr)));
         }
         super::mir::MIRBlockFinal::EmptyReturn => {

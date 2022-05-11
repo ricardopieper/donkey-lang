@@ -2,6 +2,42 @@ use crate::semantic::hir::*;
 
 use std::collections::HashSet;
 
+fn make_first_assignments_in_body(body: &[HIR], declarations_found: &mut HashSet<String>) -> Vec<HIR> {
+    let mut new_mir = vec![];
+    for node in body {
+        let mir_node = match node {
+            decl @ HIR::Declare { var, .. } => {
+                declarations_found.insert(var.clone());
+                decl.clone()
+            },
+            assign @ HIR::Assign {path, expression, assigned_type: _} if path.len() == 1 => {
+                let var = &path[0];
+                if declarations_found.contains(var) {
+                    assign.clone()
+                } else {
+                    declarations_found.insert(var.clone());
+                    HIR::Declare { 
+                        var: var.clone(), 
+                        typedef: HIRTypeDef::Pending, 
+                        expression: expression.clone() 
+                    }
+                }
+            }
+            HIR::If(condition, typedef, true_branch, false_branch) => {
+                //create 2 copies of the decls found, so that 2 copies of the scope are created
+                let mut true_branch_scope = declarations_found.clone();
+                let mut false_branch_scope = declarations_found.clone();
+                let true_branch_decls = make_first_assignments_in_body(&true_branch, &mut true_branch_scope);
+                let false_branch_decls = make_first_assignments_in_body(&false_branch, &mut false_branch_scope);
+                HIR::If(condition.clone(), typedef.clone(), true_branch_decls, false_branch_decls)
+            }
+            other => other.clone()
+        };
+        new_mir.push(mir_node);
+    }
+
+    return new_mir;
+}
 
 fn make_assignments_into_declarations_in_function(function_name: &str,
     parameters: &[HIRTypedBoundName],
@@ -22,32 +58,7 @@ fn make_assignments_into_declarations_in_function(function_name: &str,
     for p in parameters {
         declarations_found.insert(p.name.clone());
     }
-    let mut new_mir = vec![];
-    for node in body {
-        let mir_node = match node {
-            decl @ HIR::Declare { var, .. } => {
-                declarations_found.insert(var.clone());
-                decl.clone()
-            },
-            assign @ HIR::Assign {path, expression} if path.len() == 1 => {
-                let var = &path[0];
-                if declarations_found.contains(var) {
-                    assign.clone()
-                } else {
-                    declarations_found.insert(var.clone());
-                    HIR::Declare { 
-                        var: var.clone(), 
-                        typedef: HIRTypeDef::Pending, 
-                        expression: expression.clone() 
-                    }
-                }
-            }
-            other => other.clone()
-        };
-        new_mir.push(mir_node);
-    }
-
-    return new_mir;
+    return make_first_assignments_in_body(body, &mut declarations_found);
 }
 
 pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {

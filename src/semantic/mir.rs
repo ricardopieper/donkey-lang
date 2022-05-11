@@ -5,6 +5,7 @@ use crate::commons::float::*;
 
 use super::type_db::TypeDatabase;
 use std::collections::VecDeque;
+use super::type_inference::*;
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
 and block definitions, not much else. All other features in the language will be reduced
@@ -49,6 +50,8 @@ pub enum MIRBlockNode {
     Assign {
         path: Vec<String>,
         expression: HIRExpr,
+        type_def: TypeInstance
+
     },
     FunctionCall {
         /*
@@ -59,7 +62,7 @@ pub enum MIRBlockNode {
         stored in a map. The HIR expr reduction extracts it out to a variable.
         */
         function: String,
-        args: Vec<TrivialHIRExpr>,
+        args: Vec<(TrivialHIRExpr, TypeInstance)>,
     },
 }
 
@@ -90,9 +93,9 @@ pub struct MIRScope {
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockFinal {
-    If(TrivialHIRExpr, BlockId, BlockId),
+    If(TrivialHIRExpr, TypeInstance, BlockId, BlockId),
     GotoBlock(BlockId),
-    Return(HIRExpr),
+    Return(HIRExpr, TypeInstance),
     EmptyReturn,
 }
 
@@ -181,12 +184,12 @@ impl MIRFunctionEmitter {
         self.current_block = current;
     }
 
-    fn finish_with_branch(&mut self, condition: TrivialHIRExpr, true_branch: BlockId, false_branch: BlockId) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::If(condition, true_branch, false_branch));
+    fn finish_with_branch(&mut self, condition: TrivialHIRExpr, typedef: TypeInstance, true_branch: BlockId, false_branch: BlockId) {
+        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::If(condition, typedef, true_branch, false_branch));
     }
 
-    fn finish_with_return(&mut self, expr: HIRExpr) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr));
+    fn finish_with_return(&mut self, expr: HIRExpr, expr_type: TypeInstance) {
+        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, expr_type));
     }
 
     fn finish_with_empty_return(&mut self) {
@@ -194,10 +197,11 @@ impl MIRFunctionEmitter {
     }
 
     fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock>) {
+        println!("Finishing block {:#?}", self.blocks);
         let blocks = self.blocks.into_iter().map(|x| {
             let finisher = match x.finish {
                 Some(f) => f,
-                None => panic!("Found unfinished MIR block! {:?}", x),
+                None => panic!("Found unfinished MIR block! {:#?}", x),
             };
             MIRBlock {
                 index: x.index,
@@ -216,7 +220,7 @@ impl MIRFunctionEmitter {
 }
 
 //returns the "root block" that this execution generated (or started with)
-fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
+fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDatabase) {
     for hir in body {
         println!("Processing HIR {:?}", hir);
         match hir {
@@ -226,11 +230,18 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
             HIR::StructDeclaration { struct_name, body } => {
                 panic!("Cannot declare struct inside a function yet!")
             }
-            HIR::Assign { path, expression } => {
+            HIR::Assign { path, expression, assigned_type } => {
+
+                let HIRTypeDef::Resolved(r) = assigned_type else {
+                    panic!("Unresolved assign type reached MIR, this might be a bug in type inference");
+                };
+
                 //assignments do not introduce new variables, they just mutate them
+                //let type_instance_expr = compute_expr_type(type_db, decls_in_scope, expression);
                 emitter.emit(MIRBlockNode::Assign {
                     path: path.clone(),
                     expression: expression.clone(),
+                    type_def: r.clone()
                 });
             }
             HIR::Declare {
@@ -264,7 +275,9 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 emitter.emit(MIRBlockNode::Assign {
                     path: vec![var.clone()],
                     expression: expression.clone(),
+                    type_def: actual_type.clone()
                 });
+                
                 //allow other blocks to read and write from scope:
                 let after_creation_variable_scope = emitter.create_scope(new_scope); //defscope 1
                 let after_creation_variable_block = emitter.new_block(after_creation_variable_scope); //defblock 1
@@ -273,17 +286,30 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 emitter.set_current_block(after_creation_variable_block);
             }
             HIR::FunctionCall { function, args } => {
+
+                let typed_args = args.iter().map(|(expr, typedef)| {
+                    let HIRTypeDef::Resolved(resolved_type) = typedef else {
+                        panic!("Unresolved function argument type reached MIR, this might be a typechecker bug! {:#?}", args);
+                    };
+                    return (expr.clone(), resolved_type.clone());
+                }).collect::<Vec<_>>();
+
                 match function {
                     TrivialHIRExpr::Variable(var) => {
                         emitter.emit(MIRBlockNode::FunctionCall {
                             function: var.clone(),
-                            args: args.clone(),
+                            args: typed_args,
                         });
                     }
                     other => panic!("{:?} is not a function!", other),
                 };
             }
-            HIR::If(condition, true_branch_hir, false_branch_hir) => {
+            HIR::If(condition, typedef, true_branch_hir, false_branch_hir) => {
+
+                let HIRTypeDef::Resolved(actual_condition_type) = typedef else {
+                    panic!("Unresolved condition type reached MIR, this might be a type inference bug");
+                };
+
                 //we need to finalize the block we currently are,
                 //define a new scope inheriting the current one,
                 //generate both sides of the branch
@@ -299,7 +325,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
 
                 let has_else_code = false_branch_hir.len() > 0;
 
-                let true_block = {
+                let (true_block, true_branch_returns) = {
                     if true_branch_hir.len() == 0 {
                         panic!("Empty true branch on if statement reached MIR");
                     }
@@ -308,7 +334,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                     let true_branch_block = emitter.new_block(true_branch_scope);
                     //go to the true banch block
                     emitter.set_current_block(true_branch_block);
-                    process_body(emitter, true_branch_hir);
+                    process_body(emitter, true_branch_hir, type_db);
                     
                     //does the branch have a return instruction, or is already finished
                     let emitted_block_returns = emitter.check_if_block_is_finished(true_branch_block);
@@ -324,9 +350,10 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                         //make sure we are emitting on the true branch block we generated
                         emitter.set_current_block(true_branch_block); 
                         emitter.finish_with_goto_block(fallback_block);
+                        emitter.set_current_block(fallback_block);
                     }
 
-                    true_branch_block
+                    (true_branch_block, emitted_block_returns)
                 };
 
                 
@@ -337,9 +364,15 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                     //go to the false branch block
                     emitter.set_current_block(false_branch_block);
                    
-                    process_body(emitter, false_branch_hir);
+                    process_body(emitter, false_branch_hir, type_db);
 
                     let emitted_block_returns = emitter.check_if_block_is_finished(false_branch_block);
+
+                    //ok go back for a second
+                    emitter.set_current_block(current_block);
+                    
+                    //emit the branch
+                    emitter.finish_with_branch(condition.clone(), actual_condition_type.clone(), true_block, false_branch_block);
 
                     if !emitted_block_returns {
                         if let None = fallback_scope_and_block {
@@ -350,13 +383,14 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                         let (fallback_block, _) = fallback_scope_and_block.unwrap();
                         emitter.set_current_block(false_branch_block); 
                         emitter.finish_with_goto_block(fallback_block);
+                        emitter.set_current_block(fallback_block);
+                    } else {
+                        
+                        if !true_branch_returns {
+                            emitter.set_current_block(fallback_scope_and_block.unwrap().0);
+                        }
+                        //the else block is finished, so there's no point in continuing to another block :)
                     }
-
-                    //ok go back for a second
-                    emitter.set_current_block(current_block);
-                    
-                    //emit the branch
-                    emitter.finish_with_branch(condition.clone(), true_block, false_branch_block);
 
                 } else { 
                     //no else code, go to the fallback
@@ -369,7 +403,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                         fallback_scope_and_block = Some((fallback_block, fallback_scope));
                     }
                     let (fallback_block, _) = fallback_scope_and_block.unwrap();
-                    emitter.finish_with_branch(condition.clone(), true_block, fallback_block);
+                    emitter.finish_with_branch(condition.clone(), actual_condition_type.clone(), true_block, fallback_block);
 
                     //in this case the function continues in the fallback block
                     emitter.set_current_block(fallback_block);
@@ -377,8 +411,11 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 }
 
             }
-            HIR::Return(expr) => {
-                emitter.finish_with_return(expr.clone());
+            HIR::Return(expr, typedef) => {
+                let HIRTypeDef::Resolved(resolved_type) = typedef else {
+                    panic!("Unresolved return type reached MIR, this might be a bug in type inference");
+                };
+                emitter.finish_with_return(expr.clone(), resolved_type.clone());
             }
             HIR::EmptyReturn => {
                 emitter.finish_with_empty_return();
@@ -392,6 +429,7 @@ pub fn process_hir_funcdecl(
     parameters: &[HIRTypedBoundName],
     body: &[HIR],
     return_type: &HIRTypeDef,
+    type_db: &TypeDatabase
 ) -> MIRTopLevelNode {
     let mut emitter = MIRFunctionEmitter::new();
 
@@ -411,14 +449,16 @@ pub fn process_hir_funcdecl(
         );
     }
 
-    process_body(&mut emitter, body);
+    process_body(&mut emitter, body, type_db);
 
-    //check if the last emitted block has no return and add one
-    let block = emitter.blocks.len() - 1;
-    emitter.set_current_block(BlockId(block));
-    let block = &emitter.blocks[emitter.current_block.0];
-    if block.finish.is_none() {
-        emitter.finish_with_empty_return();
+    //check for blocks with no returns (like fallback blocks or blocks that the user didnt specify a return)
+    for block_id in 0 .. emitter.blocks.len() {
+        let block = &emitter.blocks[block_id];
+        if block.finish.is_none() {
+            emitter.set_current_block(BlockId(block.index));
+            emitter.finish_with_empty_return();
+        }
+        
     }
 
     let (scopes, body) = emitter.finish();
@@ -439,7 +479,7 @@ pub fn process_hir_funcdecl(
     };
 }
 
-pub fn hir_to_mir(hir_nodes: &[HIR]) -> Vec<MIRTopLevelNode> {
+pub fn hir_to_mir(hir_nodes: &[HIR], type_db: &TypeDatabase) -> Vec<MIRTopLevelNode> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
@@ -449,7 +489,7 @@ pub fn hir_to_mir(hir_nodes: &[HIR]) -> Vec<MIRTopLevelNode> {
                 body,
                 return_type,
             } => {
-                let fdecl = process_hir_funcdecl(function_name, parameters, body, return_type);
+                let fdecl = process_hir_funcdecl(function_name, parameters, body, return_type, type_db);
                 top_levels.push(fdecl);
             }
             _ => {
@@ -478,7 +518,7 @@ mod tests {
         println!("AST: {:?}", &ast);
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         println!("HIR: {:?}", &analysis_result.final_mir);
-        return (hir_to_mir(&analysis_result.final_mir), analysis_result.type_db)
+        return (hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db), analysis_result.type_db)
     }
 
     #[test]
@@ -745,6 +785,766 @@ def main() -> Void:
         usescope 4
         return
         ";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+
+    #[test]
+    fn if_statement() {
+        let (mir, type_db) = mir("
+def main():
+    y = 1
+    if y == 1:
+        print(y)");
+   
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        y : i32
+    defscope 2:
+        inheritscope 1
+    defscope 3:
+        inheritscope 0
+        $0 : bool
+    defscope 4:
+        inheritscope 3
+    defscope 5:
+        inheritscope 0
+    defscope 6:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        y = 1
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        gotoblock 3
+    defblock 3:
+        usescope 3
+        $0 = y == 1
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        if $0:
+            gotoblock 5
+        else:
+            gotoblock 6
+    defblock 5:
+        usescope 5
+        print(y)
+        gotoblock 6
+    defblock 6:
+        usescope 6
+        return
+        ";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn if_code_in_both_branches() {
+        let (mir, type_db) = mir("
+def main():
+    if True:
+        print(1)
+    else:
+        print(2)");
+   
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+    defscope 2:
+        inheritscope 0
+    defscope 3:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        if True:
+            gotoblock 1
+        else:
+            gotoblock 3
+    defblock 1:
+        usescope 1
+        print(1)
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        return
+    defblock 3:
+        usescope 3
+        print(2)
+        gotoblock 2
+        ";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+
+
+    #[test]
+    fn if_return_in_both_branches() {
+        let (mir, type_db) = mir("
+def main() -> i32:
+    if True:
+        return 1
+    else:
+        return 2");
+   
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+    defscope 2:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        if True:
+            gotoblock 1
+        else:
+            gotoblock 2
+    defblock 1:
+        usescope 1
+        return 1
+    defblock 2:
+        usescope 2
+        return 2
+        ";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn if_statements_decls_inside_branches() {
+        let (mir, type_db) = mir("
+def main() -> i32:
+    x = 0
+    if True:
+        y = x + 1
+        return y
+    else:
+        x = 1
+        y = 2 + x
+        return x + y
+    ");
+   
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        x : i32
+    defscope 2:
+        inheritscope 1
+    defscope 3:
+        inheritscope 0
+    defscope 4:
+        inheritscope 0
+        y : i32
+    defscope 5:
+        inheritscope 4
+    defscope 6:
+        inheritscope 0
+    defscope 7:
+        inheritscope 0
+        y : i32
+    defscope 8:
+        inheritscope 7
+    defblock 0:
+        usescope 0
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        x = 0
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        if True:
+            gotoblock 3
+        else:
+            gotoblock 6
+    defblock 3:
+        usescope 3
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        y = x + 1
+        gotoblock 5
+    defblock 5:
+        usescope 5
+        return y
+    defblock 6:
+        usescope 6
+        x = 1
+        gotoblock 7
+    defblock 7:
+        usescope 7
+        y = 2 + x
+        gotoblock 8
+    defblock 8:
+        usescope 8
+        return x + y";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn code_after_if_is_correctly_placed_true_branch_only() {
+        let (mir, type_db) = mir("
+def main() -> i32:
+    x = 0
+    if x == 0:
+        x = x + 1
+    print(x)
+    ");
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        x : i32
+    defscope 2:
+        inheritscope 1
+    defscope 3:
+        inheritscope 0
+        $0 : bool
+    defscope 4:
+        inheritscope 3
+    defscope 5:
+        inheritscope 0
+    defscope 6:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        x = 0
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        gotoblock 3
+    defblock 3:
+        usescope 3
+        $0 = x == 0
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        if $0:
+            gotoblock 5
+        else:
+            gotoblock 6
+    defblock 5:
+        usescope 5
+        x = x + 1
+        gotoblock 6
+    defblock 6:
+        usescope 6
+        print(x)
+        return";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+
+    #[test]
+    fn code_after_if_is_correctly_placed_return_on_false_branch() {
+        let (mir, type_db) = mir("
+def main() -> i32:
+    x = 0
+    if x == 0:
+        print(1)
+    else:
+        return x
+    print(x)
+    ");
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        x : i32
+    defscope 2:
+        inheritscope 1
+    defscope 3:
+        inheritscope 0
+        $0 : bool
+    defscope 4:
+        inheritscope 3
+    defscope 5:
+        inheritscope 0
+    defscope 6:
+        inheritscope 0
+    defscope 7:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        x = 0
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        gotoblock 3
+    defblock 3:
+        usescope 3
+        $0 = x == 0
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        if $0:
+            gotoblock 5
+        else:
+            gotoblock 7
+    defblock 5:
+        usescope 5
+        print(1)
+        gotoblock 6
+    defblock 6:
+        usescope 6
+        print(x)
+        return
+    defblock 7:
+        usescope 7
+        return x";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+
+    #[test]
+    fn code_after_if_is_correctly_placed_true_and_false_branches() {
+        let (mir, type_db) = mir("
+def main() -> i32:
+    x = 0
+    if x == 0:
+        x = x + 1
+    else:
+        x = 2
+    print(x)");
+
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        x : i32
+    defscope 2:
+        inheritscope 1
+    defscope 3:
+        inheritscope 0
+        $0 : bool
+    defscope 4:
+        inheritscope 3
+    defscope 5:
+        inheritscope 0
+    defscope 6:
+        inheritscope 0
+    defscope 7:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        x = 0
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        gotoblock 3
+    defblock 3:
+        usescope 3
+        $0 = x == 0
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        if $0:
+            gotoblock 5
+        else:
+            gotoblock 7
+    defblock 5:
+        usescope 5
+        x = x + 1
+        gotoblock 6
+    defblock 6:
+        usescope 6
+        print(x)
+        return
+    defblock 7:
+        usescope 7
+        x = 2
+        gotoblock 6";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+
+
+    #[test]
+    fn if_one_branch_does_not_return() {
+        let (mir, type_db) = mir("
+def main() -> i32:
+    x = 0
+    if True:
+        y = x + 1
+        print(x)
+    else:
+        x = 1
+        y = 2 + x
+        return x + y
+    ");
+   
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        x : i32
+    defscope 2:
+        inheritscope 1
+    defscope 3:
+        inheritscope 0
+    defscope 4:
+        inheritscope 0
+        y : i32
+    defscope 5:
+        inheritscope 4
+    defscope 6:
+        inheritscope 0
+    defscope 7:
+        inheritscope 0
+        y : i32
+    defscope 8:
+        inheritscope 7
+    defblock 0:
+        usescope 0
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        x = 0
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        if True:
+            gotoblock 3
+        else:
+            gotoblock 6
+    defblock 3:
+        usescope 3
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        y = x + 1
+        gotoblock 5
+    defblock 5:
+        usescope 5
+        print(x)
+        return
+    defblock 6:
+        usescope 6
+        x = 1
+        gotoblock 7
+    defblock 7:
+        usescope 7
+        y = 2 + x
+        gotoblock 8
+    defblock 8:
+        usescope 8
+        return x + y";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+
+    #[test]
+    fn if_nested_branch_all_returns() {
+        let (mir, type_db) = mir("
+def main() -> i32:
+    if True:
+        x = 1
+        if 1 == 1:
+            x = x + 3
+            return x
+        else:
+            x = x + 1
+            return x
+    else:
+        y = 3
+        if 2 == 2:
+            return y + 1
+        else:
+            return 4 * y
+    ");
+   
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+    defscope 2:
+        inheritscope 0
+        x : i32
+    defscope 3:
+        inheritscope 2
+    defscope 4:
+        inheritscope 0
+        $0 : bool
+    defscope 5:
+        inheritscope 4
+    defscope 6:
+        inheritscope 0
+    defscope 7:
+        inheritscope 0
+    defscope 8:
+        inheritscope 0
+    defscope 9:
+        inheritscope 0
+        y : i32
+    defscope 10:
+        inheritscope 9
+    defscope 11:
+        inheritscope 0
+        $0 : bool
+    defscope 12:
+        inheritscope 11
+    defscope 13:
+        inheritscope 0
+    defscope 14:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        if True:
+            gotoblock 1
+        else:
+            gotoblock 8
+    defblock 1:
+        usescope 1
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        x = 1
+        gotoblock 3
+    defblock 3:
+        usescope 3
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        $0 = 1 == 1
+        gotoblock 5
+    defblock 5:
+        usescope 5
+        if $0:
+            gotoblock 6
+        else:
+            gotoblock 7
+    defblock 6:
+        usescope 6
+        x = x + 3
+        return x
+    defblock 7:
+        usescope 7
+        x = x + 1
+        return x
+    defblock 8:
+        usescope 8
+        gotoblock 9
+    defblock 9:
+        usescope 9
+        y = 3
+        gotoblock 10
+    defblock 10:
+        usescope 10
+        gotoblock 11
+    defblock 11:
+        usescope 11
+        $0 = 2 == 2
+        gotoblock 12
+    defblock 12:
+        usescope 12
+        if $0:
+            gotoblock 13
+        else:
+            gotoblock 14
+    defblock 13:
+        usescope 13
+        return y + 1
+    defblock 14:
+        usescope 14
+        return 4 * y";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn if_nested_branch_but_one_does_not_return() {
+        let (mir, type_db) = mir("
+def main() -> i32:
+    if True:
+        x = 1
+        if 1 == 1:
+            x = x + 3
+            return x
+        else:
+            x = x + 1
+            print(x)
+        print(\"nice\")
+    else:
+        y = 3
+        if 2 == 2:
+            y = y + 1
+            print(y)
+        else:
+            return 4 * y
+    ");
+   
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+    defscope 2:
+        inheritscope 0
+        x : i32
+    defscope 3:
+        inheritscope 2
+    defscope 4:
+        inheritscope 0
+        $0 : bool
+    defscope 5:
+        inheritscope 4
+    defscope 6:
+        inheritscope 0
+    defscope 7:
+        inheritscope 0
+    defscope 8:
+        inheritscope 0
+    defscope 9:
+        inheritscope 0
+    defscope 10:
+        inheritscope 0
+        y : i32
+    defscope 11:
+        inheritscope 10
+    defscope 12:
+        inheritscope 0
+        $0 : bool
+    defscope 13:
+        inheritscope 12
+    defscope 14:
+        inheritscope 0
+    defscope 15:
+        inheritscope 0
+    defscope 16:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        if True:
+            gotoblock 1
+        else:
+            gotoblock 9
+    defblock 1:
+        usescope 1
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        x = 1
+        gotoblock 3
+    defblock 3:
+        usescope 3
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        $0 = 1 == 1
+        gotoblock 5
+    defblock 5:
+        usescope 5
+        if $0:
+            gotoblock 6
+        else:
+            gotoblock 7
+    defblock 6:
+        usescope 6
+        x = x + 3
+        return x
+    defblock 7:
+        usescope 7
+        x = x + 1
+        print(x)
+        gotoblock 8
+    defblock 8:
+        usescope 8
+        print(\"nice\")
+        return
+    defblock 9:
+        usescope 9
+        gotoblock 10
+    defblock 10:
+        usescope 10
+        y = 3
+        gotoblock 11
+    defblock 11:
+        usescope 11
+        gotoblock 12
+    defblock 12:
+        usescope 12
+        $0 = 2 == 2
+        gotoblock 13
+    defblock 13:
+        usescope 13
+        if $0:
+            gotoblock 14
+        else:
+            gotoblock 16
+    defblock 14:
+        usescope 14
+        y = y + 1
+        print(y)
+        gotoblock 15
+    defblock 15:
+        usescope 15
+        return
+    defblock 16:
+        usescope 16
+        return 4 * y";
 
         assert_eq!(expected.trim(), final_result.trim());
     }

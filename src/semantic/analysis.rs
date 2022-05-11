@@ -2,6 +2,8 @@ use crate::ast::parser::*;
 use crate::semantic::hir::*;
 use crate::semantic::*;
 
+use super::hir_printer::print_hir;
+use super::mir_printer::print_mir;
 use super::type_db::TypeDatabase;
 
 pub struct AnalysisResult {
@@ -12,24 +14,26 @@ pub struct AnalysisResult {
 }
 
 pub fn do_analysis(ast: &AST) -> AnalysisResult {
-    let mut mir = vec![];
-    ast_to_hir(ast, 0, &mut mir);
+    let mut hir = vec![];
+    ast_to_hir(ast, 0, &mut hir);
 
-    let initial_mir = mir.clone();
+    let initial_mir = hir.clone();
     let type_db = type_db::TypeDatabase::new();
 
-    let mut globals = name_registry::build_name_registry(&type_db, &mir);
+    let mut globals = name_registry::build_name_registry(&type_db, &hir);
 
-    mir = first_assignments::transform_first_assignment_into_declaration(mir);
-    let after_make_declarations_mir = mir.clone();
-    undeclared_vars::detect_undeclared_vars_and_redeclarations(&mir);
+    hir = first_assignments::transform_first_assignment_into_declaration(hir);
+    let after_make_declarations_mir = hir.clone();
+    undeclared_vars::detect_undeclared_vars_and_redeclarations(&hir);
 
-    mir = type_inference::infer_types(&mut globals, &type_db, mir);
+    println!("{}", print_hir(&hir, &type_db));
+
+    hir = type_inference::infer_types(&mut globals, &type_db, hir);
 
     return AnalysisResult {
         initial_mir,
         after_make_declarations_mir,
-        final_mir: mir,
+        final_mir: hir,
         type_db,
     };
 }
@@ -85,7 +89,8 @@ def my_function(arg1: i32, arg2: i32) -> i32:
                     TrivialHIRExpr::Variable("$0".into()),
                     Operator::Divide,
                     TrivialHIRExpr::Variable("$1".into())
-                )
+                ),
+                HIRTypeDef::Resolved(i32_type.clone()),
             )
             
         ];
@@ -328,4 +333,172 @@ def main(x: i32) -> i32:
         let as_str = err.downcast_ref::<String>().unwrap();
         assert_eq!(as_str, "Variable y not found, function: main");
     }
+
+    #[test]
+    fn if_return_both_branches() {
+        let analyzed = hir(
+            "
+def main(x: i32) -> i32:
+    if x == 0:
+        return 1
+    else:
+        return 2
+");
+      
+        let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
+        println!("{}", final_result);
+        let expected = "
+def main(x: i32) -> i32:
+    $0 : bool = x == 0
+    if $0:
+        return 1
+    else:
+        return 2";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn if_more_branches() {
+        let analyzed = hir(
+            "
+def main(x: i32) -> i32:
+    if x == 0:
+        return 1
+    else:
+        if x == 2:
+            return 2
+        else:
+            return x
+");
+      
+        let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
+        println!("{}", final_result);
+        let expected = "
+def main(x: i32) -> i32:
+    $0 : bool = x == 0
+    if $0:
+        return 1
+    else:
+        $1 : bool = x == 2
+        if $1:
+            return 2
+        else:
+            return x";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn if_no_return_in_one_branch() {
+        let analyzed = hir(
+            "
+def main(x: i32) -> i32:
+    if x == 0:
+        print(x)
+    else:
+        if x == 2:
+            return 2
+        else:
+            return x
+");
+      
+        let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
+        println!("{}", final_result);
+        let expected = "
+def main(x: i32) -> i32:
+    $0 : bool = x == 0
+    if $0:
+        print(x)
+    else:
+        $1 : bool = x == 2
+        if $1:
+            return 2
+        else:
+            return x";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+
+    #[test]
+    fn if_statements_decls_inside_branches() {
+        let analyzed = hir(
+            "
+def main() -> i32:
+    x = 0
+    if True:
+        y = x + 1
+        return y
+    else:
+        x = 1
+        y = 2 + x
+        return x + y
+");
+      
+        let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    x : i32 = 0
+    if True:
+        y : i32 = x + 1
+        return y
+    else:
+        x = 1
+        y : i32 = 2 + x
+        return x + y";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+    
+    #[test]
+    fn if_nested_branch_but_some_do_not_return() {
+        let analyzed = hir(
+            "
+def main() -> i32:
+    if True:
+        x = 1
+        if 1 == 1:
+            x = x + 3
+            return x
+        else:
+            x = x + 1
+            print(x)
+        print(\"nice\")
+    else:
+        y = 3
+        if 2 == 2:
+            y = y + 1
+            print(y)
+        else:
+            return 4 * y
+");
+      
+        let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> i32:
+    if True:
+        x : i32 = 1
+        $0 : bool = 1 == 1
+        if $0:
+            x = x + 3
+            return x
+        else:
+            x = x + 1
+            print(x)
+        print(\"nice\")
+    else:
+        y : i32 = 3
+        $0 : bool = 2 == 2
+        if $0:
+            y = y + 1
+            print(y)
+        else:
+            return 4 * y";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
 }
