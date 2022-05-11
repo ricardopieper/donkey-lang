@@ -24,7 +24,7 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
 
     hir = first_assignments::transform_first_assignment_into_declaration(hir);
     let after_make_declarations_mir = hir.clone();
-    undeclared_vars::detect_undeclared_vars_and_redeclarations(&hir);
+    undeclared_vars::detect_undeclared_vars_and_redeclarations(&globals, &hir);
 
     println!("{}", print_hir(&hir, &type_db));
 
@@ -117,6 +117,45 @@ def my_function(arg1: i32, arg2: i32) -> i32:
     }
 
     #[test]
+    fn standalone_call_to_builtin_function() {
+        let analyzed = hir(
+            "
+def my_function() -> i32:
+    x: f64 = 1.0
+    pow(x)",
+        );
+        
+        let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
+        println!("{}", result);
+
+        let expected = "
+def my_function() -> i32:
+    x : f64 = 1.0
+    pow(x)";
+
+        assert_eq!(expected.trim(), result.trim());
+    }
+
+    #[test]
+    fn expr_call_to_builtin_function() {
+        let analyzed = hir(
+            "
+def my_function() -> i32:
+    x: f64 = sqrt(16.0)
+",
+        );
+        
+        let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
+        println!("{}", result);
+
+        let expected = "
+def my_function() -> i32:
+    x : f64 = sqrt(16.0)";
+
+        assert_eq!(expected.trim(), result.trim());
+    }
+
+    #[test]
     fn alternative_test() {
         let analyzed = hir(
             "
@@ -188,6 +227,32 @@ def main(args: array<str>) -> Void:
         assert_eq!(expected.trim(), final_result.trim());
     }
     
+    #[test]
+    fn infer_builtin_function_return_type() {
+        let analyzed = hir(
+            "
+def my_function() -> i32:
+    x =  1.3 + ((sqrt_f32(16.0) / 2.0) * 4.0) + (3.0 * pow_f32(2.0, 2.0))
+",
+        );
+        
+        let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
+        println!("{}", result);
+
+        let expected = "
+def my_function() -> i32:
+    $0 : f32 = sqrt_f32(16.0)
+    $1 : f32 = $0 / 2.0
+    $2 : f32 = $1 * 4.0
+    $3 : f32 = 1.3 + $2
+    $4 : f32 = pow_f32(2.0, 2.0)
+    $5 : f32 = 3.0 * $4
+    x : f32 = $3 + $5
+";
+
+        assert_eq!(expected.trim(), result.trim());
+    }
+
     #[test]
     fn infer_defined_function_return_type() {
         let analyzed = hir(

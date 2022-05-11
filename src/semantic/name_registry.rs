@@ -32,6 +32,11 @@ impl NameRegistry {
             .expect(&format!("Could not find a name for {}", name))
             .clone();
     }
+
+    pub fn get_names(&self) -> impl Iterator<Item = &String> {
+        self.names.keys()
+    }
+
 }
 
 fn register_builtins(type_db: &TypeDatabase, registry: &mut NameRegistry) {

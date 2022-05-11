@@ -25,7 +25,7 @@ pub fn operator_str(op: lexer::Operator) -> String {
 pub fn trivial_expr_str(expr: &TrivialHIRExpr) -> String {
     match expr {
         TrivialHIRExpr::Variable(s) => s.clone(),
-        TrivialHIRExpr::FloatValue(f) => format!("{:?}", f),
+        TrivialHIRExpr::FloatValue(f) => format!("{:?}", f.0),
         TrivialHIRExpr::IntegerValue(i) => format!("{}", i),
         TrivialHIRExpr::StringValue(s) => format!("\"{}\"", s),
         TrivialHIRExpr::BooleanValue(true) => format!("{}", "True"),

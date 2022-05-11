@@ -236,7 +236,7 @@ impl TypeDatabase {
         }
     }
 
-    fn register_primitive_integer(&mut self, name: &str) -> TypeId {
+    fn register_primitive_number(&mut self, name: &str) -> TypeId {
         use std::mem;
         let type_id = self.add(TypeKind::Primitive, name, mem::size_of::<i32>());
         self.add_binary_operator(
@@ -303,10 +303,12 @@ impl TypeDatabase {
         self.add(TypeKind::Primitive, "None", mem::size_of::<()>());
         self.add(TypeKind::Primitive, "bool", mem::size_of::<bool>());
 
-        let i32_type = self.register_primitive_integer("i32");
-        let u32_type = self.register_primitive_integer("u32");
-        self.register_primitive_integer("i64");
-        self.register_primitive_integer("u64");
+        let i32_type = self.register_primitive_number("i32");
+        let u32_type = self.register_primitive_number("u32");
+        self.register_primitive_number("i64");
+        self.register_primitive_number("u64");
+        self.register_primitive_number("f32");
+        self.register_primitive_number("f64");
 
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
         self.add_generic(

@@ -2,6 +2,8 @@ use crate::semantic::hir::*;
 
 use std::collections::HashSet;
 
+use super::name_registry::NameRegistry;
+
 fn check_trivial_expr(
     declarations_found: &HashSet<String>,
     function_name: &str,
@@ -10,7 +12,7 @@ fn check_trivial_expr(
     match expr {
         TrivialHIRExpr::Variable(v) => {
             if declarations_found.get(v).is_none() {
-                panic!("Variable {} not found, function: {}", v, function_name);
+                panic!("Variable {v} not found, function: {function_name}");
             }
         }
         _ => {}
@@ -113,8 +115,12 @@ fn detect_declaration_errors_in_function(
    detect_decl_errors_in_body(&mut declarations_found, function_name, body);
 }
 
-pub fn detect_undeclared_vars_and_redeclarations(mir: &[HIR]) {
+pub fn detect_undeclared_vars_and_redeclarations(globals: &NameRegistry, mir: &[HIR]) {
     let mut declarations_found = HashSet::<String>::new();
+
+    for name in globals.get_names() {
+        declarations_found.insert(name.to_string());
+    }
 
     //first collect all globals
     for node in mir.iter() {
