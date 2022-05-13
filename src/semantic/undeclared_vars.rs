@@ -7,9 +7,9 @@ use super::name_registry::NameRegistry;
 fn check_trivial_expr(
     declarations_found: &HashSet<String>,
     function_name: &str,
-    expr: &TrivialHIRExpr,
+    expr: &TypedTrivialHIRExpr,
 ) {
-    match expr {
+    match &expr.0 {
         TrivialHIRExpr::Variable(v) => {
             if declarations_found.get(v).is_none() {
                 panic!("Variable {v} not found, function: {function_name}");
@@ -24,28 +24,28 @@ fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &
         HIRExpr::Trivial(e) => {
             check_trivial_expr(declarations_found, function_name, e);
         }
-        HIRExpr::BinaryOperation(lhs, _, rhs) => {
+        HIRExpr::BinaryOperation(lhs, _, rhs, _) => {
             check_trivial_expr(declarations_found, function_name, lhs);
             check_trivial_expr(declarations_found, function_name, rhs);
         }
-        HIRExpr::FunctionCall(name, args) => {
-            check_trivial_expr(declarations_found, function_name, name);
+        HIRExpr::FunctionCall(func_expr, args, ..) => {
+            check_trivial_expr(declarations_found, function_name, func_expr);
             for fun_arg in args {
                 check_trivial_expr(declarations_found, function_name, fun_arg);
             }
         }
-        HIRExpr::UnaryExpression(_, unary_expr) => {
+        HIRExpr::UnaryExpression(_, unary_expr, ..) => {
             check_trivial_expr(declarations_found, function_name, unary_expr);
         }
-        HIRExpr::MemberAccess(member_expr, _) => {
+        HIRExpr::MemberAccess(member_expr, _, _) => {
             check_trivial_expr(declarations_found, function_name, member_expr);
         }
-        HIRExpr::Array(item_exprs) => {
+        HIRExpr::Array(item_exprs, _) => {
             for array_item in item_exprs {
                 check_trivial_expr(&declarations_found, function_name, array_item);
             }
         }
-        HIRExpr::Cast(typedef, expr) => {
+        HIRExpr::Cast(expr, typedef) => {
             check_trivial_expr(&declarations_found, function_name, expr)
         }
     }
@@ -54,7 +54,7 @@ fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &
 fn detect_decl_errors_in_body(
     declarations_found: &mut HashSet<String>,
     function_name: &str,
-    body: &[HIR]
+    body: &[HIR],
 ) {
     for node in body {
         match node {
@@ -67,7 +67,9 @@ fn detect_decl_errors_in_body(
                 declarations_found.insert(var.clone());
                 check_expr(&declarations_found, function_name, expression);
             }
-            HIR::Assign { path, expression, .. } => {
+            HIR::Assign {
+                path, expression, ..
+            } => {
                 if !declarations_found.contains(path.first().unwrap()) {
                     panic!("Assign to undeclared variable {}", path.first().unwrap());
                 }
@@ -83,17 +85,25 @@ fn detect_decl_errors_in_body(
                     check_expr(
                         &declarations_found,
                         function_name,
-                        &HIRExpr::Trivial(fun_arg.0.clone()),
+                        &HIRExpr::Trivial(fun_arg.clone()),
                     );
                 }
             }
             HIR::Return(expr, _) => {
                 check_expr(&declarations_found, function_name, expr);
             }
-            HIR::If(_, _, true_branch, false_branch) => {
+            HIR::If(_, true_branch, false_branch) => {
                 //we clone the decls so that the scopes are different
-                detect_decl_errors_in_body(&mut declarations_found.clone(), function_name, &true_branch);
-                detect_decl_errors_in_body(&mut declarations_found.clone(), function_name, &false_branch);
+                detect_decl_errors_in_body(
+                    &mut declarations_found.clone(),
+                    function_name,
+                    &true_branch,
+                );
+                detect_decl_errors_in_body(
+                    &mut declarations_found.clone(),
+                    function_name,
+                    &false_branch,
+                );
             }
 
             _ => {}
@@ -112,7 +122,7 @@ fn detect_declaration_errors_in_function(
         declarations_found.insert(p.name.clone());
     }
 
-   detect_decl_errors_in_body(&mut declarations_found, function_name, body);
+    detect_decl_errors_in_body(&mut declarations_found, function_name, body);
 }
 
 pub fn detect_undeclared_vars_and_redeclarations(globals: &NameRegistry, mir: &[HIR]) {

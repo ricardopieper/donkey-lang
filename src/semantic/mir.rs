@@ -4,8 +4,8 @@ use crate::ast::parser::*;
 use crate::commons::float::*;
 
 use super::type_db::TypeDatabase;
-use std::collections::VecDeque;
 use super::type_inference::*;
+use std::collections::VecDeque;
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
 and block definitions, not much else. All other features in the language will be reduced
@@ -50,8 +50,6 @@ pub enum MIRBlockNode {
     Assign {
         path: Vec<String>,
         expression: HIRExpr,
-        type_def: TypeInstance
-
     },
     FunctionCall {
         /*
@@ -62,7 +60,7 @@ pub enum MIRBlockNode {
         stored in a map. The HIR expr reduction extracts it out to a variable.
         */
         function: String,
-        args: Vec<(TrivialHIRExpr, TypeInstance)>,
+        args: Vec<TypedTrivialHIRExpr>,
     },
 }
 
@@ -93,9 +91,9 @@ pub struct MIRScope {
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockFinal {
-    If(TrivialHIRExpr, TypeInstance, BlockId, BlockId),
+    If(TypedTrivialHIRExpr, BlockId, BlockId),
     GotoBlock(BlockId),
-    Return(HIRExpr, TypeInstance),
+    Return(HIRExpr),
     EmptyReturn,
 }
 
@@ -127,7 +125,6 @@ struct MIRFunctionEmitter {
     current_block: BlockId,
     blocks: Vec<MIRMaybeUnfinishedBlock>,
     scopes: Vec<MIRScope>,
-    fallback_returns: VecDeque<BlockId>
 }
 
 impl MIRFunctionEmitter {
@@ -137,7 +134,6 @@ impl MIRFunctionEmitter {
             current_scope: ScopeId(0),
             blocks: vec![],
             scopes: vec![],
-            fallback_returns: VecDeque::new()
         }
     }
 
@@ -184,12 +180,18 @@ impl MIRFunctionEmitter {
         self.current_block = current;
     }
 
-    fn finish_with_branch(&mut self, condition: TrivialHIRExpr, typedef: TypeInstance, true_branch: BlockId, false_branch: BlockId) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::If(condition, typedef, true_branch, false_branch));
+    fn finish_with_branch(
+        &mut self,
+        condition: TypedTrivialHIRExpr,
+        true_branch: BlockId,
+        false_branch: BlockId,
+    ) {
+        self.blocks[self.current_block.0].finish =
+            Some(MIRBlockFinal::If(condition, true_branch, false_branch));
     }
 
-    fn finish_with_return(&mut self, expr: HIRExpr, expr_type: TypeInstance) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, expr_type));
+    fn finish_with_return(&mut self, expr: HIRExpr) {
+        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr));
     }
 
     fn finish_with_empty_return(&mut self) {
@@ -197,19 +199,22 @@ impl MIRFunctionEmitter {
     }
 
     fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock>) {
-        println!("Finishing block {:#?}", self.blocks);
-        let blocks = self.blocks.into_iter().map(|x| {
-            let finisher = match x.finish {
-                Some(f) => f,
-                None => panic!("Found unfinished MIR block! {:#?}", x),
-            };
-            MIRBlock {
-                index: x.index,
-                scope: x.scope,
-                finish: finisher,
-                block: x.block,
-            }
-        }).collect::<Vec<_>>();
+        let blocks = self
+            .blocks
+            .into_iter()
+            .map(|x| {
+                let finisher = match x.finish {
+                    Some(f) => f,
+                    None => panic!("Found unfinished MIR block! {:#?}", x),
+                };
+                MIRBlock {
+                    index: x.index,
+                    scope: x.scope,
+                    finish: finisher,
+                    block: x.block,
+                }
+            })
+            .collect::<Vec<_>>();
 
         (self.scopes, blocks)
     }
@@ -222,7 +227,6 @@ impl MIRFunctionEmitter {
 //returns the "root block" that this execution generated (or started with)
 fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDatabase) {
     for hir in body {
-        println!("Processing HIR {:?}", hir);
         match hir {
             HIR::DeclareFunction { .. } => {
                 panic!("Cannot declare function inside another function yet!")
@@ -230,18 +234,10 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
             HIR::StructDeclaration { struct_name, body } => {
                 panic!("Cannot declare struct inside a function yet!")
             }
-            HIR::Assign { path, expression, assigned_type } => {
-
-                let HIRTypeDef::Resolved(r) = assigned_type else {
-                    panic!("Unresolved assign type reached MIR, this might be a bug in type inference");
-                };
-
-                //assignments do not introduce new variables, they just mutate them
-                //let type_instance_expr = compute_expr_type(type_db, decls_in_scope, expression);
+            HIR::Assign { path, expression } => {
                 emitter.emit(MIRBlockNode::Assign {
                     path: path.clone(),
                     expression: expression.clone(),
-                    type_def: r.clone()
                 });
             }
             HIR::Declare {
@@ -259,7 +255,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                 //then emit the declaration.
 
                 let current_scope = emitter.current_scope; //scope 0
-                
+
                 let new_scope = emitter.create_scope(current_scope); //defscope 1
                 let new_block = emitter.new_block(new_scope); //defblock 1
 
@@ -275,38 +271,29 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                 emitter.emit(MIRBlockNode::Assign {
                     path: vec![var.clone()],
                     expression: expression.clone(),
-                    type_def: actual_type.clone()
                 });
-                
+
                 //allow other blocks to read and write from scope:
                 let after_creation_variable_scope = emitter.create_scope(new_scope); //defscope 1
-                let after_creation_variable_block = emitter.new_block(after_creation_variable_scope); //defblock 1
+                let after_creation_variable_block =
+                    emitter.new_block(after_creation_variable_scope); //defblock 1
 
                 emitter.finish_with_goto_block(after_creation_variable_block);
                 emitter.set_current_block(after_creation_variable_block);
             }
             HIR::FunctionCall { function, args } => {
-
-                let typed_args = args.iter().map(|(expr, typedef)| {
-                    let HIRTypeDef::Resolved(resolved_type) = typedef else {
-                        panic!("Unresolved function argument type reached MIR, this might be a typechecker bug! {:#?}", args);
-                    };
-                    return (expr.clone(), resolved_type.clone());
-                }).collect::<Vec<_>>();
-
-                match function {
+                match &function.0 {
                     TrivialHIRExpr::Variable(var) => {
                         emitter.emit(MIRBlockNode::FunctionCall {
                             function: var.clone(),
-                            args: typed_args,
+                            args: args.clone(),
                         });
                     }
                     other => panic!("{:?} is not a function!", other),
                 };
             }
-            HIR::If(condition, typedef, true_branch_hir, false_branch_hir) => {
-
-                let HIRTypeDef::Resolved(actual_condition_type) = typedef else {
+            HIR::If(condition, true_branch_hir, false_branch_hir) => {
+                let HIRTypeDef::Resolved(actual_condition_type) = &condition.1 else {
                     panic!("Unresolved condition type reached MIR, this might be a type inference bug");
                 };
 
@@ -315,7 +302,6 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                 //generate both sides of the branch
                 //but also need to create a fallback block so that we know where to go when there is no "else" code
                 //or when the if does not return
-                
 
                 let current_scope = emitter.current_scope;
                 let current_block = emitter.current_block;
@@ -335,9 +321,10 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                     //go to the true banch block
                     emitter.set_current_block(true_branch_block);
                     process_body(emitter, true_branch_hir, type_db);
-                    
+
                     //does the branch have a return instruction, or is already finished
-                    let emitted_block_returns = emitter.check_if_block_is_finished(true_branch_block);
+                    let emitted_block_returns =
+                        emitter.check_if_block_is_finished(true_branch_block);
 
                     if !emitted_block_returns {
                         if let None = fallback_scope_and_block {
@@ -348,7 +335,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                         let (fallback_block, _) = fallback_scope_and_block.unwrap();
                         //if no then goto the fallback block
                         //make sure we are emitting on the true branch block we generated
-                        emitter.set_current_block(true_branch_block); 
+                        emitter.set_current_block(true_branch_block);
                         emitter.finish_with_goto_block(fallback_block);
                         emitter.set_current_block(fallback_block);
                     }
@@ -356,23 +343,23 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                     (true_branch_block, emitted_block_returns)
                 };
 
-                
                 if has_else_code {
                     let false_branch_scope = emitter.create_scope(current_scope);
                     let false_branch_block = emitter.new_block(false_branch_scope);
-                   
+
                     //go to the false branch block
                     emitter.set_current_block(false_branch_block);
-                   
+
                     process_body(emitter, false_branch_hir, type_db);
 
-                    let emitted_block_returns = emitter.check_if_block_is_finished(false_branch_block);
+                    let emitted_block_returns =
+                        emitter.check_if_block_is_finished(false_branch_block);
 
                     //ok go back for a second
                     emitter.set_current_block(current_block);
-                    
+
                     //emit the branch
-                    emitter.finish_with_branch(condition.clone(), actual_condition_type.clone(), true_block, false_branch_block);
+                    emitter.finish_with_branch(condition.clone(), true_block, false_branch_block);
 
                     if !emitted_block_returns {
                         if let None = fallback_scope_and_block {
@@ -381,18 +368,16 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                             fallback_scope_and_block = Some((fallback_block, fallback_scope));
                         }
                         let (fallback_block, _) = fallback_scope_and_block.unwrap();
-                        emitter.set_current_block(false_branch_block); 
+                        emitter.set_current_block(false_branch_block);
                         emitter.finish_with_goto_block(fallback_block);
                         emitter.set_current_block(fallback_block);
                     } else {
-                        
                         if !true_branch_returns {
                             emitter.set_current_block(fallback_scope_and_block.unwrap().0);
                         }
                         //the else block is finished, so there's no point in continuing to another block :)
                     }
-
-                } else { 
+                } else {
                     //no else code, go to the fallback
                     //generate the branch, but the false branch just jumps to the fallback block
                     emitter.set_current_block(current_block);
@@ -403,19 +388,17 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                         fallback_scope_and_block = Some((fallback_block, fallback_scope));
                     }
                     let (fallback_block, _) = fallback_scope_and_block.unwrap();
-                    emitter.finish_with_branch(condition.clone(), actual_condition_type.clone(), true_block, fallback_block);
+                    emitter.finish_with_branch(condition.clone(), true_block, fallback_block);
 
                     //in this case the function continues in the fallback block
                     emitter.set_current_block(fallback_block);
-                    
                 }
-
             }
             HIR::Return(expr, typedef) => {
                 let HIRTypeDef::Resolved(resolved_type) = typedef else {
                     panic!("Unresolved return type reached MIR, this might be a bug in type inference");
                 };
-                emitter.finish_with_return(expr.clone(), resolved_type.clone());
+                emitter.finish_with_return(expr.clone());
             }
             HIR::EmptyReturn => {
                 emitter.finish_with_empty_return();
@@ -429,7 +412,7 @@ pub fn process_hir_funcdecl(
     parameters: &[HIRTypedBoundName],
     body: &[HIR],
     return_type: &HIRTypeDef,
-    type_db: &TypeDatabase
+    type_db: &TypeDatabase,
 ) -> MIRTopLevelNode {
     let mut emitter = MIRFunctionEmitter::new();
 
@@ -439,26 +422,20 @@ pub fn process_hir_funcdecl(
     emitter.set_current_block(function_zero_block);
 
     for param in parameters.iter() {
-
         let actual_type = param.typename.expect_resolved();
 
-        emitter.scope_add_variable(
-            function_zero_scope,
-            param.name.clone(),
-            actual_type.clone(),
-        );
+        emitter.scope_add_variable(function_zero_scope, param.name.clone(), actual_type.clone());
     }
 
     process_body(&mut emitter, body, type_db);
 
     //check for blocks with no returns (like fallback blocks or blocks that the user didnt specify a return)
-    for block_id in 0 .. emitter.blocks.len() {
+    for block_id in 0..emitter.blocks.len() {
         let block = &emitter.blocks[block_id];
         if block.finish.is_none() {
             emitter.set_current_block(BlockId(block.index));
             emitter.finish_with_empty_return();
         }
-        
     }
 
     let (scopes, body) = emitter.finish();
@@ -467,12 +444,14 @@ pub fn process_hir_funcdecl(
 
     return MIRTopLevelNode::DeclareFunction {
         function_name: function_name.to_string(),
-        parameters: parameters.iter().map(|x| {
-            MIRTypedBoundName {
+        parameters: parameters
+            .iter()
+            .map(|x| MIRTypedBoundName {
                 name: x.name.clone(),
-                typename: x.typename.expect_resolved().clone()
-            }
-        }).collect::<Vec<_>>().clone(),
+                typename: x.typename.expect_resolved().clone(),
+            })
+            .collect::<Vec<_>>()
+            .clone(),
         body,
         scopes,
         return_type: type_def,
@@ -489,7 +468,8 @@ pub fn hir_to_mir(hir_nodes: &[HIR], type_db: &TypeDatabase) -> Vec<MIRTopLevelN
                 body,
                 return_type,
             } => {
-                let fdecl = process_hir_funcdecl(function_name, parameters, body, return_type, type_db);
+                let fdecl =
+                    process_hir_funcdecl(function_name, parameters, body, return_type, type_db);
                 top_levels.push(fdecl);
             }
             _ => {
@@ -500,25 +480,29 @@ pub fn hir_to_mir(hir_nodes: &[HIR], type_db: &TypeDatabase) -> Vec<MIRTopLevelN
     return top_levels;
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use crate::semantic::mir_printer;
     #[cfg(test)]
-    use pretty_assertions::{assert_eq};
+    use pretty_assertions::assert_eq;
 
     use super::*;
 
     //Parses a single expression
     fn mir(source: &str) -> (Vec<MIRTopLevelNode>, TypeDatabase) {
-        let tokenized = crate::ast::lexer::Tokenizer::new(source).tokenize().ok().unwrap();
+        let tokenized = crate::ast::lexer::Tokenizer::new(source)
+            .tokenize()
+            .ok()
+            .unwrap();
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast().ok().unwrap());
         println!("AST: {:?}", &ast);
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         println!("HIR: {:?}", &analysis_result.final_mir);
-        return (hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db), analysis_result.type_db)
+        return (
+            hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db),
+            analysis_result.type_db,
+        );
     }
 
     #[test]
@@ -526,7 +510,7 @@ mod tests {
         let (mir, type_db) = mir("
 def main():
     return 1");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -540,13 +524,12 @@ def main() -> Void:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-
     #[test]
     fn set_variable() {
         let (mir, type_db) = mir("
 def main():
     x = 1");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -572,13 +555,12 @@ def main() -> Void:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
- 
     #[test]
     fn just_return_parameter() {
         let (mir, type_db) = mir("
 def main(x: i32) -> i32:
     return x");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -594,11 +576,34 @@ def main(x: i32) -> i32:
     }
 
     #[test]
+    fn many_parameters_are_added_to_scope() {
+        let (mir, type_db) = mir("
+def main(x: i32, y: i64, z: f64, name: str) -> i32:
+    return x");
+
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main(x: i32, y: i64, z: f64, name: str) -> i32:
+    defscope 0:
+        inheritscope 0
+        x : i32
+        y : i64
+        z : f64
+        name : str
+    defblock 0:
+        usescope 0
+        return x";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
     fn simple_expression() {
         let (mir, type_db) = mir("
 def main(x: i32) -> i32:
     return x + 1");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -620,7 +625,7 @@ def main(x: i32) -> i32:
     y = 0
     return x + y
 ");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -654,7 +659,7 @@ def main(x: i32) -> i32:
     y = 1
     z: i32 = 2 + x
     return x / (y + z)");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -714,7 +719,7 @@ def main() -> i32:
     y = 2
     y = 3
     y = 4");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -750,7 +755,7 @@ def main() -> i32:
 def main():
     y = 1
     x = y + 1");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -789,7 +794,6 @@ def main() -> Void:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-
     #[test]
     fn if_statement() {
         let (mir, type_db) = mir("
@@ -797,7 +801,7 @@ def main():
     y = 1
     if y == 1:
         print(y)");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -858,7 +862,7 @@ def main():
         print(1)
     else:
         print(2)");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -893,8 +897,6 @@ def main() -> Void:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-
-
     #[test]
     fn if_return_in_both_branches() {
         let (mir, type_db) = mir("
@@ -903,7 +905,7 @@ def main() -> i32:
         return 1
     else:
         return 2");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -944,7 +946,7 @@ def main() -> i32:
         y = 2 + x
         return x + y
     ");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -1069,7 +1071,6 @@ def main() -> i32:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-
     #[test]
     fn code_after_if_is_correctly_placed_return_on_false_branch() {
         let (mir, type_db) = mir("
@@ -1137,7 +1138,6 @@ def main() -> i32:
 
         assert_eq!(expected.trim(), final_result.trim());
     }
-
 
     #[test]
     fn code_after_if_is_correctly_placed_true_and_false_branches() {
@@ -1208,8 +1208,6 @@ def main() -> i32:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-
-
     #[test]
     fn if_one_branch_does_not_return() {
         let (mir, type_db) = mir("
@@ -1223,7 +1221,7 @@ def main() -> i32:
         y = 2 + x
         return x + y
     ");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -1288,7 +1286,6 @@ def main() -> i32:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-
     #[test]
     fn if_nested_branch_all_returns() {
         let (mir, type_db) = mir("
@@ -1308,7 +1305,7 @@ def main() -> i32:
         else:
             return 4 * y
     ");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -1432,7 +1429,7 @@ def main() -> i32:
         else:
             return 4 * y
     ");
-   
+
         let final_result = mir_printer::print_mir(&mir, &type_db);
         println!("{}", final_result);
         let expected = "
@@ -1548,5 +1545,4 @@ def main() -> i32:
 
         assert_eq!(expected.trim(), final_result.trim());
     }
-
 }

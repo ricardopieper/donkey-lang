@@ -188,7 +188,12 @@ that type. Casting to the type should be possible but syntax is yet to be define
 
 
 
+Pending typechecks:
 
-
+ - Function parameters are valid
+ - Function parameters in assignments are valid
+ - Casts are valid
+ - Member access in exprs are valid
+ - item arrays are all the same type as the first one
 
 

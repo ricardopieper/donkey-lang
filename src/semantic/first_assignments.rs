@@ -2,36 +2,41 @@ use crate::semantic::hir::*;
 
 use std::collections::HashSet;
 
-fn make_first_assignments_in_body(body: &[HIR], declarations_found: &mut HashSet<String>) -> Vec<HIR> {
+fn make_first_assignments_in_body(
+    body: &[HIR],
+    declarations_found: &mut HashSet<String>,
+) -> Vec<HIR> {
     let mut new_mir = vec![];
     for node in body {
         let mir_node = match node {
             decl @ HIR::Declare { var, .. } => {
                 declarations_found.insert(var.clone());
                 decl.clone()
-            },
-            assign @ HIR::Assign {path, expression, assigned_type: _} if path.len() == 1 => {
+            }
+            assign @ HIR::Assign { path, expression } if path.len() == 1 => {
                 let var = &path[0];
                 if declarations_found.contains(var) {
                     assign.clone()
                 } else {
                     declarations_found.insert(var.clone());
-                    HIR::Declare { 
-                        var: var.clone(), 
-                        typedef: HIRTypeDef::Pending, 
-                        expression: expression.clone() 
+                    HIR::Declare {
+                        var: var.clone(),
+                        typedef: HIRTypeDef::Pending,
+                        expression: expression.clone(),
                     }
                 }
             }
-            HIR::If(condition, typedef, true_branch, false_branch) => {
+            HIR::If(condition, true_branch, false_branch) => {
                 //create 2 copies of the decls found, so that 2 copies of the scope are created
                 let mut true_branch_scope = declarations_found.clone();
                 let mut false_branch_scope = declarations_found.clone();
-                let true_branch_decls = make_first_assignments_in_body(&true_branch, &mut true_branch_scope);
-                let false_branch_decls = make_first_assignments_in_body(&false_branch, &mut false_branch_scope);
-                HIR::If(condition.clone(), typedef.clone(), true_branch_decls, false_branch_decls)
+                let true_branch_decls =
+                    make_first_assignments_in_body(&true_branch, &mut true_branch_scope);
+                let false_branch_decls =
+                    make_first_assignments_in_body(&false_branch, &mut false_branch_scope);
+                HIR::If(condition.clone(), true_branch_decls, false_branch_decls)
             }
-            other => other.clone()
+            other => other.clone(),
         };
         new_mir.push(mir_node);
     }
@@ -39,15 +44,16 @@ fn make_first_assignments_in_body(body: &[HIR], declarations_found: &mut HashSet
     return new_mir;
 }
 
-fn make_assignments_into_declarations_in_function(function_name: &str,
+fn make_assignments_into_declarations_in_function(
+    function_name: &str,
     parameters: &[HIRTypedBoundName],
     body: &[HIR],
-    return_type: &HIRTypeDef) -> Vec<HIR> {
-
+    return_type: &HIRTypeDef,
+) -> Vec<HIR> {
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
-    
-    //declarations inside if, while, for blocks 
+
+    //declarations inside if, while, for blocks
     //are valid only within their scope, but they borrow the outer scope, so they don't need re-declaration
     //and cannot change type (rust does shadowing).
 
@@ -62,24 +68,33 @@ fn make_assignments_into_declarations_in_function(function_name: &str,
 }
 
 pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {
-
     let mut new_mir = vec![];
 
     for node in mir.iter() {
         let result = match node {
-            HIR::DeclareFunction{ function_name, parameters, body, return_type} => {
-                let new_body = make_assignments_into_declarations_in_function(function_name, parameters, body, return_type);
+            HIR::DeclareFunction {
+                function_name,
+                parameters,
+                body,
+                return_type,
+            } => {
+                let new_body = make_assignments_into_declarations_in_function(
+                    function_name,
+                    parameters,
+                    body,
+                    return_type,
+                );
                 HIR::DeclareFunction {
-                    function_name: function_name.clone(), 
-                    parameters: parameters.clone(), 
-                    body: new_body, 
-                    return_type: return_type.clone() }
+                    function_name: function_name.clone(),
+                    parameters: parameters.clone(),
+                    body: new_body,
+                    return_type: return_type.clone(),
+                }
             }
-            other => other.clone()
+            other => other.clone(),
         };
         new_mir.push(result);
     }
 
     return new_mir;
-
-} 
+}

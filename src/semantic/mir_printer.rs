@@ -15,17 +15,17 @@ use super::mir::MIRTopLevelNode;
 
 fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
     let mut buffer = String::new();
-    let indent = "    ";
 
-    buffer.push_str(&format!("{}defblock {}:\n", indent, block.index));
-    buffer.push_str(&format!("{}{}usescope {}\n", indent, indent, block.scope.0));
+    buffer.push_str(&format!("    defblock {}:\n", block.index));
+    buffer.push_str(&format!("        usescope {}\n", block.scope.0));
 
     for node in &block.block {
         match node {
-            MIRBlockNode::Assign { path, expression, .. } => {
+            MIRBlockNode::Assign {
+                path, expression, ..
+            } => {
                 buffer.push_str(&format!(
-                    "{}{}{} = {}\n",
-                    indent,indent,
+                    "        {} = {}\n",
                     path.join("."),
                     expr_str(&expression)
                 ));
@@ -33,33 +33,35 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
             MIRBlockNode::FunctionCall { function, args } => {
                 let args_str = args
                     .iter()
-                    .map(|x| trivial_expr_str(&x.0))
+                    .map(|x| trivial_expr_str(&x))
                     .collect::<Vec<_>>()
                     .join(", ");
-                buffer.push_str(&format!("{}{}{}({})\n", indent, indent,function, args_str));
+                buffer.push_str(&format!("        {}({})\n", function, args_str));
             }
         }
     }
 
     match &block.finish {
-        super::mir::MIRBlockFinal::If(condition, _, true_branch, false_branch) => {
+        super::mir::MIRBlockFinal::If(condition, true_branch, false_branch) => {
             buffer.push_str(&format!(
-                "{}{}if {}:\n{}{}{}gotoblock {}\n{}{}else:\n{}{}{}gotoblock {}\n",
-                indent, indent, trivial_expr_str(&condition), //if condition:
-                indent, indent, indent, true_branch.0, //gotoblock 0
-                indent, indent, //else:
-                indent, indent, indent,
+                "        if {}:
+            gotoblock {}
+        else:
+            gotoblock {}
+",
+                trivial_expr_str(&condition), //if condition:
+                true_branch.0,                //gotoblock 0
                 false_branch.0
             )); //gotoblock 1
         }
         super::mir::MIRBlockFinal::GotoBlock(block) => {
-            buffer.push_str(&format!("{}{}gotoblock {}\n", indent, indent, block.0));
+            buffer.push_str(&format!("        gotoblock {}\n", block.0));
         }
-        super::mir::MIRBlockFinal::Return(expr, type_instance) => {
-            buffer.push_str(&format!("{}{}return {}\n", indent,indent, expr_str(&expr)));
+        super::mir::MIRBlockFinal::Return(expr) => {
+            buffer.push_str(&format!("        return {}\n", expr_str(&expr)));
         }
         super::mir::MIRBlockFinal::EmptyReturn => {
-            buffer.push_str(&format!("{}{}return\n", indent, indent,));
+            buffer.push_str(&format!("        return\n"));
         }
     }
 
@@ -68,19 +70,17 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
 
 fn print_mir_scope(scope: &MIRScope, type_db: &TypeDatabase) -> String {
     let mut buffer = String::new();
-    let indent = "    ";
 
-    buffer.push_str(&format!("{}defscope {}:\n", indent, scope.index));
-    buffer.push_str(&format!("{}{}inheritscope {}\n", indent, indent, scope.inherit.0));
+    buffer.push_str(&format!("    defscope {}:\n", scope.index));
+    buffer.push_str(&format!("        inheritscope {}\n", scope.inherit.0));
 
     for name in &scope.boundnames {
         buffer.push_str(&format!(
-            "{}{}{} : {}\n",
-            indent,indent,
+            "        {} : {}\n",
             name.name,
             name.typename.as_string(type_db)
         ));
-    }    
+    }
 
     return buffer;
 }
