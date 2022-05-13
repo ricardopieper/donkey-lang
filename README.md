@@ -1,9 +1,14 @@
 pony
 ==========
 
-Pony is a python-like, statically typed programming language.
+Pony is a python-like, interpreted (?), statically typed programming language.
 
 Most of the parsing code was copied from my Horse interpreter at github.com/ricardopieper/horse repository. 
+
+This interpreter is not production-ready nor it will ever be. This is for my study only.
+
+I still can't run any code, as I'm still writing the type inference and type checking steps.
+
 
 Syntax will be based on python but the VM will be far more lightweight. Preferably in the future we won't have a VM. We wont have classes, just structs and impls like Rust. I will try to implement some trait-like system as well, so there will be syntax for that. While the syntax looks like python, it doesn't follow Python's object model or most of the language's built-in type naming. When it does it's coincidental. I'm not a fan of the lambda syntax in Python, so I might change that, preferably using more or less the same syntax as regular function definitions.
 
@@ -31,7 +36,7 @@ It's called pony because my previous attempt at writing an interpreter was named
 
  - It will have a smaller VM, or someday even no VM at all (maybe i'll write llvm IR and compile that), just like a pony is, in general, smaller than a grown-up, adult, full-featured horse. Jokes aside, it's interesting to have a working interpreter to allow things like compile-time evaluation by just running the code.
 
- - Ponies stay closer to the ground, or in other words, "lower in the air" than horses, the same way pony will be a lower level, closer to the metal language. Doesn't mean it will be a low-level language though.
+ - Ponies's bodies stay closer to the ground, or in other words, "lower in the air" than horses, the same way pony will be a lower level, closer to the metal language. Doesn't mean it will be a low-level language though.
 
 Having said that, it's probably gonna be a much larger effort than Horse.
 
