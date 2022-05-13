@@ -424,16 +424,16 @@ fn type_check_function(
     body: &[MIRBlock],
     scopes: &[MIRScope],
     return_type: &TypeInstance,
-    names: &NameRegistry,
+    globals: &NameRegistry,
     type_db: &TypeDatabase,
     type_errors: &mut TypeErrors,
 ) {
     all_paths_return_values_of_correct_type(function_name, body, return_type, type_db, type_errors);
-    all_assignments_correct_type(function_name, body, scopes, names, type_db, type_errors);
+    all_assignments_correct_type(function_name, body, scopes, globals, type_db, type_errors);
     function_calls_are_actually_callable_and_parameters_are_correct_type(
         body,
         scopes,
-        names,
+        globals,
         function_name,
         type_db,
         type_errors,
