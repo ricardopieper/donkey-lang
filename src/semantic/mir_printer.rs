@@ -1,12 +1,6 @@
 use crate::ast::lexer;
-use crate::ast::parser;
-use crate::semantic::hir;
-use crate::semantic::hir::*;
 use crate::semantic::hir_printer::*;
 use crate::semantic::type_db::TypeDatabase;
-use lexer::Operator;
-use std::env;
-use std::fs;
 
 use super::mir::MIRBlock;
 use super::mir::MIRBlockNode;
@@ -30,7 +24,7 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
                     expr_str(&expression)
                 ));
             }
-            MIRBlockNode::FunctionCall { function, args } => {
+            MIRBlockNode::FunctionCall { function, args, .. } => {
                 let args_str = args
                     .iter()
                     .map(|x| trivial_expr_str(&x))
@@ -42,7 +36,7 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
     }
 
     match &block.finish {
-        super::mir::MIRBlockFinal::If(condition, true_branch, false_branch) => {
+        super::mir::MIRBlockFinal::If(condition, true_branch, false_branch, ..) => {
             buffer.push_str(&format!(
                 "        if {}:
             gotoblock {}
@@ -57,7 +51,7 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
         super::mir::MIRBlockFinal::GotoBlock(block) => {
             buffer.push_str(&format!("        gotoblock {}\n", block.0));
         }
-        super::mir::MIRBlockFinal::Return(expr) => {
+        super::mir::MIRBlockFinal::Return(expr, ..) => {
             buffer.push_str(&format!("        return {}\n", expr_str(&expr)));
         }
         super::mir::MIRBlockFinal::EmptyReturn => {

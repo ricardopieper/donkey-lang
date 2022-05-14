@@ -1,4 +1,7 @@
+use std::borrow::Cow;
 use std::fmt::Display;
+
+use crate::ast::parser::AST;
 
 use super::hir::*;
 
@@ -47,38 +50,66 @@ impl TypeErrorDisplay for TypeMismatch<ReturnTypeContext> {
     }
 }
 
-pub struct FunctionCallContext {
-    pub called_function_name: String,
+pub struct FunctionCallContext<'a> {
+    pub called_function_name: FunctionName<'a>,
     pub argument_position: usize,
 }
 
-impl TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
+impl<'a> TypeErrorDisplay for TypeMismatch<FunctionCallContext<'a>> {
     fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let passed_name = self.actual.as_string(type_db);
         let expected_name = self.expected.as_string(type_db);
-        write!(f,  "Function argument type mismatch: In function {on_function}, call to function {function_called} parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
-            on_function = self.on_function,
-            function_called = self.context.called_function_name,
-            position = self.context.argument_position
-        )
+        match &self.context.called_function_name {
+            FunctionName::Function(function_name) => {
+                write!(f,  "Function argument type mismatch: In function {on_function}, call to function {function_called} parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
+                    on_function = self.on_function,
+                    function_called = function_name,
+                    position = self.context.argument_position
+                )
+            }
+            FunctionName::IndexAccess =>  {
+                write!(f,  "Function argument type mismatch: In function {on_function}, on index operator, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
+                    on_function = self.on_function,
+                    position = self.context.argument_position
+                )
+            },
+            FunctionName::Method { function_name, type_name } => todo!("method calls not fully implemented"),
+        }
+
+        
     }
 }
 
-pub struct FunctionCallArgumentCountMismatch {
+pub struct FunctionCallArgumentCountMismatch<'a> {
     pub on_function: String,
-    pub called_function_name: String,
+    pub called_function_name: FunctionName<'a>,
     pub expected_count: usize,
     pub passed_count: usize,
 }
 
-impl TypeErrorDisplay for FunctionCallArgumentCountMismatch {
+impl<'a> TypeErrorDisplay for FunctionCallArgumentCountMismatch<'a> {
     fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f,  "Argument count mismatch: In function {on_function}, call to function {function_called} expects {expected_args} arguments, but {passed_args} were passed",
-            on_function = self.on_function,
-            function_called = self.called_function_name,
-            expected_args = self.expected_count,
-            passed_args = self.passed_count,
-        )
+
+        match &self.called_function_name {
+            FunctionName::Function(call_name) => {
+                write!(f,  "Argument count mismatch: In function {on_function}, call to function {function_called} expects {expected_args} arguments, but {passed_args} were passed",
+                    on_function = self.on_function,
+                    function_called = call_name,
+                    expected_args = self.expected_count,
+                    passed_args = self.passed_count,
+                )
+            },
+            FunctionName::IndexAccess => {
+                write!(f,  "Argument count mismatch: In function {on_function}, index operator expects {expected_args} arguments, but {passed_args} were passed",
+                    on_function = self.on_function,
+                    expected_args = self.expected_count,
+                    passed_args = self.passed_count,
+                )  
+            },
+            FunctionName::Method { function_name, type_name } => todo!("method calls not fully implemented"),
+        }
+
+       
     }
 }
 
@@ -98,29 +129,29 @@ impl TypeErrorDisplay for CallToNonCallableType {
     }
 }
 
-pub struct TypeErrors {
+pub struct TypeErrors<'callargs> {
     pub assign_mismatches: Vec<TypeMismatch<AssignContext>>,
     pub return_type_mismatches: Vec<TypeMismatch<ReturnTypeContext>>,
-    pub function_call_mismatches: Vec<TypeMismatch<FunctionCallContext>>,
-    pub function_call_argument_count: Vec<FunctionCallArgumentCountMismatch>,
+    pub function_call_mismatches: Vec<TypeMismatch<FunctionCallContext<'callargs>>>,
+    pub function_call_argument_count: Vec<FunctionCallArgumentCountMismatch<'callargs>>,
     pub call_non_callable: Vec<CallToNonCallableType>,
 }
 
-pub struct TypeErrorPrinter<'errors, 'type_db> {
-    pub errors: &'errors TypeErrors,
+pub struct TypeErrorPrinter<'errors, 'callargs, 'type_db> {
+    pub errors: &'errors TypeErrors<'callargs>,
     pub type_db: &'type_db TypeDatabase,
 }
 
-impl<'errors, 'type_db> TypeErrorPrinter<'errors, 'type_db> {
+impl<'errors, 'callargs, 'type_db> TypeErrorPrinter<'errors, 'callargs, 'type_db> {
     pub fn new(
-        errors: &'errors TypeErrors,
+        errors: &'errors TypeErrors<'callargs>,
         type_db: &'type_db TypeDatabase,
-    ) -> TypeErrorPrinter<'errors, 'type_db> {
+    ) -> TypeErrorPrinter<'errors, 'callargs, 'type_db> {
         TypeErrorPrinter { errors, type_db }
     }
 }
-impl TypeErrors {
-    pub fn new() -> TypeErrors {
+impl<'callargs> TypeErrors<'callargs> {
+    pub fn new() -> TypeErrors<'callargs> {
         TypeErrors {
             assign_mismatches: vec![],
             return_type_mismatches: vec![],
@@ -139,7 +170,7 @@ impl TypeErrors {
     }
 }
 
-impl<'errors, 'type_db> Display for TypeErrorPrinter<'errors, 'type_db> {
+impl<'errors, 'callargs, 'type_db> Display for TypeErrorPrinter<'errors, 'callargs, 'type_db> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.errors.count() == 0 {
             return Ok(());
@@ -209,20 +240,22 @@ fn expect_find_variable<'block, 'scope>(
     }
 }
 
-fn check_function_arguments(
+fn check_function_arguments<'callargs>(
     on_function: &str,
-    function_called: &str,
+    function_called: &FunctionName<'callargs>,
     function_parameters: &[TypeInstance],
     arguments_passed: &[TypeInstance],
     type_db: &TypeDatabase,
-    type_errors: &mut TypeErrors,
+    type_errors: &mut TypeErrors<'callargs>,
 ) {
+
+    
     if function_parameters.len() != arguments_passed.len() {
         type_errors
             .function_call_argument_count
             .push(FunctionCallArgumentCountMismatch {
                 on_function: on_function.to_string(),
-                called_function_name: function_called.to_string(),
+                called_function_name: function_called.clone(),
                 expected_count: function_parameters.len(),
                 passed_count: arguments_passed.len(),
             });
@@ -238,7 +271,7 @@ fn check_function_arguments(
                 expected: expected.clone(),
                 actual: passed.clone(),
                 context: FunctionCallContext {
-                    called_function_name: function_called.to_string(),
+                    called_function_name: function_called.clone(),
                     argument_position: number,
                 },
             });
@@ -254,7 +287,7 @@ fn all_paths_return_values_of_correct_type(
     errors: &mut TypeErrors,
 ) {
     for body_node in body {
-        if let MIRBlockFinal::Return(return_expr) = &body_node.finish {
+        if let MIRBlockFinal::Return(return_expr, ..) = &body_node.finish {
             let expr_type = return_expr.get_expr_type().expect_resolved();
             if !return_type.is_compatible(&return_expr.get_expr_type().expect_resolved(), type_db) {
                 errors.return_type_mismatches.push(TypeMismatch {
@@ -289,7 +322,7 @@ fn all_assignments_correct_type(
     for body_node in body {
         for block_node in body_node.block.iter() {
             match block_node {
-                MIRBlockNode::Assign { path, expression } if path.len() == 1 => {
+                MIRBlockNode::Assign { path, expression, .. } if path.len() == 1 => {
                     let var = path.first().unwrap();
                     //find variable
                     let variable_type = find_variable(var, body_node, scopes, names);
@@ -298,6 +331,7 @@ fn all_assignments_correct_type(
                             let expr_type = expression.get_expr_type().expect_resolved();
 
                             if variable_found_type != expr_type {
+                                
                                 type_errors.assign_mismatches.push(TypeMismatch {
                                     on_function: function_name.to_string(),
                                     context: AssignContext {
@@ -322,26 +356,65 @@ fn all_assignments_correct_type(
     }
 }
 
-fn function_calls_are_actually_callable_and_parameters_are_correct_type(
-    body: &[MIRBlock],
-    scopes: &[MIRScope],
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionName<'a> {
+    Function(Cow<'a, str>),
+    IndexAccess,
+    Method { function_name: Cow<'a, str>, type_name: Cow<'a, str>}
+}
+
+fn get_actual_function_name_with_details<'a>(
+    function_name: &'a str, 
+    meta_ast: &'a HIRAstMetadata, 
+    meta_expr: &'a HIRExprMetadata) -> FunctionName<'a> {
+    
+    if meta_ast.is_none() && meta_expr.is_none() { return FunctionName::Function(Cow::Borrowed(function_name)) }
+    
+    let expr =  match meta_ast.as_ref() {
+        Some(AST::StandaloneExpr(expr)) => expr,
+        _ => &meta_expr.as_ref().unwrap()
+    };
+
+    println!("function metadata ast: {:?}", expr);
+
+    match expr {
+        crate::ast::parser::Expr::FunctionCall(function_name, _) => {
+            match &**function_name {
+                crate::ast::parser::Expr::Variable(str) => return FunctionName::Function(Cow::Borrowed(str)),
+                crate::ast::parser::Expr::MemberAccess(_, member) => return FunctionName::Function(Cow::Borrowed(member)),
+                _ => {}
+            };
+        },
+        crate::ast::parser::Expr::IndexAccess(_, _) => {
+            return FunctionName::IndexAccess
+        }
+        _ => {}
+    };
+
+    return FunctionName::Function(Cow::Borrowed(function_name));
+}
+
+
+fn function_calls_are_actually_callable_and_parameters_are_correct_type<'mir>(
+    body: &'mir [MIRBlock],
+    scopes: &'mir [MIRScope],
     names: &NameRegistry,
     function_name: &str,
     type_db: &TypeDatabase,
-    type_errors: &mut TypeErrors,
+    type_errors: &mut TypeErrors<'mir>,
 ) {
     //
     for body_node in body {
         for block_node in body_node.block.iter() {
             match block_node {
-                MIRBlockNode::Assign { path, expression } => {
+                MIRBlockNode::Assign { path, expression, meta_ast, meta_expr } => {
                     if path.len() > 1 {
                         panic!("Assign to path len > 2 not supported in type checker yet!");
                     }
 
                     //on assigns, we need to check if's a function call.
-                    let HIRExpr::FunctionCall(call_expr, args, return_type) = expression else {
-                        continue; //handled elsewhere
+                    let HIRExpr::FunctionCall(call_expr, args, return_type, expr_metadata) = expression else {
+                        continue; //other cases handled elsewhere
                     };
                     //if it is a function call, check that the arguments match (return type and arguments passed)
                     let TypeInstance::Function(func_args_types, func_return_type) = call_expr.1.expect_resolved() else {
@@ -360,10 +433,12 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         panic!("Return type of function is {func_return_type:#?} but expression return type is {return_type:#?}. This should not happen. This is a type inference bug, and something is inconsistent!");
                     }
 
-                    let variable_type =
-                        expect_find_variable(path[0].as_str(), body_node, scopes, names);
+                    //let variable_type =
+                    //    expect_find_variable(path[0].as_str(), body_node, scopes, names);
 
-                    if func_return_type.as_ref() != variable_type {
+                    /*
+                        if func_return_type.as_ref() != variable_type {
+                        println!("MIRBlock assign check fail function_calls_are_actually_callable_and_parameters_are_correct_type");
                         type_errors.assign_mismatches.push(TypeMismatch {
                             on_function: function_name.to_string(),
                             context: AssignContext {
@@ -372,23 +447,23 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                             expected: variable_type.clone(),
                             actual: *func_return_type.clone(),
                         });
-                    }
+                    } */
 
                     let passed_types = args
                         .iter()
                         .map(|x| x.1.expect_resolved().clone())
                         .collect::<Vec<_>>();
-
+                    let actual_function_name = get_actual_function_name_with_details(called_function, meta_ast, expr_metadata);
                     check_function_arguments(
-                        function_name,
-                        &called_function,
+                        &function_name,
+                        &actual_function_name,
                         &func_args_types,
                         &passed_types,
                         type_db,
                         type_errors,
                     );
                 }
-                MIRBlockNode::FunctionCall { function, args } => {
+                MIRBlockNode::FunctionCall { function, args, meta_ast } => {
                     let function_type = expect_find_variable(function, body_node, scopes, names);
                     match function_type {
                         TypeInstance::Function(argument_types, _) => {
@@ -396,10 +471,10 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                                 .iter()
                                 .map(|x| x.1.expect_resolved().clone())
                                 .collect::<Vec<_>>();
-
+                            let actual_function_name = get_actual_function_name_with_details(function, meta_ast, &None);
                             check_function_arguments(
-                                function_name,
-                                &function,
+                                &function_name,
+                                &actual_function_name,
                                 &argument_types,
                                 &passed,
                                 type_db,
@@ -419,14 +494,14 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
     }
 }
 
-fn type_check_function(
+fn type_check_function<'mir>(
     function_name: &str,
-    body: &[MIRBlock],
-    scopes: &[MIRScope],
+    body: &'mir [MIRBlock],
+    scopes: &'mir [MIRScope],
     return_type: &TypeInstance,
     globals: &NameRegistry,
     type_db: &TypeDatabase,
-    type_errors: &mut TypeErrors,
+    type_errors: &mut TypeErrors<'mir>,
 ) {
     all_paths_return_values_of_correct_type(function_name, body, return_type, type_db, type_errors);
     all_assignments_correct_type(function_name, body, scopes, globals, type_db, type_errors);
@@ -440,11 +515,11 @@ fn type_check_function(
     );
 }
 
-pub fn check_type<'type_db>(
-    top_nodes: &[MIRTopLevelNode],
-    type_db: &'type_db TypeDatabase,
+pub fn check_type<'mir>(
+    top_nodes: &'mir [MIRTopLevelNode],
+    type_db: &'mir TypeDatabase,
     names: &NameRegistry,
-) -> TypeErrors {
+) -> TypeErrors<'mir> {
     let mut type_errors = TypeErrors::new();
 
     for node in top_nodes {
@@ -477,12 +552,17 @@ pub fn check_type<'type_db>(
 #[cfg(test)]
 mod tests {
 
-    use crate::ast::parser::{Parser, AST};
+    use crate::{ast::parser::{Parser, AST}, semantic::mir_printer};
     use super::*;
     use pretty_assertions::assert_eq;
 
-    //Parses a single expression
-    fn run_test(source: &str) -> (TypeErrors, TypeDatabase) {
+    pub struct TestContext {
+        mir: Vec<MIRTopLevelNode>,
+        database: TypeDatabase,
+        globals: NameRegistry
+    }
+
+    fn prepare(source: &str) -> TestContext {
         let tokenized = crate::ast::lexer::Tokenizer::new(source)
             .tokenize()
             .ok()
@@ -491,37 +571,49 @@ mod tests {
         let ast = AST::Root(parser.parse_ast().ok().unwrap());
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         let mir = hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db);
-        let errors = check_type(&mir, &analysis_result.type_db, &analysis_result.globals);
+
+        println!("{:#?}", &mir);
+        println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
+        return TestContext { mir: mir, database: analysis_result.type_db, globals: analysis_result.globals }
+    }
+
+    //Parses a single expression
+    fn run_test(ctx: &TestContext) -> (TypeErrors, &TypeDatabase) {
+        
+        let errors = check_type(&ctx.mir, &ctx.database, &ctx.globals);
         if errors.count() > 0 {
             println!(
                 "{}",
-                TypeErrorPrinter::new(&errors, &analysis_result.type_db)
+                TypeErrorPrinter::new(&errors, &ctx.database)
             );
         } else {
             println!("No errors found!");
         }
-        return (errors, analysis_result.type_db);
+        return (errors, &ctx.database)
     }
 
     #[test]
     fn return_from_void_func_is_correct() {
-        let (err, _) = run_test(
-            "
+        let ctx = prepare("
 def main():
     return
-",
-        );
+");
+
+        let (err, _) = run_test(&ctx);
         assert_eq!(0, err.count());
     }
 
     #[test]
     fn return_int_from_void_is_not_correct() {
-        let (err, db) = run_test(
+        let ctx = prepare(
             "
 def main():
     return 1
 ",
         );
+
+        let (err, db) = run_test(&ctx);
+
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
         assert_eq!(
@@ -536,23 +628,22 @@ def main():
 
     #[test]
     fn return_int_from_int_func_is_correct() {
-        let (err, _) = run_test(
+        let ctx = prepare(
             "
 def main() -> i32:
     return 1
-",
-        );
+");
+        let (err, _) = run_test(&ctx);
         assert_eq!(0, err.count());
     }
 
     #[test]
     fn return_void_from_int_func_is_not_correct() {
-        let (err, db) = run_test(
-            "
+        let ctx = prepare("
 def main() -> i32:
     return
-",
-        );
+    ");
+        let (err, db) = run_test(&ctx);
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
         assert_eq!(
@@ -567,12 +658,14 @@ def main() -> i32:
 
     #[test]
     fn assign_incorrect_type_literal() {
-        let (err, db) = run_test(
+        let ctx = prepare(
             "
 def main():
     x: i32 = \"some str\"
 ",
         );
+
+        let (err, db) = run_test(&ctx);
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
         assert_eq!(
@@ -585,18 +678,246 @@ def main():
         );
     }
 
+
+
+    #[test]
+    fn type_check_function_call_no_args_correct_types() {
+        let ctx = prepare(
+            "
+def test() -> i32:
+    return 1
+
+def main():
+    x: i32 = test()
+",
+        );
+        let (err, _ ) = run_test(&ctx);
+        assert_eq!(0, err.count());
+    }
+
+    #[test]
+    fn type_check_wrong_type_function_call_return_incompatible() {
+        let ctx = prepare(
+            "
+def test() -> i32:
+    return 1
+
+def main():
+    x: f32 = test()
+",
+        );
+
+        let (err, db) = run_test(&ctx);
+
+        assert_eq!(1, err.count());
+        assert_eq!(1, err.assign_mismatches.len());
+        assert_eq!(
+            err.assign_mismatches[0].actual,
+            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+        );
+        assert_eq!(
+            err.assign_mismatches[0].expected,
+            TypeInstance::Simple(db.expect_find_by_name("f32").id)
+        );
+    }
+
+    #[test]
+    fn type_check_binary_expr_result_wrong_type() {
+        let ctx = prepare(
+            "
+def test() -> i32:
+    return 1
+
+def main():
+    x: f32 = test() + 1
+",
+        );
+
+        let (err, db) = run_test(&ctx);
+
+        assert_eq!(1, err.count());
+        assert_eq!(1, err.assign_mismatches.len());
+        assert_eq!(
+            err.assign_mismatches[0].actual,
+            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+        );
+        assert_eq!(
+            err.assign_mismatches[0].expected,
+            TypeInstance::Simple(db.expect_find_by_name("f32").id)
+        );
+    }
+
+    #[test]
+    fn pass_correct_type_to_function_single_args() {
+        let ctx = prepare(
+            "
+def test(i: i32) -> i32:
+    return i + 1
+
+def main():
+    test(1)
+",
+        );
+
+        let (err, db) = run_test(&ctx);
+
+        assert_eq!(0, err.count());
+        
+    }
+
+
+    #[test]
+    fn pass_correct_type_to_function_two_args() {
+        let ctx = prepare(
+            "
+def test(i: i32, f: f32) -> i32:
+    return i + 1
+
+def main():
+    test(1, 1.0)
+",
+        );
+        let (err, db) = run_test(&ctx);
+        assert_eq!(0, err.count());
+        
+    }
+
+
+    #[test]
+    fn pass_correct_type_to_function_two_args_from_vars() {
+        let ctx = prepare(
+            "
+def test(i: i32, f: f32) -> i32:
+    return i + 1
+
+def main():
+    i = 1
+    f = 1.0
+    test(i, f)
+",
+        );
+
+        let (err, db) = run_test(&ctx);
+
+        assert_eq!(0, err.count());
+        
+    }
+
+    #[test]
+    fn pass_wrong_type_to_function_single_arg() {
+        let ctx = prepare(
+            "
+def test(i: i32) -> i32:
+    return i
+
+def main():
+    s = \"abc\"
+    test(s)
+",
+        );
+
+        let (err, db) = run_test(&ctx);
+
+        assert_eq!(1, err.count());
+        assert_eq!(1, err.function_call_mismatches.len());
+        assert_eq!(
+            err.function_call_mismatches[0].actual,
+            TypeInstance::Simple(db.expect_find_by_name("str").id)
+        );
+        assert_eq!(
+            err.function_call_mismatches[0].expected,
+            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+        );
+        
+    }
+
+    #[test]
+    fn pass_wrong_type_to_function_two_args_both_wrong() {
+        let ctx = prepare(
+            "
+def test(i: i32, f: f32) -> f32:
+    return f
+
+def main():
+    s = \"abc\"
+    i = 100
+    test(s, i)
+",
+        );
+
+        let (err, db) = run_test(&ctx);
+
+        assert_eq!(2, err.count());
+        assert_eq!(2, err.function_call_mismatches.len());
+        assert_eq!(
+            err.function_call_mismatches[0].actual,
+            TypeInstance::Simple(db.expect_find_by_name("str").id)
+        );
+        assert_eq!(
+            err.function_call_mismatches[0].expected,
+            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+        );
+
+        assert_eq!(
+            err.function_call_mismatches[1].actual,
+            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+        );
+        assert_eq!(
+            err.function_call_mismatches[1].expected,
+            TypeInstance::Simple(db.expect_find_by_name("f32").id)
+        );
+    }
+
+   
+
     #[test]
     fn assign_incorrect_type_literal_errormsg() {
-        let (err, db) = run_test(
+        let ctx = prepare(
             "
 def main():
     x: i32 = \"some str\"
 ",
         );
+        let (err, db) = run_test(&ctx);
         let printer = TypeErrorPrinter::new(&err, &db);
         let error_msg = format!("{}", printer);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
         
     }
+
+    #[test]
+    fn assign_to_variable_wrong_type_after_declaration() {
+        let ctx = prepare(
+            "
+def main():
+    x: i32 = 1
+    x = \"abc\"
+",
+        );
+        let (err, db) = run_test(&ctx);
+        let printer = TypeErrorPrinter::new(&err, &db);
+        let error_msg = format!("{}", printer);
+        let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
+        assert_eq!(error_msg, expected);
+        
+    }
+
+
+    #[test]
+    fn args_array_string_error_on_index_operator_refers_to_index_accessor() {
+        let ctx = prepare(
+            "
+def main(args: array<str>):
+    i : str = args[\"lol\"]
+",
+        );
+        let (err, db) = run_test(&ctx);
+        let printer = TypeErrorPrinter::new(&err, &db);
+        let error_msg = format!("{}", printer);
+        let expected = "Function argument type mismatch: In function main, on index operator, parameter on position 0 has incorrect type: Expected u32 but passed str\n";
+        assert_eq!(error_msg, expected);
+        
+    }
+     
 }

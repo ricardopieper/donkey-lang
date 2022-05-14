@@ -36,7 +36,7 @@ pub fn trivial_expr_str(expr: &TypedTrivialHIRExpr) -> String {
 
 pub fn expr_str(expr: &HIRExpr) -> String {
     match expr {
-        HIRExpr::Trivial(trivial) => trivial_expr_str(trivial),
+        HIRExpr::Trivial(trivial, ..) => trivial_expr_str(trivial),
         HIRExpr::FunctionCall(f, params, ..) => {
             let args_str = params
                 .iter()
@@ -104,7 +104,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
         HIR::Declare {
             var,
             typedef: typename,
-            expression,
+            expression, ..
         } => {
             format!(
                 "{}{} : {} = {}\n",
@@ -118,7 +118,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
             function_name,
             parameters,
             body,
-            return_type,
+            return_type, ..
         } => {
             let parameters = parameters
                 .iter()
@@ -146,13 +146,13 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
             }
             return function;
         }
-        HIR::Return(expr, _) => {
+        HIR::Return(expr, ..) => {
             format!("{}return {}\n", indent, expr_str(expr))
         }
         HIR::EmptyReturn => {
             format!("{}return\n", indent)
         }
-        HIR::StructDeclaration { struct_name, body } => {
+        HIR::StructDeclaration { struct_name, body, .. } => {
             let mut structdecl = format!("{}struct {}:\n", indent, struct_name);
 
             for field in body {
@@ -166,7 +166,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
 
             structdecl
         }
-        HIR::FunctionCall { function, args } => {
+        HIR::FunctionCall { function, args, .. } => {
             let args_str = args
                 .iter()
                 .map(|x| trivial_expr_str(x))
@@ -175,7 +175,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
 
             format!("{}{}({})\n", indent, trivial_expr_str(function), args_str)
         }
-        HIR::If(condition, true_body, false_body) => {
+        HIR::If(condition, true_body, false_body, ..) => {
             let condition_str = trivial_expr_str(condition);
             let mut ifdecl = format!("{}if {}:\n", indent, condition_str);
             let indent_block = format!("{}    ", indent);

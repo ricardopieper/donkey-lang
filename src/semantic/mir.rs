@@ -50,6 +50,8 @@ pub enum MIRBlockNode {
     Assign {
         path: Vec<String>,
         expression: HIRExpr,
+        meta_ast: Option<AST>,
+        meta_expr: Option<Expr>,
     },
     FunctionCall {
         /*
@@ -61,6 +63,7 @@ pub enum MIRBlockNode {
         */
         function: String,
         args: Vec<TypedTrivialHIRExpr>,
+        meta_ast: Option<AST>,
     },
 }
 
@@ -91,9 +94,9 @@ pub struct MIRScope {
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockFinal {
-    If(TypedTrivialHIRExpr, BlockId, BlockId),
+    If(TypedTrivialHIRExpr, BlockId, BlockId, HIRAstMetadata),
     GotoBlock(BlockId),
-    Return(HIRExpr),
+    Return(HIRExpr, HIRAstMetadata),
     EmptyReturn,
 }
 
@@ -185,13 +188,14 @@ impl MIRFunctionEmitter {
         condition: TypedTrivialHIRExpr,
         true_branch: BlockId,
         false_branch: BlockId,
+        meta_ast: HIRAstMetadata
     ) {
         self.blocks[self.current_block.0].finish =
-            Some(MIRBlockFinal::If(condition, true_branch, false_branch));
+            Some(MIRBlockFinal::If(condition, true_branch, false_branch, meta_ast));
     }
 
-    fn finish_with_return(&mut self, expr: HIRExpr) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr));
+    fn finish_with_return(&mut self, expr: HIRExpr, meta_ast: HIRAstMetadata) {
+        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, meta_ast));
     }
 
     fn finish_with_empty_return(&mut self) {
@@ -231,19 +235,23 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
             HIR::DeclareFunction { .. } => {
                 panic!("Cannot declare function inside another function yet!")
             }
-            HIR::StructDeclaration { struct_name, body } => {
+            HIR::StructDeclaration { .. } => {
                 panic!("Cannot declare struct inside a function yet!")
             }
-            HIR::Assign { path, expression } => {
+            HIR::Assign { path, expression, meta_ast, meta_expr } => {
                 emitter.emit(MIRBlockNode::Assign {
                     path: path.clone(),
                     expression: expression.clone(),
+                    meta_ast: meta_ast.clone(),
+                    meta_expr: meta_expr.clone()
                 });
             }
             HIR::Declare {
                 var,
                 typedef,
                 expression,
+                meta_ast, 
+                meta_expr
             } => {
                 let HIRTypeDef::Resolved(actual_type) = typedef else {
                     panic!("An unresolved, uninferred type has reached the MIR stage. This is a type inference failure. Node: {:?}", typedef);
@@ -271,6 +279,8 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                 emitter.emit(MIRBlockNode::Assign {
                     path: vec![var.clone()],
                     expression: expression.clone(),
+                    meta_ast: meta_ast.clone(),
+                    meta_expr: meta_expr.clone()
                 });
 
                 //allow other blocks to read and write from scope:
@@ -281,18 +291,19 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                 emitter.finish_with_goto_block(after_creation_variable_block);
                 emitter.set_current_block(after_creation_variable_block);
             }
-            HIR::FunctionCall { function, args } => {
+            HIR::FunctionCall { function, args, meta } => {
                 match &function.0 {
                     TrivialHIRExpr::Variable(var) => {
                         emitter.emit(MIRBlockNode::FunctionCall {
                             function: var.clone(),
                             args: args.clone(),
+                            meta_ast: meta.clone()
                         });
                     }
                     other => panic!("{:?} is not a function!", other),
                 };
             }
-            HIR::If(condition, true_branch_hir, false_branch_hir) => {
+            HIR::If(condition, true_branch_hir, false_branch_hir, ast) => {
                 let HIRTypeDef::Resolved(actual_condition_type) = &condition.1 else {
                     panic!("Unresolved condition type reached MIR, this might be a type inference bug");
                 };
@@ -359,7 +370,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                     emitter.set_current_block(current_block);
 
                     //emit the branch
-                    emitter.finish_with_branch(condition.clone(), true_block, false_branch_block);
+                    emitter.finish_with_branch(condition.clone(), true_block, false_branch_block, ast.clone());
 
                     if !emitted_block_returns {
                         if let None = fallback_scope_and_block {
@@ -388,17 +399,17 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
                         fallback_scope_and_block = Some((fallback_block, fallback_scope));
                     }
                     let (fallback_block, _) = fallback_scope_and_block.unwrap();
-                    emitter.finish_with_branch(condition.clone(), true_block, fallback_block);
+                    emitter.finish_with_branch(condition.clone(), true_block, fallback_block, ast.clone());
 
                     //in this case the function continues in the fallback block
                     emitter.set_current_block(fallback_block);
                 }
             }
-            HIR::Return(expr, typedef) => {
+            HIR::Return(expr, typedef, meta_ast) => {
                 let HIRTypeDef::Resolved(resolved_type) = typedef else {
                     panic!("Unresolved return type reached MIR, this might be a bug in type inference");
                 };
-                emitter.finish_with_return(expr.clone());
+                emitter.finish_with_return(expr.clone(), meta_ast.clone());
             }
             HIR::EmptyReturn => {
                 emitter.finish_with_empty_return();
@@ -467,6 +478,7 @@ pub fn hir_to_mir(hir_nodes: &[HIR], type_db: &TypeDatabase) -> Vec<MIRTopLevelN
                 parameters,
                 body,
                 return_type,
+                meta
             } => {
                 let fdecl =
                     process_hir_funcdecl(function_name, parameters, body, return_type, type_db);
