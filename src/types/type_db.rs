@@ -7,6 +7,48 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/*Represents a fully resolved type, with generics already substituted */
+pub enum TypeInstance {
+    Simple(TypeId),                     //Built-in types, non-generic structs, etc
+    Generic(TypeId, Vec<TypeInstance>), //each TypeId in the vec is a type parameter used in this specific usage of the type, this is positional.
+    //parameters, return type
+    Function(Vec<TypeInstance>, Box<TypeInstance>), //In this case there is not even a base type like in generics, functions are functions
+}
+
+impl TypeInstance {
+    pub fn as_string(&self, type_db: &TypeDatabase) -> String {
+        match self {
+            TypeInstance::Simple(id) => type_db.get_name(*id).into(),
+            TypeInstance::Generic(id, args) => {
+                let args_str = args
+                    .iter()
+                    .map(|x| x.as_string(type_db).clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let base_str = type_db.get_name(*id);
+                format!("{}<{}>", base_str, args_str)
+            }
+            TypeInstance::Function(args, return_type) => {
+                let args_str = args
+                    .iter()
+                    .map(|x| x.as_string(type_db).clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let return_type_str = return_type.as_string(type_db);
+                format!("fn ({}) -> {}", args_str, return_type_str)
+            }
+        }
+    }
+
+    pub fn is_compatible(&self, other: &TypeInstance, type_db: &TypeDatabase) -> bool {
+        //for now we just compare by equality
+        return self == other;
+    }
+}
+
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct TypeId(pub usize);
 
@@ -189,7 +231,7 @@ impl TypeDatabase {
             .expect(&format!("Type ID not found: {}", id.0))
     }
 
-    fn find_by_name(&self, name: &str) -> Option<&TypeRecord> {
+    pub fn find_by_name(&self, name: &str) -> Option<&TypeRecord> {
         self.types.iter().find(|t| t.name == name)
     }
 

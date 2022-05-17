@@ -2,7 +2,7 @@ use crate::ast::lexer;
 use crate::ast::parser;
 use crate::semantic::hir;
 use crate::semantic::hir::*;
-use crate::semantic::type_db::TypeDatabase;
+use crate::types::type_db::TypeDatabase;
 use lexer::Operator;
 use std::env;
 use std::fs;
@@ -80,7 +80,7 @@ pub fn hir_type_str(typ: &HIRTypeDef, type_db: &TypeDatabase) -> String {
     }
 
     match typ {
-        HIRTypeDef::Pending => "UNKNOWN_TYPE".into(),
+        HIRTypeDef::PendingInference => "UNKNOWN_TYPE".into(),
         HIRTypeDef::Unresolved(HIRType::Simple(s)) => format!("UNRESOLVED! {}", s.clone()),
         HIRTypeDef::Unresolved(HIRType::Generic(s, g)) => {
             format!("UNRESOLVED {}<{}>", s, slice_types_str(g, type_db))

@@ -1,205 +1,14 @@
 use std::borrow::Cow;
-use std::fmt::Display;
 
 use crate::ast::parser::AST;
-
+use crate::types::type_db::TypeDatabase;
+use crate::types::type_db::TypeInstance;
+use crate::types::type_errors::*;
 use super::hir::*;
 
 use super::mir::*;
 use super::name_registry::NameRegistry;
-use super::type_db::TypeDatabase;
 
-pub trait TypeErrorDisplay {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
-}
-
-pub struct TypeMismatch<TContext> {
-    pub on_function: String,
-    pub context: TContext,
-    pub expected: TypeInstance,
-    pub actual: TypeInstance,
-}
-
-pub struct AssignContext {
-    pub target_variable_name: String,
-}
-
-impl TypeErrorDisplay for TypeMismatch<AssignContext> {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let var_type_str = self.expected.as_string(type_db);
-        let expr_type_str = self.actual.as_string(type_db);
-
-        write!(f,  "Assigned type mismatch: In function {on_function}, assignment to variable {var}: variable has type {var_type_str} but got assigned a value of type {expr_type_str}",
-            on_function = self.on_function,
-            var = self.context.target_variable_name
-        )
-    }
-}
-
-pub struct ReturnTypeContext();
-
-impl TypeErrorDisplay for TypeMismatch<ReturnTypeContext> {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let passed_name = self.actual.as_string(type_db);
-        let expected_name = self.expected.as_string(type_db);
-        write!(f,  "Return type mismatch: Function {on_function} returns {return_type_name} but expression returns {expr_return_type_name}",
-            on_function = self.on_function,
-            return_type_name = expected_name,
-            expr_return_type_name = passed_name,
-        )
-    }
-}
-
-pub struct FunctionCallContext<'a> {
-    pub called_function_name: FunctionName<'a>,
-    pub argument_position: usize,
-}
-
-impl<'a> TypeErrorDisplay for TypeMismatch<FunctionCallContext<'a>> {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let passed_name = self.actual.as_string(type_db);
-        let expected_name = self.expected.as_string(type_db);
-        match &self.context.called_function_name {
-            FunctionName::Function(function_name) => {
-                write!(f,  "Function argument type mismatch: In function {on_function}, call to function {function_called} parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
-                    on_function = self.on_function,
-                    function_called = function_name,
-                    position = self.context.argument_position
-                )
-            }
-            FunctionName::IndexAccess =>  {
-                write!(f,  "Function argument type mismatch: In function {on_function}, on index operator, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
-                    on_function = self.on_function,
-                    position = self.context.argument_position
-                )
-            },
-            FunctionName::Method { function_name, type_name } => todo!("method calls not fully implemented"),
-        }
-
-        
-    }
-}
-
-pub struct FunctionCallArgumentCountMismatch<'a> {
-    pub on_function: String,
-    pub called_function_name: FunctionName<'a>,
-    pub expected_count: usize,
-    pub passed_count: usize,
-}
-
-impl<'a> TypeErrorDisplay for FunctionCallArgumentCountMismatch<'a> {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-
-        match &self.called_function_name {
-            FunctionName::Function(call_name) => {
-                write!(f,  "Argument count mismatch: In function {on_function}, call to function {function_called} expects {expected_args} arguments, but {passed_args} were passed",
-                    on_function = self.on_function,
-                    function_called = call_name,
-                    expected_args = self.expected_count,
-                    passed_args = self.passed_count,
-                )
-            },
-            FunctionName::IndexAccess => {
-                write!(f,  "Argument count mismatch: In function {on_function}, index operator expects {expected_args} arguments, but {passed_args} were passed",
-                    on_function = self.on_function,
-                    expected_args = self.expected_count,
-                    passed_args = self.passed_count,
-                )  
-            },
-            FunctionName::Method { function_name, type_name } => todo!("method calls not fully implemented"),
-        }
-
-       
-    }
-}
-
-pub struct CallToNonCallableType {
-    pub on_function: String,
-    pub actual_type: TypeInstance,
-}
-
-impl TypeErrorDisplay for CallToNonCallableType {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "In function {on_function}, call to non-callable type {non_callable_type_name}",
-            on_function = self.on_function,
-            non_callable_type_name = self.actual_type.as_string(type_db),
-        )
-    }
-}
-
-pub struct TypeErrors<'callargs> {
-    pub assign_mismatches: Vec<TypeMismatch<AssignContext>>,
-    pub return_type_mismatches: Vec<TypeMismatch<ReturnTypeContext>>,
-    pub function_call_mismatches: Vec<TypeMismatch<FunctionCallContext<'callargs>>>,
-    pub function_call_argument_count: Vec<FunctionCallArgumentCountMismatch<'callargs>>,
-    pub call_non_callable: Vec<CallToNonCallableType>,
-}
-
-pub struct TypeErrorPrinter<'errors, 'callargs, 'type_db> {
-    pub errors: &'errors TypeErrors<'callargs>,
-    pub type_db: &'type_db TypeDatabase,
-}
-
-impl<'errors, 'callargs, 'type_db> TypeErrorPrinter<'errors, 'callargs, 'type_db> {
-    pub fn new(
-        errors: &'errors TypeErrors<'callargs>,
-        type_db: &'type_db TypeDatabase,
-    ) -> TypeErrorPrinter<'errors, 'callargs, 'type_db> {
-        TypeErrorPrinter { errors, type_db }
-    }
-}
-impl<'callargs> TypeErrors<'callargs> {
-    pub fn new() -> TypeErrors<'callargs> {
-        TypeErrors {
-            assign_mismatches: vec![],
-            return_type_mismatches: vec![],
-            function_call_mismatches: vec![],
-            function_call_argument_count: vec![],
-            call_non_callable: vec![],
-        }
-    }
-
-    pub fn count(&self) -> usize {
-        self.assign_mismatches.len()
-            + self.return_type_mismatches.len()
-            + self.function_call_mismatches.len()
-            + self.function_call_argument_count.len()
-            + self.call_non_callable.len()
-    }
-}
-
-impl<'errors, 'callargs, 'type_db> Display for TypeErrorPrinter<'errors, 'callargs, 'type_db> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.errors.count() == 0 {
-            return Ok(());
-        }
-
-        for err in &self.errors.assign_mismatches {
-            err.fmt_err(self.type_db, f)?;
-            write!(f, "\n")?;
-        }
-        for err in &self.errors.return_type_mismatches {
-            err.fmt_err(self.type_db, f)?;
-            write!(f, "\n")?;
-        }
-        for err in &self.errors.function_call_mismatches {
-            err.fmt_err(self.type_db, f)?;
-            write!(f, "\n")?;
-        }
-        for err in &self.errors.function_call_argument_count {
-            err.fmt_err(self.type_db, f)?;
-            write!(f, "\n")?;
-        }
-        for err in &self.errors.call_non_callable {
-            err.fmt_err(self.type_db, f)?;
-            write!(f, "\n")?;
-        }
-
-        return Ok(());
-    }
-}
 
 fn find_variable<'block, 'scope>(
     name: &str,
@@ -242,11 +51,11 @@ fn expect_find_variable<'block, 'scope>(
 
 fn check_function_arguments<'callargs>(
     on_function: &str,
-    function_called: &FunctionName<'callargs>,
+    function_called: &FunctionName,
     function_parameters: &[TypeInstance],
     arguments_passed: &[TypeInstance],
     type_db: &TypeDatabase,
-    type_errors: &mut TypeErrors<'callargs>,
+    type_errors: &mut TypeErrors,
 ) {
 
     
@@ -357,18 +166,18 @@ fn all_assignments_correct_type(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FunctionName<'a> {
-    Function(Cow<'a, str>),
+pub enum FunctionName {
+    Function(String),
     IndexAccess,
-    Method { function_name: Cow<'a, str>, type_name: Cow<'a, str>}
+    Method { function_name: String, type_name: String}
 }
 
-fn get_actual_function_name_with_details<'a>(
-    function_name: &'a str, 
-    meta_ast: &'a HIRAstMetadata, 
-    meta_expr: &'a HIRExprMetadata) -> FunctionName<'a> {
+fn get_actual_function_name_with_details(
+    function_name: &str, 
+    meta_ast: &HIRAstMetadata, 
+    meta_expr: &HIRExprMetadata) -> FunctionName {
     
-    if meta_ast.is_none() && meta_expr.is_none() { return FunctionName::Function(Cow::Borrowed(function_name)) }
+    if meta_ast.is_none() && meta_expr.is_none() { return FunctionName::Function(function_name.to_string()) }
     
     let expr =  match meta_ast.as_ref() {
         Some(AST::StandaloneExpr(expr)) => expr,
@@ -380,8 +189,8 @@ fn get_actual_function_name_with_details<'a>(
     match expr {
         crate::ast::parser::Expr::FunctionCall(function_name, _) => {
             match &**function_name {
-                crate::ast::parser::Expr::Variable(str) => return FunctionName::Function(Cow::Borrowed(str)),
-                crate::ast::parser::Expr::MemberAccess(_, member) => return FunctionName::Function(Cow::Borrowed(member)),
+                crate::ast::parser::Expr::Variable(str) => return FunctionName::Function(str.to_string()),
+                crate::ast::parser::Expr::MemberAccess(_, member) => return FunctionName::Function(member.to_string()),
                 _ => {}
             };
         },
@@ -391,17 +200,17 @@ fn get_actual_function_name_with_details<'a>(
         _ => {}
     };
 
-    return FunctionName::Function(Cow::Borrowed(function_name));
+    return FunctionName::Function(function_name.to_string());
 }
 
 
-fn function_calls_are_actually_callable_and_parameters_are_correct_type<'mir>(
-    body: &'mir [MIRBlock],
-    scopes: &'mir [MIRScope],
+fn function_calls_are_actually_callable_and_parameters_are_correct_type(
+    body: &[MIRBlock],
+    scopes: &[MIRScope],
     names: &NameRegistry,
     function_name: &str,
     type_db: &TypeDatabase,
-    type_errors: &mut TypeErrors<'mir>,
+    type_errors: &mut TypeErrors,
 ) {
     //
     for body_node in body {
@@ -494,14 +303,14 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type<'mir>(
     }
 }
 
-fn type_check_function<'mir>(
+fn type_check_function(
     function_name: &str,
-    body: &'mir [MIRBlock],
-    scopes: &'mir [MIRScope],
+    body: &[MIRBlock],
+    scopes: &[MIRScope],
     return_type: &TypeInstance,
     globals: &NameRegistry,
     type_db: &TypeDatabase,
-    type_errors: &mut TypeErrors<'mir>,
+    type_errors: &mut TypeErrors,
 ) {
     all_paths_return_values_of_correct_type(function_name, body, return_type, type_db, type_errors);
     all_assignments_correct_type(function_name, body, scopes, globals, type_db, type_errors);
@@ -515,11 +324,11 @@ fn type_check_function<'mir>(
     );
 }
 
-pub fn check_type<'mir>(
-    top_nodes: &'mir [MIRTopLevelNode],
-    type_db: &'mir TypeDatabase,
+pub fn check_type(
+    top_nodes: &[MIRTopLevelNode],
+    type_db: &TypeDatabase,
     names: &NameRegistry,
-) -> TypeErrors<'mir> {
+) -> TypeErrors {
     let mut type_errors = TypeErrors::new();
 
     for node in top_nodes {

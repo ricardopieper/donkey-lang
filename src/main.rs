@@ -4,6 +4,7 @@
 mod ast;
 mod commons;
 mod semantic;
+mod types;
 
 use std::env;
 use std::fs;
@@ -13,7 +14,7 @@ use crate::semantic::mir;
 use crate::semantic::hir;
 use crate::semantic::hir::*;
 use crate::semantic::mir::*;
-use crate::semantic::type_db::TypeDatabase;
+use crate::types::type_db::TypeDatabase;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

@@ -1,6 +1,6 @@
 use crate::ast::lexer;
 use crate::semantic::hir_printer::*;
-use crate::semantic::type_db::TypeDatabase;
+use crate::types::type_db::TypeDatabase;
 
 use super::mir::MIRBlock;
 use super::mir::MIRBlockNode;

@@ -4,7 +4,6 @@ mod name_registry;
 mod type_inference;
 pub mod hir_printer;
 pub mod mir_printer;
-pub mod type_db;
 pub mod hir;
 pub mod analysis;
 pub mod mir;

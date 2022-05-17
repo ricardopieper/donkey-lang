@@ -2,8 +2,9 @@ use super::hir::*;
 use crate::ast::lexer::*;
 use crate::ast::parser::*;
 use crate::commons::float::*;
+use crate::types::type_db::TypeDatabase;
+use crate::types::type_db::TypeInstance;
 
-use super::type_db::TypeDatabase;
 use super::type_inference::*;
 use std::collections::VecDeque;
 /*

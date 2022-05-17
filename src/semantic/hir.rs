@@ -5,8 +5,8 @@ use std::borrow::Cow::Owned;
 use crate::ast::lexer::*;
 use crate::ast::parser::*;
 use crate::commons::float::*;
+use crate::types::type_db::TypeInstance;
 
-use super::type_db::{TypeDatabase, TypeId};
 
 
 
@@ -34,7 +34,7 @@ pub enum TrivialHIRExpr {
 
 impl TrivialHIRExpr {
     pub fn pending_type(&self) -> TypedTrivialHIRExpr {
-        return TypedTrivialHIRExpr(self.clone(), HIRTypeDef::Pending);
+        return TypedTrivialHIRExpr(self.clone(), HIRTypeDef::PendingInference);
     }
 }
 
@@ -67,6 +67,7 @@ pub enum HIRExpr {
     ),
     FunctionCall(TypedTrivialHIRExpr, Vec<TypedTrivialHIRExpr>, HIRTypeDef, HIRExprMetadata),
     UnaryExpression(Operator, TypedTrivialHIRExpr, HIRTypeDef, HIRExprMetadata),
+    //obj, field, result_type, metadata
     MemberAccess(TypedTrivialHIRExpr, String, HIRTypeDef, HIRExprMetadata),
     Array(Vec<TypedTrivialHIRExpr>, HIRTypeDef, HIRExprMetadata),
 }
@@ -80,6 +81,47 @@ pub enum HIRType {
     Simple(String),
     Generic(String, Vec<HIRType>),
     Function(Vec<HIRType>, Box<HIRType>),
+}
+
+impl HIRType {
+
+    fn to_string_internal(result: &mut String, hir_type: &HIRType) {
+        match hir_type {
+            HIRType::Simple(s) => result.push_str(s),
+            HIRType::Generic(s, generics) => {
+                let comma_sep = generics
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                result.push_str(s);
+                result.push_str("<");
+                result.push_str(&comma_sep);
+                result.push_str(">");
+            },
+            HIRType::Function(arg_types, return_type) => {
+                let comma_sep_args = arg_types
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                let return_type = return_type.to_string();
+
+                result.push_str("fn(");
+                result.push_str(&comma_sep_args);
+                result.push_str(") -> ");
+                result.push_str(&return_type);
+            },
+        }
+    }
+
+    pub fn to_string(&self) -> String {
+        let mut str = String::new();
+        Self::to_string_internal(&mut str, &self);
+        return str;
+    }
 }
 
 impl HIRExpr {
@@ -109,46 +151,6 @@ pub struct HIRTypedBoundName {
     pub typename: HIRTypeDef, //var name, type
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-/*Represents a fully resolved type, with generics already substituted */
-pub enum TypeInstance {
-    Simple(TypeId),                     //Built-in types, non-generic structs, etc
-    Generic(TypeId, Vec<TypeInstance>), //each TypeId in the vec is a type parameter used in this specific usage of the type, this is positional.
-    //parameters, return type
-    Function(Vec<TypeInstance>, Box<TypeInstance>), //In this case there is not even a base type like in generics, functions are functions
-}
-
-impl TypeInstance {
-    pub fn as_string(&self, type_db: &TypeDatabase) -> String {
-        match self {
-            TypeInstance::Simple(id) => type_db.get_name(*id).into(),
-            TypeInstance::Generic(id, args) => {
-                let args_str = args
-                    .iter()
-                    .map(|x| x.as_string(type_db).clone())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let base_str = type_db.get_name(*id);
-                format!("{}<{}>", base_str, args_str)
-            }
-            TypeInstance::Function(args, return_type) => {
-                let args_str = args
-                    .iter()
-                    .map(|x| x.as_string(type_db).clone())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let return_type_str = return_type.as_string(type_db);
-                format!("fn ({}) -> {}", args_str, return_type_str)
-            }
-        }
-    }
-
-    pub fn is_compatible(&self, other: &TypeInstance, type_db: &TypeDatabase) -> bool {
-        //for now we just compare by equality
-        return self == other;
-    }
-}
-
 //we need to be able to represent complex stuff,
 //like a function that receives a function, whose parameters are generic
 //def func(another_func: Function<List<String>>)
@@ -157,7 +159,7 @@ impl TypeInstance {
 //types such as functions and generics need to be "instanced"
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRTypeDef {
-    Pending,
+    PendingInference,
     Unresolved(HIRType),
     Resolved(TypeInstance),
 }
@@ -165,7 +167,7 @@ pub enum HIRTypeDef {
 impl HIRTypeDef {
     pub fn expect_unresolved(&self) -> HIRType {
         match self {
-            HIRTypeDef::Pending => panic!("Function parameters must have a type"),
+            HIRTypeDef::PendingInference => panic!("Function parameters must have a type"),
             HIRTypeDef::Unresolved(e) => e.clone(),
             HIRTypeDef::Resolved(_) => {
                 panic!("Cannot deal with resolved types at this point, this is a bug")
@@ -174,7 +176,7 @@ impl HIRTypeDef {
     }
     pub fn expect_resolved(&self) -> &TypeInstance {
         match self {
-            HIRTypeDef::Pending => panic!("Expected resolved type, but is Pending"),
+            HIRTypeDef::PendingInference => panic!("Expected resolved type, but is Pending"),
             HIRTypeDef::Unresolved(e) => {
                 panic!("Expected resolved type, but is Unresolved {:?}", e)
             }
@@ -383,7 +385,7 @@ fn reduce_expr_to_hir_declarations<'a>(
                     panic!("Function call expression: should be bound to a name!")
                 };
 
-                HIRExpr::FunctionCall(call_expr, args_exprs, HIRTypeDef::Pending, Some(metadata.clone()))
+                HIRExpr::FunctionCall(call_expr, args_exprs, HIRTypeDef::PendingInference, Some(metadata.clone()))
             } else {
                 let args = args
                     .iter()
@@ -392,7 +394,7 @@ fn reduce_expr_to_hir_declarations<'a>(
                 HIRExpr::FunctionCall(
                     get_trivial_hir_expr(function_expr).unwrap().pending_type(),
                     args,
-                    HIRTypeDef::Pending,
+                    HIRTypeDef::PendingInference,
                     Some(full_function_call.clone())
                 )
             };
@@ -400,7 +402,7 @@ fn reduce_expr_to_hir_declarations<'a>(
             if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typedef: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::PendingInference,
                     expression: fcall.clone(),
                     meta_ast: None,
                     meta_expr: Some(full_function_call.clone())
@@ -435,7 +437,7 @@ fn reduce_expr_to_hir_declarations<'a>(
                     lhs_intermediary.expect_trivial().clone(),
                     *op,
                     rhs_intermediary.expect_trivial().clone(),
-                    HIRTypeDef::Pending,
+                    HIRTypeDef::PendingInference,
                     Some(metadata.clone())
                 )
             } else {
@@ -443,7 +445,7 @@ fn reduce_expr_to_hir_declarations<'a>(
                     get_trivial_hir_expr(lhs).unwrap().pending_type(),
                     *op,
                     get_trivial_hir_expr(rhs).unwrap().pending_type(),
-                    HIRTypeDef::Pending,
+                    HIRTypeDef::PendingInference,
                     Some(metadata.clone())
                 )
             };
@@ -451,7 +453,7 @@ fn reduce_expr_to_hir_declarations<'a>(
             if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typedef: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::PendingInference,
                     expression: binop.clone(),
                     meta_ast: None,
                     meta_expr: Some(full_binop.clone())
@@ -496,19 +498,19 @@ fn reduce_expr_to_hir_declarations<'a>(
                     };
                 }
 
-                HIRExpr::Array(item_exprs, HIRTypeDef::Pending, Some(full_array_exp.clone()))
+                HIRExpr::Array(item_exprs, HIRTypeDef::PendingInference, Some(full_array_exp.clone()))
             } else {
                 let args = arr_exprs
                     .iter()
                     .map(|x| get_trivial_hir_expr(x).unwrap().pending_type())
                     .collect::<Vec<_>>();
-                HIRExpr::Array(args, HIRTypeDef::Pending, Some(full_array_exp.clone()))
+                HIRExpr::Array(args, HIRTypeDef::PendingInference, Some(full_array_exp.clone()))
             };
 
             if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typedef: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::PendingInference,
                     expression: array.clone(),
                     meta_ast: None,
                     meta_expr: Some(full_array_exp.clone())
@@ -557,14 +559,14 @@ fn reduce_expr_to_hir_declarations<'a>(
                 HIRExpr::UnaryExpression(
                     *op,
                     expr_intermediary.expect_trivial().clone(),
-                    HIRTypeDef::Pending,
+                    HIRTypeDef::PendingInference,
                     Some(unary_expression.clone())
                 )
             } else {
                 HIRExpr::UnaryExpression(
                     *op,
                     get_trivial_hir_expr(expr).unwrap().pending_type(),
-                    HIRTypeDef::Pending,
+                    HIRTypeDef::PendingInference,
                     Some(unary_expression.clone())
                 )
             };
@@ -572,7 +574,7 @@ fn reduce_expr_to_hir_declarations<'a>(
             if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typedef: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::PendingInference,
                     expression: unaryop.clone(),
                     meta_ast: None,
                     meta_expr: Some(unary_expression.clone())
@@ -603,14 +605,14 @@ fn reduce_expr_to_hir_declarations<'a>(
                 HIRExpr::MemberAccess(
                     expr_intermediary.expect_trivial().clone(),
                     name.clone(),
-                    HIRTypeDef::Pending,
+                    HIRTypeDef::PendingInference,
                     Some(expr.clone())
                 )
             } else {
                 HIRExpr::MemberAccess(
                     get_trivial_hir_expr(obj_expr).unwrap().pending_type(),
                     name.clone(),
-                    HIRTypeDef::Pending,
+                    HIRTypeDef::PendingInference,
                     Some(expr.clone())
                 )
             };
@@ -618,7 +620,7 @@ fn reduce_expr_to_hir_declarations<'a>(
             if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
-                    typedef: HIRTypeDef::Pending,
+                    typedef: HIRTypeDef::PendingInference,
                     expression: member_access.clone(),
                     meta_ast: None,
                     meta_expr: Some(expr.clone())
@@ -734,7 +736,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
             Some(e) => {
                 let (result_expr, num_intermediaries) =
                     reduce_expr_to_hir_declarations(e, intermediary, accum, false, e);
-                accum.push(HIR::Return(result_expr, HIRTypeDef::Pending, Some(ast.clone())));
+                accum.push(HIR::Return(result_expr, HIRTypeDef::PendingInference, Some(ast.clone())));
                 return num_intermediaries;
             }
         },
@@ -934,6 +936,7 @@ mod tests {
     use crate::ast::parser::*;
     use crate::semantic::hir_printer::print_hir;
     use crate::semantic::*;
+    use crate::types::type_db::TypeDatabase;
 
     //Parses a single expression
     fn parse(source: &str) -> Vec<HIR> {
@@ -968,7 +971,7 @@ def my_function2(arg1: i32, arg2: i32) -> i32:
     return my_function(result1, result2)
 ",
         );
-        let result = print_hir(&result, &type_db::TypeDatabase::new());
+        let result = print_hir(&result, &TypeDatabase::new());
         println!("{}", result);
 
         let expected = "
@@ -1022,7 +1025,7 @@ def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
     else:
         print(20)";
 
-        let result = print_hir(&parsed, &type_db::TypeDatabase::new());
+        let result = print_hir(&parsed, &TypeDatabase::new());
         println!("{}", result);
 
         assert_eq!(expected.trim(), result.trim());
@@ -1064,7 +1067,7 @@ def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
             pass        
 ";
 
-        let final_result = print_hir(&result, &type_db::TypeDatabase::new());
+        let final_result = print_hir(&result, &TypeDatabase::new());
         println!("{}", final_result);
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -1083,7 +1086,7 @@ def main(x: i32) -> i32:
 def main(x: UNRESOLVED! i32) -> UNRESOLVED! i32:
     y = 0
     return x + y";
-        let result = print_hir(&parsed, &type_db::TypeDatabase::new());
+        let result = print_hir(&parsed, &TypeDatabase::new());
 
         assert_eq!(expected.trim(), result.trim());
     }
@@ -1104,7 +1107,7 @@ def main() -> i32:
 ",
         );
 
-        let result = print_hir(&parsed, &type_db::TypeDatabase::new());
+        let result = print_hir(&parsed, &TypeDatabase::new());
         println!("{}", result);
         let expected = "
 def main() -> UNRESOLVED! i32:

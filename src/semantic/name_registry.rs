@@ -1,18 +1,34 @@
-use crate::semantic::hir::*;
-use crate::semantic::type_db::*;
+use crate::{semantic::hir::*, types::type_db::{TypeDatabase, TypeInstance}};
 
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+pub struct PartiallyResolvedFunctionSignature {
+    pub args: Vec<HIRTypeDef>,
+    pub return_type: HIRTypeDef
+}
+
+
+#[derive(Debug, Clone)]
 pub struct NameRegistry {
     names: HashMap<String, HIRTypeDef>,
+    partially_resolved_function_sigs: HashMap<String, PartiallyResolvedFunctionSignature>
 }
 
 impl NameRegistry {
     pub fn new() -> Self {
         NameRegistry {
             names: HashMap::new(),
+            partially_resolved_function_sigs: HashMap::new(),
         }
+    }
+
+    pub fn insert_partially_resolved_signature(&mut self, name: String, sig: PartiallyResolvedFunctionSignature) {
+        self.partially_resolved_function_sigs.insert(name, sig);
+    }
+
+    pub fn find_partially_resolved_sig(&mut self, name: &str) ->  Option<&PartiallyResolvedFunctionSignature> {
+        self.partially_resolved_function_sigs.get(name)
     }
 
     pub fn insert(&mut self, name: String, type_instance: HIRTypeDef) {

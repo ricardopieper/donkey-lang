@@ -21,7 +21,7 @@ fn make_first_assignments_in_body(
                     declarations_found.insert(var.clone());
                     HIR::Declare {
                         var: var.clone(),
-                        typedef: HIRTypeDef::Pending,
+                        typedef: HIRTypeDef::PendingInference,
                         expression: expression.clone(),
                         meta_ast: meta_ast.clone(),
                         meta_expr: meta_expr.clone()

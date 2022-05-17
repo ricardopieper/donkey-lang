@@ -199,5 +199,5 @@ Pending typechecks:
  - Member access in exprs are valid
  - item arrays are all the same type as the first one
  - Binary operators are valid/exist for the lhs and rhs types
-
+ - All type errors during type inference
 
