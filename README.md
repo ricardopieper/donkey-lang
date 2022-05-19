@@ -195,9 +195,51 @@ that type. Casting to the type should be possible but syntax is yet to be define
 
 Pending typechecks:
 
- - Casts are valid
  - Member access in exprs are valid
  - item arrays are all the same type as the first one
  - Binary operators are valid/exist for the lhs and rhs types
  - All type errors during type inference
 
+Pending type inference improvements:
+
+ - Autocast integer types to signed/unsigned, and size increases (i32 to i64) when appropriate
+
+Pending general features:
+
+Features needed so we can write the stblib in the language itself:
+
+ - Numeric casts (needed for array accesses, signed/unsigned conversions, integer to float)
+    - Parser needs changes as well to support this
+ - Pointers and ptr<T> type:
+
+```
+    - raw_ptr type: 
+        - Just a pointer to a location, stack or heap.
+        - No type information whatsoever
+        - reinterpret<T>(): Just generates a ptr<T> to the same address
+
+    - ptr<T>: just an address that dereferences to a T value
+        - has a raw_ptr field
+        - special type, compiler allows all operations on ptr<T> as if it was in T
+        - ptr<T>.offset(items): moves the pointer by a given offset. It moves the pointer address by items * sizeof<T> bytes 
+        - ptr<T>.get_address(): returns u64 pointer to address
+        - ptr<T>.copy(destination, length)
+        - ptr<T>.delete(length)
+        - ptr<T>.reinterpret<U>() calls the reinterpret method 
+
+    - sized_ptr<T>: a pointer that contains a ptr<T> and a u32 size (bytes). Not exactly safer but remembers the allocated size
+        - Also special, compiler allows all operations on sized_ptr<T> as if it was in T
+        - implement through ptr<T>:
+            - sized_ptr<T>.offset(items): moves the pointer by a given offset. It moves the pointer address by items * sizeof<T> bytes.
+            - sized_ptr<T>.get_address(): returns u64 pointer to address
+            - sized_ptr<T>.copy(destination, length) [validates length <= our size]
+        - specific implementations:
+            - sized_ptr<T>.delete(length)
+            - sized_ptr<T>.copy_sized(destination, length) [validates length <= our size, and length <= destination.length]
+
+```
+
+ - low-level memory management functions:
+    - mem_alloc
+
+ - sizeof<T> function or operator (or T.size() or something)
