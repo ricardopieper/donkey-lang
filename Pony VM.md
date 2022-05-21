@@ -97,6 +97,8 @@ Therefore, we can have the following memory layout:
     Stack: Pages d+2+c+1 to d+2+c+129 (128 pages, a nice 8mb chunk of data)
      Heap: pages c+3+d+128+1 to 65535 (all the rest)
 
+Stack grows from a low address to a high address, and so does the heap and all other memory spaces.
+
 All of this lives on the heap on the real underlying operating system. This is a virtual machine for a reason.
 
 Of course, the bytecode file format would only have the data and code sections stored in it.
@@ -111,203 +113,101 @@ The data section is modifiable, but cannot grow. Notice it doesn't change the ex
 Opcodes
 =======
 
-These are the opcodes:
+All instructions are 32 bits in length.
 
-Data Manipulation
------------------
-
-```
-CONSTANT PUSH
-cpush8  %1    pushes 1 byte to the stack (value given in the operand)
-cpush16 %1    pushes 2 bytes to the stack  (value given in the operand)
-cpush32 %1    pushes 4 bytes to the stack  (value given in the operand)
-cpush64 %1    pushes 8 bytes to the stack  (value given in the operand)
-
-LOAD PUSH
-lpush8   %1    loads 1 byte from the operand address and pushes to stack
-lpush16  %1    loads 2 bytes from the operand address and pushes to stack
-lpush32  %1    loads 4 bytes from the operand address and pushes to stack
-lpush64  %1    loads 8 bytes from the operand address and pushes to stack
+There are pseudo-ops, flags, and operands.
+First 5 bits indicate the pseudo-operation.
+Each operation may have a number of flags.
+[n] indicates what the bit range means, read the [n] comment for further info.
 
 ```
 
-Math Binary Operators
-----
+IMMPUSH
+Pushes immediate value to stack. Does not pop any values.
 
-These instructions pop 2 values of appropriate sizes from the stack, and pushes 1 value to the stack.
+Syntax:
 
-This is the pattern for operations on integers:
+    immpush{num_bytes} {bytes} {optional left shift}
 
-[operator][s|u]i[size]
-[s|u] means signed/unsigned
+immpush8       0   0   0   0   1   0   0   0   0   0   0   0   0   0   0   ...   
+              | opr              |*8bits |          immediate  8 bits    | unused
+    pushes an immediate 8 bits to the stack.          
 
-Size is in bits, 8,16,32,64.
+immpush16      0   0   0   0   1   0   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   ...  
+              | opr              |*16bits|         immediate  16 bits                                    | unused
+    pushes an immediate 16 bits to the stack.
 
-For floats it's simpler: [operator]f[size]
+immpush32      0   0   0   0   1   0   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   ...   
+              | opr              |*16bits|         immediate  16 bits LSB                                |*ls|   
+    pushes an immediate 32 bits to the stack. The bits in the immediate are used as the least significant portion of the value.
+    *ls: if 1, shifts all bits to the left 16 bits (imm << 16). If 0, no shift is done.
 
-```
-MULTIPLICATION
-
-pop * pop
-
-Signed
-mulsi8           multiplies signed 1-byte integer values
-mulsi16          multiplies signed 2-byte integer values
-mulsi32          multiplies signed 4-byte integer values
-mulsi64          multiplies signed 8-byte integer values
-
-Unsigned
-mului8           multiplies unsigned 1-byte integer values
-mului16          multiplies unsigned 2-byte integer values
-mului32          multiplies unsigned 4-byte integer values
-mului64          multiplies unsigned 8-byte integer values
-
-Float
-mulf64          multiplies 4-byte float values
-mulf32          multiplies 8-byte float values
+immpush64      0   0   0   0   1   1   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   ...   
+              | opr              |*64bits|         immediate  16 bits LSB                                | *ls   | unused
+    pushes an immediate 64 bits to the stack. The bits in the immediate are used as the least significant portion of the value.
+    *ls: if bit pattern = 0 0, no shift
+    *ls: if bit pattern = 0 1, shifts all bits to the left 16 bits (imm << 16)
+    *ls: if bit pattern = 1 0, shifts all bits to the left 32 bits (imm << 16)
+    *ls: if bit pattern = 1 1, shifts all bits to the left 48 bits (imm << 16)
 
 
-SUM
+ADDRESS PUSH
 
-pop + pop
+Pushes N bits from an adress popped from the stack. 
+To push a const value at an adress known at compile time, first you use immpush to generate the address. 
+For other things it shouldn't be necessary.
 
-Signed
-sumsi8           sums signed 1-byte integer values
-sumsi16          sums signed 2-byte integer values
-sumsi32          sums signed 4-byte integer values
-sumsi64          sums signed 8-byte integer values
+Syntax:
 
-Unsigned
-sumui8           sums unsigned 1-byte integer values
-sumui16          sums unsigned 2-byte integer values
-sumui32          sums unsigned 4-byte integer values
-sumui64          sums unsigned 8-byte integer values
+addrpush{num_bytes}
 
-Float
-sumf64           sums 4-byte float values
-sumf32           sums 8-byte float values
+addrpush8      0   0   0   1   0   0   0   ...   
+              | opr              |*8bits | unused
+    loads 8 bits from an adress and pushes to the stack.
 
+addrpush16     0   0   0   1   0   0   1   ...
+              | opr              |*8bits | unused
+    loads 16 bits from an adress and pushes to the stack. 
 
-SUBTRACT
+addrpush32     0   0   0   1   0   1   0   ...
+              | opr              |*8bits | unused
+    loads 32 bits from an adress and pushes to the stack. 
 
-pop - pop
+addrpush64    0   0   0   1   0   1   1   ...   
+              | opr              |*8bits | unused
+    loads 64 bits from an adress and pushes to the stack.   
 
-Signed
-subsi8           subtracts signed 1-byte integer values
-subi16           subtracts signed 2-byte integer values
-subi32           subtracts signed 4-byte integer values
-subi64           subtracts signed 8-byte integer values
+    
+BINARY SHIFT
 
-Unsigned
-subui8           subtracts unsigned 1-byte integer values
-subui16          subtracts unsigned 2-byte integer values
-subui32          subtracts unsigned 4-byte integer values
-subui64          subtracts unsigned 8-byte integer values
+Performs a bit shift operation
 
-Float
-subf64           subtracts 4-byte float values
-subf32           subtracts 8-byte float values
+                                                                         
+{t}shift{n}     0   0   0   1   1   0   0   0   0   0   0   0   0   0
+              | opr               | nbits |[1] | shift size           | ...
+    opt {T}: bit pattern
+        0   0   0   1   1  = LEFT SHIFT
+        0   0   1   0   0  = RIGHT SHIFT
+    
+    nbits {n}: bit pattern
+        0 0 = 8
+        0 1 = 16
+        1 0 = 32
+        1 1 = 64
 
-
-DIVIDE
-
-pop / pop
-Integer divisions will truncate! 3/2 = 1
-
-Signed
-divsi8           divides signed 1-byte integer values
-divi16           divides signed 2-byte integer values
-divi32           divides signed 4-byte integer values
-divi64           divides signed 8-byte integer values
-
-Unsigned
-divui8           divides unsigned 1-byte integer values
-divui16          divides unsigned 2-byte integer values
-divui32          divides unsigned 4-byte integer values
-divui64          divides unsigned 8-byte integer values
-
-Float
-divf64           divides 4-byte float values
-divf32           divides 8-byte float values
+    [1] Mode of operation.
+        0 = binary operation on stack:
+            - pops the first value %1 as a right-hand side of the operator
+            - pops the second value %2 as a left hand side of the operator
+            - performs %1 << %2 and pushes to stack
+        1 = left shift operation with immediate 5 bit (max value)
+            - pops the first value %1 as a right-hand side of the operator
+            - uses 8 bit value from immediate as %2 
+            - performs %1 << %2 and pushes to stack
+            - shift size: Size of the shift, 6 bits (max shift size = 63)
 
 
-MODULUS
-
-pop % pop
-
-Signed
-modsi8           modulus signed 1-byte integer values
-modi16           modulus signed 2-byte integer values
-modi32           modulus signed 4-byte integer values
-modi64           modulus signed 8-byte integer values
-
-Unsigned
-modui8           modulus unsigned 1-byte integer values
-modui16          modulus unsigned 2-byte integer values
-modui32          modulus unsigned 4-byte integer values
-modui64          modulus unsigned 8-byte integer values
-
-
-POWERS
-
-pop ^ pop
-
-Signed
-powsi8           power of signed 1-byte integer values
-powi16           power of signed 2-byte integer values
-powi32           power of signed 4-byte integer values
-powi64           power of signed 8-byte integer values
-
-Unsigned
-powui8           power of unsigned 1-byte integer values
-powui16          power of unsigned 2-byte integer values
-powui32          power of unsigned 4-byte integer values
-powui64          power of unsigned 8-byte integer values
-
-Float
-powf64           power of 4-byte float values
-powf32           power of 8-byte float values
 
 
 ```
 
-Math functions
---------------
-
-```
-
-SQUARE ROOT
-
-Signed
-sqrtsi8         square root of signed 1-byte integer value
-sqrtsi16        square root of signed 2-byte integer value
-sqrtsi32        square root of signed 4-byte integer value
-sqrtsi64        square root of signed 8-byte integer value
-
-Unsigned
-sqrtui8         square root of unsigned 1-byte integer value
-sqrtui16        square root of unsigned 2-byte integer value
-sqrtui32        square root of unsigned 4-byte integer value
-sqrtui64        square root of unsigned 8-byte integer value
-
-Float
-sqrtf32        square root of 4-byte float value
-sqrtf64        square root of 8-byte float value
-
-The pattern follows for:
-sin
-cos
-tan
-
-
-```
-
-
-Data conversion operators
---------------------------
-
-
-```
-
-
-```
