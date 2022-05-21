@@ -127,55 +127,62 @@ Pushes immediate value to stack. Does not pop any values.
 
 Syntax:
 
-    immpush{num_bytes} {bytes} {optional left shift}
+    immpush{num_bytes} {<< left shift size} #{bytes} 
 
-immpush8       0   0   0   0   1   0   0   0   0   0   0   0   0   0   0   ...   
-              | opr              |*8bits |          immediate  8 bits    | unused
-    pushes an immediate 8 bits to the stack.          
+immpush{n}      0   0   0   0   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0 | ...
+              | opr               |nbits | lshift | immediate least significant bits (up to 16)  
+    Pushes an immediate {n} bits to the stack.          
+    nbits {n}: bit pattern
+        0 0 = 8
+        0 1 = 16
+        1 0 = 32
+        1 1 = 64
+    lshift: bit pattern
+        0 0 =  imm << 0 (no shift)
+        0 1 =  imm << 16
+        1 0 =  imm << 32
+        1 1 =  imm << 48
 
-immpush16      0   0   0   0   1   0   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   ...  
-              | opr              |*16bits|         immediate  16 bits                                    | unused
-    pushes an immediate 16 bits to the stack.
+To push values higher than 65535 (i.e. a 32-bit value 1248612943),
+do the following:
+    1 - break the 16 MSB and 16 LSB portions of the value apart
+    2 - immpush32 <<16 #{hsb 16 bits}
+    3 - sum32 #{lsb 16 bits}
 
-immpush32      0   0   0   0   1   0   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   ...   
-              | opr              |*16bits|         immediate  16 bits LSB                                |*ls|   
-    pushes an immediate 32 bits to the stack. The bits in the immediate are used as the least significant portion of the value.
-    *ls: if 1, shifts all bits to the left 16 bits (imm << 16). If 0, no shift is done.
+The equivalent C code of this entire process is:    
 
-immpush64      0   0   0   0   1   1   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   ...   
-              | opr              |*64bits|         immediate  16 bits LSB                                | *ls   | unused
-    pushes an immediate 64 bits to the stack. The bits in the immediate are used as the least significant portion of the value.
-    *ls: if bit pattern = 0 0, no shift
-    *ls: if bit pattern = 0 1, shifts all bits to the left 16 bits (imm << 16)
-    *ls: if bit pattern = 1 0, shifts all bits to the left 32 bits (imm << 16)
-    *ls: if bit pattern = 1 1, shifts all bits to the left 48 bits (imm << 16)
+    int i = 1248612943;
+    short hsb = (i >> 16); //crush 16 lower bits and get only those bits
+    short lsb = (i << 16) >> 16; //crush 16 higher bits and return them to original position to get only those bits
+    
+    int reconstructed = 0;
+    reconstructed = ((int)msb << 16);
+    reconstructed += (int)lsb;
+
+For 64 bit values, the process is essentially the same. You can push to the stack 2 32-bit values for the LSB and MSB of the 64 bits (in that order),
+shift the top stack value by << 32, and then sum64 the 2 top stack values.
+You can also store it in the data portion of the program (which you know the address), then use laddr64 to load it, but this might be slower.
 
 
-ADDRESS PUSH
+LOAD ADDRESS
 
-Pushes N bits from an adress popped from the stack. 
+Pops a 32-bit value from the stack to use it as an address.
+Then loads {n} bits from that address.
+
 To push a const value at an adress known at compile time, first you use immpush to generate the address. 
-For other things it shouldn't be necessary.
 
 Syntax:
 
-addrpush{num_bytes}
+laddr{num_bytes}
 
-addrpush8      0   0   0   1   0   0   0   ...   
-              | opr              |*8bits | unused
+laddr{n}       0   0   0   1   0   0   0   ...   
+              | opr               | nbits | unused
     loads 8 bits from an adress and pushes to the stack.
-
-addrpush16     0   0   0   1   0   0   1   ...
-              | opr              |*8bits | unused
-    loads 16 bits from an adress and pushes to the stack. 
-
-addrpush32     0   0   0   1   0   1   0   ...
-              | opr              |*8bits | unused
-    loads 32 bits from an adress and pushes to the stack. 
-
-addrpush64    0   0   0   1   0   1   1   ...   
-              | opr              |*8bits | unused
-    loads 64 bits from an adress and pushes to the stack.   
+    nbits {n}: bit pattern
+        0 0 = 8
+        0 1 = 16
+        1 0 = 32
+        1 1 = 64
 
     
 BINARY SHIFT
@@ -205,9 +212,6 @@ Performs a bit shift operation
             - uses 8 bit value from immediate as %2 
             - performs %1 << %2 and pushes to stack
             - shift size: Size of the shift, 6 bits (max shift size = 63)
-
-
-
 
 ```
 
