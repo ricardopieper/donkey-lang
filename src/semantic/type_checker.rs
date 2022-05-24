@@ -315,6 +315,7 @@ fn type_check_function(
     type_db: &TypeDatabase,
     type_errors: &mut TypeErrors,
 ) {
+    
     all_paths_return_values_of_correct_type(function_name, body, return_type, type_db, type_errors);
     all_assignments_correct_type(function_name, body, scopes, globals, type_db, type_errors);
     function_calls_are_actually_callable_and_parameters_are_correct_type(
@@ -326,7 +327,7 @@ fn type_check_function(
         type_errors,
     );
 
-    
+
 
 
 }
