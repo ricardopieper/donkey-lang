@@ -1,26 +1,25 @@
-Pony VM
-=======
+Freyr VM
+========
 
-This file describes an early draft of the Pony VM.
+This file describes an early draft of the Freyr VM.
 
-For now it's not gonna be so lightweight, we will have tons of instructions for whatever we need.
+We're still on the horse theme with this name. Freyr is, apparently, the god of horses in norse mythology. I looked it up in some random website and found it, and I won't ever look it up again in fear that this is wrong. The name is cool nad that's what it's gonna be.
 
-The bytecode has no concept of functions, all calls are jumps with a calling convention.
+I hope the name is actually hard or weird enough to pronounce such that people will avoid using it in production. It`s not a real risk though, since this language and VM are only useful for study.
 
-It's stack based, so no general-purpose registers. However, internally the VM will store some internal state, like the instruction pointer, function base address pointer,
-stack pointer, and so on as necessary.
+For now Freyr is not gonna be so lightweight, we will have tons of instructions for whatever we need.
+
+It's stack based, so no general-purpose registers. However, internally the VM will store some internal state, like the instruction pointer, function base address pointer, stack pointer, and so on as necessary. They will be acessible in the bytecode and can be changed, though it's not so straightforward.
 
 Endianness is machine dependent, bytecode produced on a little-endian machine does not run on a big-endian machine. 
 
 Memory is seen as a uniform block of memory, operations that take data from addresses would work on addresses on either stack or heap.
 
-The VM itself might have 2 dedicated allocations for each region, or do whatever it wants, but addresses are just addresses and should
-work uniformly.
+The VM itself might have 2 dedicated allocations for each region, or do whatever it wants, but addresses are just addresses and shouldwork uniformly.
 
 Pointer arithmetic should work.
 
-We try to assume the least things about the OS or environment we are running with. It would be nice if this VM ran on WASM,
-so we will make our own allocatos, and they might not be that efficient or fast.
+We try to assume the least things about the OS or environment we are running with. It would be nice if Freyr ran on WASM, so we will make our own allocatos, and they might not be that efficient or fast.
 
 
 Memory Management
@@ -119,7 +118,7 @@ Suppose we want to compile the following code:
     def half(num: i32)->i32:
         return num / 2
 
-    def square(num: i32, s: i32) -> i32:
+    def some_function(num: i32, s: i32) -> i32:
         half_val = half(num) + s
         return num * half_val
 
@@ -127,7 +126,7 @@ Suppose we want to compile the following code:
         x : i32 = 15
         y : i32 = 3
         z : i32 = x + y
-        result: i32 = square(z, x) + 5
+        result: i32 = 5 + some_function(z, x)
         result = result + y
 
 
@@ -148,66 +147,120 @@ bp = base pointer
 sp = stack pointer
 
 
-call {operand}:
-    pushes enough for return value
-    pushes a bunch of state (return ip (current + 4), return bp, return sp)
-    set bp and sp registers
-    jumps to ip
+Call {operand}:
+    pushes current ip + 4 to the stack (so that the return falls on the next instruction)
+    sets ip = operand
+    sets bp = sp (observer will see sp +4 due to the IP push which moved the stack pointer)
 
-return{size} {operand}
-    pops {size} bits
-    recover bp and sp registers, pops it
-    pushes the 32 bits back
-    jumps to return ip
+Return:
+    pops from stack
+    uses popped value as ip
+    jumps to that ip
 
-stack offset: 
+When a call is made, the stack looks like: 
+    - function return value (reserved) (pushed by the function itself)
+    - function arguments (pushed by the function itself)
+    - return bp (pushed by the function itself)
+    - return ip (pushed by the call instruction)
 
-    - first 8 bytes are calling convention data (return address, SP)
-    - 9th byte (index 8) can start being used for function data
-    - start uses a 16 bytes stack, so we offset to index 20 from base pointer
-    - therefore we do stackoffset 24
-    - now stack is:
-        [ip, sp, 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00] 
+When a function gets called:
+    - copies arguments to the current function scope (pass by value, copied)
+    - reserves N bytes for function scope with push_imm instruction
+    - then the rest of the bytes are used for temp values for binary operations
+
+When a function finishes:
+    - return value is assumed to be at the top of the stack
+    - Pops this value, and stores it at the function return value (reserved)  address
+    - destroy local function storage (stackoffset 0)
+    - return (pops ip from stack and jumps to it)
+    - caller pops bp from stack with pop_reg bp
+    - pop all pushed arguments
+    - continue execution
 
 
-                        -12         -8      -4
-start: <function stack: [#0:retaddr, #4:bp, #8:sp], {ip = 0, bp = 12, sp = 12}>, 
-0       stackoffset 16          ; stack variable storage (x y z result 4 bytes each, total 16 bytes), new sp = 28
-4       push_imm32 15           ; push a value to stack at bp + 16 (24), sp goes to 32
-8       storeaddr_rel   bp+0    ; stores data at variable x offset (8), sp back to 28
-12      push_imm32 3            ; push a value to stack at bp + 20 (28), sp goes to 32
-16      storeaddr_rel32 bp+4    ; stores data at variable y offset (12), sp back to 28
-20      loadaddr_rel32  bp+0    ; pushes x to stack, sp goes to 32
-24      loadaddr_rel32  bp+4    ; pushes y to stack, sp goes to 36
-28      sums32                  ; sums both values on the stack, sp back to 32
-32      storeaddr_rel32 bp+8    ; stores the sum (on stack) at variable z offset, sp back to 28
-36      loadaddr_rel32  bp+0    ; load x into the stack for the function args (s), sp = 32
-40      loadaddr_rel32  bp+8    ; load z into the stack for the function args (num), sp = 36
-44      call <square>           ; [.., x, z, (reserved return storage), 48 (return ip), 8 (return bp), 36 (return sp)] {ip = addr(square), bp and sp = 52 (36 + 12 for pushed stack frame + 4 for return value storage)
 
-                            
-;half_val = half(num) + s
-;num * half_val
-square: <function stack: [.., -24:x, -20:z, -16:(reserved return storage), -12:48 (return ip), -8:8 (return bp), -4:32 (return sp)], {ip = addr(square), bp = 52, sp = 52}>
+The resulting bytecode is:
+
+```
+
+    
+main: <function stack: [], {ip = 0, bp = 0, sp = 0}>, 
+;; no arguments and nowhere to return
+00      stackoffset     16      ; move 16 bytes upwards in preparation to store values here
+04      push_imm32      15      ; loads 15 in memory
+08      storeaddr_rel32 bp+0    ; sets at variable 
+12      push_imm32      3       ; loads 3 in memory
+16      storeaddr_rel32 bp+4    ; sets at variable 
+;; at this point we have stack: [x, y, z, result], sp=16
+20      loadaddr_rel32  bp+0    ; load x
+24      loadaddr_rel32  bp+4    ; load y
+28      sums32                  ; x + y
+32      storeaddr_rel32 bp+8    ; store result at z
+;; at this point we have stack: [x, y, z, result], sp=16
+36      push_imm32      5       ; pushes 5 in preparation for binary op +, sp = 20
+40      push_imm32      0       ; reserve space for return argument, sp = 24
+44      loadaddr_rel32  bp+8    ; loads argument z, sp = 28
+48      loadaddr rel32  bp+0    ; loads argument x, sp = 32
+52      push_reg        bp      ; save our argument to recover bp later, sp = 36
+56      call <some_function>    ; moves ip to some_function, sets bp = sp + 4 (40), pushes a return instruction pointer (60)
+;;stack before entering: [x, y, z, result, 5, return space, z, x, bp(0), ip(60) ] {ip = 96, bp = 40}
+;;stack after call: [x, y, z, result, 5, return space, z, x, bp(0)] {ip = 60, bp = 40, sp = 36}
+60      pop_reg         bp      ; recovers the bp {sp = 32, bp = 0}
+;;stack now: [x, y, z, result, 5, return space, z, x] {ip = 64 bp = 0, sp = 32}
+64      pop32                   ; pops the x argument
+68      pop32                   ; pops the z argument
+;;stack now: [x, y, z, result, 5, return space] {ip = 72 bp = 0 sp = 24}
+72      sums32                  ; sums 5 + some_function(z, x)
+;;stack now: [x, y, z, result, (5 + some_function(z, x))] {ip = 76 bp = 0 sp = 20}
+76      storeaddr_rel32 bp+12   ; stores it in the result variable
+;;stack now: [x, y, z, result] {ip = 80 bp = 0 sp = 16}
+80      loadaddr_rel32  bp+12   ; loads it again  sp = 20
+84      loadaddr_rel32  bp+4    ; loads y sp = 24
+88      sums32                  ; sums result + y sp = 20
+92      storeaddr_rel32 bp+12   ; stores at result, sp = 16
+
+
+some_function: <function stack: [..,-20:(reserved return storage), -16:z, -12:x, -8:0(return bp), -4:60(return ip)], {ip = 96, bp = 40, sp = 40}>
 ; copy values from previous function stack to this one
-xx      loadaddr_rel32  bp-20   ; z var loaded on stack by main, now pushed to this stack at num
-xx      loadaddr_rel32  bp-24   ; x var loaded on stack by main, now pushed to this stack at s
-xx      stackoffset 12          ; stack variable storage (num, s, half_num 4 bytes each, total 12 bytes), new sp = 64
-xx      stackoffset 4           ; reserves storage space for returns
-xx      loadaddr_rel32  bp+0    ; loads num, sp = 68 push args
-xx      call <half>             ; [(reserved return storage), num, ([xx] return ip), 52 (return bp), 68 (return sp)] {ip = addr(half), bp and sp = 76 (64 + 12 for pushed stack frame)}
-;; stack before call:  [num, (reserved return storage), ([xx] return ip), 52 (return bp), 68 (return sp)] 
-;; stack after call:   [num, (returned value)]
+96       loadaddr_rel32  bp-16   ; z var loaded on stack by main, now pushed to this stack at num
+100      loadaddr_rel32  bp-12   ; x var loaded on stack by main, now pushed to this stack at s
+104      stackoffset     12      ; stack variable storage (num, s, half_num, 4 bytes each, total 12 bytes), new sp = 52 (40 + 12)
+108      push_imm32       0      ; reserves storage space for <half> return value, new sp = 56.
+112      loadaddr_rel32  bp+0    ; loads the argument num for the function <half>, new sp = 60
+116      push_reg        bp      ; stores our base pointer on the stack (36), new sp = 64
+120      call <half>             ; moves ip to half, sets bp = sp + 4 (68) and pushes a return instruction pointer 124
+;; stack before call:  [.., (reserved return storage), (arg1), 40 (return bp), 124(return ip)] { ip = 168, bp = 68, sp = 68}
+;; stack after  call:  [.., (half result), (arg1), 40 (return bp)] { ip = 124, bp = 68, sp = 64}
+124      pop_reg         bp      ; restores the bp value to 40, pops stack
+;; stack is now [.., (half result), (arg1)] { ip = 128, sp = 60}
+128      pop32                   ; pops the arg1 argument
+;; stack is now [.., (half result)] { ip = 132, sp = 56}
+132      loadaddr_rel32  bp+4    ; loads s to the stack in preparation for half(num) + s
+;; stack is now [.., (half result), (s)] { ip = 136, sp = 60}
+136      sums32                  ; sums both 32bit values, signed, new sp = 56
+;; stack is now [.., (half result + s)] sp=56
+140      storeaddr_rel32 bp+8    ; stores the result of half(num) + s at half_val, new sp = 52 
+;; stack is now [..,]
+144      loadaddr_rel32 bp+0     ; loads the variable num on the stack new sp = 56
+148      loadaddr_rel32 bp+8     ; loads the variable half_val on the stack, new sp = 60
+152      muls32                  ; multiplies both values (num * half_val), new sp = 56
+;; stack is now [..,-20:(reserved return storage), -16:x, -12:z, -8:0(return bp), -4:60(return ip), +0:(num), +4:(s), +8:(half_num), +12:(num * half_val)]
+156      storeaddr_rel32 bp-20   ; pops the result value from the stack and store at the reserved return storage, new sp = 52
+;; stack is now [..,-20:(now set return storage), -16:x, -12:z, -8:(return bp), -4:(return ip), +0:(num), +4:(s), +8:(half_num)]
+160      stackoffset     0       ; destroy the function local storage, maybe unecessary, new sp = 40
+164      return                  ; pops ip, returns to it, new sp = 36
 
 
+half: <function stack[.., -16:(reserved return storage), -12:num, -8:36(return bp), -4:124(return ip)], {ip = 168, bp = 68, sp = 68}>
+168      loadaddr_rel32  bp-12   ; num var loaded on stack by caller, now pushed to this stack at num, new sp = 72
+172      stackoffset     4       ; storage for num variable, sp still 68 because stackoffset is relative on bp. Not really needed, can be optimized out
+176      loadaddr_rel32  bp+0    ; load num in the left hand side, new sp = 76
+180      divs_imm32      2       ; divides the number by 2, sp is still 76. We could have pushed 2 to the stack before bp+0 and used pure stack instruction, but this is faster
+184      storeaddr_rel32 bp-16   ; pops the result value from the stack and store at the reserved return storage, new sp = 72
+188      stackoffset     0       ; destroy the function local storage, maybe unecessary, new sp = 68
+192      return                  ; pops ip, returns to it, new sp = 64
 
-half: <function stack[.., -20:(reserved return storage), -16:num, -12:([xx] return ip), -8:48(return bp), -4:64 (return sp)], {ip = addr(half), bp = 76, sp = 76}>
-xx      loadaddr_rel32  bp-26   ; num var loaded on stack by main, now pushed to this stack at num
-xx      stackoffset 4           ; stack variable storage (num)
-xx      loadaddr_rel32  bp+0    ; load num in the left hand side
-xx      divs_imm32  2           ; divides the number by 2. We could have pushed 2 to the stack before bp+0 and used pure stack instruction, but this is faster
-xx      storeaddr32     bp-20   ; pops the result value from the stack and store at the reserved return storage
-xx      return                  ; pops the stack frame, recovers the control registers
+```
 
 
 Opcodes
@@ -313,7 +366,7 @@ Pops a value from the stack and stores it into an address.
 
 Syntax:
 
-storeaddr_{mode}{num_bytes} #{operand}
+storeaddr_{mode}{num_bytes} bp{+|-}#{operand}
 
 
 Modes:
@@ -635,15 +688,6 @@ Mode of operation:
         1 0 = 32
         1 1 = 64
 
-    [2] Signed or unsigned
-        0 = both sides of the operation are unsigned
-        1 = both sides of the operation are signed
-   [2] Mode of operation.
-
-        1 = left shift operation with immediate LSB 16 bit
-            - pops the first value %1 as a left-hand side of the operator
-            - uses 16 bit immediate value as LSB %2 right hand side. If the number of bits > 16, all other bits are interpreted as 0. This does not include sign, and it's always > 0
-            - performs %1 {opt} %2 and pushes to stack
 
 FLOW CONTROL
 
@@ -653,12 +697,48 @@ also saving and recovering registers.
 PUSH REGISTER
 
 Pushes a control register value on the stack. 
+Size pushed is determined by the size of the control register, but in general they are 32 bits.
+
+push_reg     0   1   1   1   0   0   0   
+            | opr               |reg    |                    
+    opr: bit pattern
+    reg: bit pattern
+        0 0 = bp (function stack base pointer)
+        0 1 = sp (stack pointer)
+        1 0 = ip (instruction pointer) 
+
 
 
 POP REGISTER
 
 Pops a value from the stack and saves into a control register.
+Size popped is determined by the size of the control register, but in general they are 32 bits.
 
+pop_reg       0   1   1   1   0   0   0   
+            | opr               |reg    |                    
+    opr: bit pattern
+    reg: bit pattern
+        0 0 = bp (function stack base pointer)
+        0 1 = sp (stack pointer)
+        1 0 = ip (instruction pointer) 
+
+POP
+
+Pops a number of bits from the stack.
+
+Syntax:
+pop32
+pop8
+pop64
+
+{opr}{n}       1   0   0   1   1   0   0   ..
+              | opr              |nbits  | unused                           
+    opr: bit pattern
+    nbits {n}: bit pattern
+        0 0 = 8
+        0 1 = 16
+        1 0 = 32
+        1 1 = 64
 
 
 SPECIAL
