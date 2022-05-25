@@ -271,7 +271,7 @@ All instructions are 32 bits in length.
 
 There are pseudo-ops, flags, and operands. 
 At this point, the bit pattern of each pseudo-operation is not final. The bit layout should be final,
-but whether push_imm is 00001 or 00010 is not final, as not all instructions are pushed so far.
+but whether push_imm is 00001 or 00010 is not final, as not all instructions are described so far.
 
 First 5 bits indicate the pseudo-operation.
 Each operation may have a number of flags.
