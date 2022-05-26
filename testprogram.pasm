@@ -13,7 +13,7 @@
     loadaddr_rel32  bp+8    
     loadaddr rel32  bp+0    
     push_reg        bp      
-    call <some_function>    
+    call            some_function    
     pop_reg         bp      
     pop32                   
     pop32                   
@@ -31,14 +31,14 @@ some_function:
     push_imm32       0      
     loadaddr_rel32  bp+0    
     push_reg        bp      
-    call <half>             
+    call            half             
     pop_reg         bp      
     pop32                   
     loadaddr_rel32  bp+4    
     sums32                  
     storeaddr_rel32 bp+8    
-    loadaddr_rel32 bp+0     
-    loadaddr_rel32 bp+8     
+    loadaddr_rel32  bp+0     
+    loadaddr_rel32  bp+8     
     muls32                  
     storeaddr_rel32 bp-20   
     stackoffset     0       

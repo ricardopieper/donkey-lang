@@ -5,7 +5,7 @@ mod ast;
 mod commons;
 mod semantic;
 mod types;
-mod vm;
+mod freyr;
 
 use std::env;
 use std::fs;
