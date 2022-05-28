@@ -24,6 +24,37 @@ fn split_in_whitespace_tab_etc_ignore_comment(asm_line: &str) -> Vec<String> {
     return all_parts;
 }
 
+fn split_instruction_mnemonic(mnemonic: &str) -> Vec<String> {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum CurrentPart {
+        String,
+        Number
+    }
+    let mut current = CurrentPart::String;
+    let mut all_parts: Vec<String> = vec![String::new()];
+    for c in mnemonic.chars() {
+        if c.is_digit(10) {
+            if current != CurrentPart::Number {
+                current = CurrentPart::Number;
+                all_parts.push(String::new());
+            }
+            
+        }
+        else if c == '_' {
+            all_parts.push(String::new());
+            continue;
+        }
+        else {
+            if current != CurrentPart::String {
+                current = CurrentPart::String;
+                all_parts.push(String::new());
+            }
+        }
+        let current_buffer = all_parts.last_mut().unwrap();
+        current_buffer.push(c);
+    }
+    return all_parts;
+}
 
 fn parse_asm_line(asm_line: &str) -> Option<AssemblyInstruction> {
     let splitted = split_in_whitespace_tab_etc_ignore_comment(asm_line);
@@ -37,51 +68,102 @@ fn parse_asm_line(asm_line: &str) -> Option<AssemblyInstruction> {
         })
     }
 
-    Some(match splitted[0].to_lowercase().as_str() {
-        "stackoffset" => {
+    let mnemonics = split_instruction_mnemonic(splitted[0].to_lowercase().as_str());
+    let mnems_str_vec = mnemonics
+        .iter()
+        .map(|x| x.as_str())
+        .collect::<Vec<_>>();
+
+    let mnems_str = mnems_str_vec.as_slice();
+
+
+    println!("menms: {:?}", mnems_str);
+
+    Some(match mnems_str {
+        ["stackoffset"] => {
             let arg = splitted[1].parse().unwrap();
             AssemblyInstruction::StackOffset { bytes: arg }
         }
-        "push_imm32" => {
-            let bytes = 4;
+        ["push", "imm", size]  => {
+            let bytes = size.parse::<u8>().unwrap() / 8;
             let immediate = splitted[1].parse().unwrap();
             let left_shift = splitted.len() > 2 && splitted[2] == "<<16";
+            
             AssemblyInstruction::PushImmediate {
                 bytes: bytes, 
                 immediate: immediate,
                 left_shift_16: left_shift }
         }
-        "storeaddr_rel32" => {
-            if !splitted[1].contains("bp") {
-                panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data");
-            }
-            if !splitted[1].contains("+") && !splitted[1].contains("-") {
-                panic!("Please say whether the offset in storeaddr is positive or negative.");
-            }
-            let remove_bp = splitted[1].replace("bp", "");
-            let offset = remove_bp.parse().unwrap();
-           
+        ["storeaddr", rest @ ..] => {
+
+            let (bytes, lsm) = match rest {
+                ["rel", size] => {
+                    let bytes = size.parse::<u8>().unwrap() / 8;
+                    if !splitted[1].contains("bp") {
+                        panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data");
+                    }
+                    if !splitted[1].contains("+") && !splitted[1].contains("-") {
+                        panic!("Please say whether the offset in storeaddr is positive or negative.");
+                    }
+                    let remove_bp = splitted[1].replace("bp", "");
+                    let offset = remove_bp.parse().unwrap();
+                    (bytes, LoadStoreMode::Relative { offset: offset } )
+                },
+                ["imm", size] => {
+                    let bytes = size.parse::<u8>().unwrap() / 8;
+                    let address = splitted[1].parse::<u32>().unwrap();
+                    
+                    (bytes, LoadStoreMode::Immediate { absolute_address: address } )
+                },
+                [size] => {
+                    let bytes = size.parse::<u8>().unwrap() / 8;
+                  
+                    (bytes, LoadStoreMode::StackPop)
+                
+                }
+                _ => panic!("Could not parse instruction loadaddr {rest:?}")
+            };
             AssemblyInstruction::StoreAddress {
-                bytes: 4, 
-                mode: LoadStoreMode::Relative { offset: offset } 
+                bytes: bytes, 
+                mode: lsm
             }
         }
-        "loadaddr_rel32" => {
-            if !splitted[1].contains("bp") {
-                panic!("Please say BP in the offset for loadadrr to make it clear where you're storing data");
-            }
-            if !splitted[1].contains("+") && !splitted[1].contains("-") {
-                panic!("Please say whether the offset in loadaddr is positive or negative.");
-            }
-            let remove_bp = splitted[1].replace("bp", "");
-            let offset = remove_bp.parse().unwrap();
-           
+        
+        ["loadaddr", rest @ ..] => {
+
+            let (bytes, lsm) = match &rest {
+                ["rel", size] => {
+                    let bytes = size.parse::<u8>().unwrap() / 8;
+                    if !splitted[1].contains("bp") {
+                        panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data");
+                    }
+                    if !splitted[1].contains("+") && !splitted[1].contains("-") {
+                        panic!("Please say whether the offset in storeaddr is positive or negative.");
+                    }
+                    let remove_bp = splitted[1].replace("bp", "");
+                    let offset = remove_bp.parse().unwrap();
+                    (bytes, LoadStoreMode::Relative { offset: offset } )
+                },
+                ["imm", size] => {
+                    let bytes = size.parse::<u8>().unwrap() / 8;
+                    let address = splitted[1].parse::<u32>().unwrap();
+                    
+                    (bytes, LoadStoreMode::Immediate { absolute_address: address } )
+                },
+                [size] => {
+                    let bytes = size.parse::<u8>().unwrap() / 8;
+                    (bytes, LoadStoreMode::StackPop)
+                
+                }
+                _ => panic!("Could not parse instruction loadaddr {rest:?}")
+            };
             AssemblyInstruction::LoadAddress {
-                bytes: 4, 
-                mode: LoadStoreMode::Relative { offset: offset } 
+                bytes: bytes, 
+                mode: lsm
             }
         }
-        "sums32" => {
+       
+        ["sums", "32"] => {
             AssemblyInstruction::IntegerArithmeticBinaryOperation { 
                 bytes: 4, 
                 operation: IntegerArithmeticBinaryOp::Sum, 
@@ -89,7 +171,7 @@ fn parse_asm_line(asm_line: &str) -> Option<AssemblyInstruction> {
                 immediate: None
             }
         }
-        "muls32" => {
+        ["muls","32"] => {
             AssemblyInstruction::IntegerArithmeticBinaryOperation { 
                 bytes: 4, 
                 operation: IntegerArithmeticBinaryOp::Multiply, 
@@ -97,7 +179,7 @@ fn parse_asm_line(asm_line: &str) -> Option<AssemblyInstruction> {
                 immediate: None
             }
         }
-        "divs_imm32" => {
+        ["divs","imm","32"] => {
 
             let immediate = splitted[1].parse().unwrap();
 
@@ -108,7 +190,7 @@ fn parse_asm_line(asm_line: &str) -> Option<AssemblyInstruction> {
                 immediate: Some(immediate)
             }
         }
-        "pop_reg" => {
+        ["pop", "reg"] => {
             let register = match splitted[1].as_str() {
                 "bp" => ControlRegister::BasePointer,
                 "ip" => ControlRegister::InstructionPointer,
@@ -120,7 +202,7 @@ fn parse_asm_line(asm_line: &str) -> Option<AssemblyInstruction> {
                 register: register,
             }
         }
-        "push_reg" => {
+        ["push","reg"] => {
             let register = match splitted[1].as_str() {
                 "bp" => ControlRegister::BasePointer,
                 "ip" => ControlRegister::InstructionPointer,
@@ -132,10 +214,10 @@ fn parse_asm_line(asm_line: &str) -> Option<AssemblyInstruction> {
                 register: register,
             }
         }
-        "call" => {
+        ["call"] => {
             AssemblyInstruction::UnresolvedCall {label: splitted[1].to_string() }
         }
-        "return" => {
+        ["return"] => {
             AssemblyInstruction::Return
         }
         _ => {panic!("Freyr assembly instruction not recognized: {asm_line}")}
@@ -152,8 +234,6 @@ pub fn parse_asm(asm: &str) -> Vec<AssemblyInstruction> {
 }
 
 pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction> {
-
-    
     let mut label_offsets = std::collections::HashMap::<String, u32>::new();
     let mut resolved_instructions = vec![];
 

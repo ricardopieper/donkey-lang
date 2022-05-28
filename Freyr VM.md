@@ -331,7 +331,7 @@ Pushes a value to the stack by loading it from a given address.
 
 Syntax:
 
-loadaddr_{mode}{num_bits} {+|-}#{operand}
+loadaddr_{mode}{num_bits} bp{+|-}#{operand}
 
 Modes:
     -       = pops an address from the stack, and loads from it
@@ -380,7 +380,7 @@ Operand notation:
     -       = Computes address backwards from function base pointer
 
 
-storeaddr_{n}  0   0   0   1   0   0   0   0   0   0   0   0   0   0   0   0   ....       
+storeaddr_{n}  0   0   0   1   1   0   0   0   0   0   0   0   0   0   0   0   ....       
               | opr               | nbits | mode | operand
     loads {n} bits from an adress and pushes to the stack.
     nbits {n}: bit pattern
@@ -389,12 +389,12 @@ storeaddr_{n}  0   0   0   1   0   0   0   0   0   0   0   0   0   0   0   0   .
         1 0 = 32
         1 1 = 64
     mode: bit pattern
-        0 0 = pops an address from the stack, and loads from it
+        0 0 = pops an address from the stack, then the value, and stores value in address
             operand is unused
         0 1 = (rel) compute address relative forward to function base pointer
         1 0 = (rel) compute address relative backward to function base pointer
             On both modes, operand is the offset from function base pointer (23 bits). Max value is 16777215 (16MB), which is larger than default stack size (8MB)
-        1 1 = (imm) load address given by an absolute address
+        1 1 = (imm) store at address given by an absolute address
             operand is the raw address, 23 bits. Max value is 16777215 (16MB), which might cover most of the average program data section. 
 
 
@@ -419,27 +419,26 @@ Examples:
     lshift16
 
 
-{t}shift{n}     0   0   1   0   0   0   0   0   0   0   0   0   0 
-              | opr               | nbits |[1] | shift size       | ...
-    opt {T}: bit pattern
-        0   0   1   0   0  = LEFT SHIFT
-        0   0   1   0   1  = RIGHT SHIFT
-    
+{d}shift{n}     0   0   1   0   0   0   0   0   0   0   0   0   0   0 
+              | opr               | nbits |[1]|[2]| shift size       | ...
+    opr: bit pattern
     nbits {n}: bit pattern
         0 0 = 8
         0 1 = 16
         1 0 = 32
         1 1 = 64
-
-    [1] Mode of operation.
+    [1] Direction {d}
+        0 = left
+        1 = right
+    [2] Mode of operation.
         0 = binary operation on stack:
             - pops the first value %1 as a right-hand side of the operator
             - pops the second value %2 as a left hand side of the operator
             - performs %1 << %2 and pushes to stack
-        1 = left shift operation with immediate 5 bit (max value)
+        1 = shift operation with immediate 5 bit (max value)
             - pops the first value %1 as a right-hand side of the operator
             - uses 8 bit value from immediate as %2 
-            - performs %1 << %2 and pushes to stack
+            - performs %1 (<< or >>) %2 and pushes to stack
             - shift size: Size of the shift, 5 bits (max shift size = 63)
 
 For bit shifts with constant values (that coud be given by 2 immediates), maybe the compiler should perform constant folding on it instead of
@@ -461,35 +460,36 @@ Operations can be:
 
 Syntax:
 
-    binary_{opr}_{imm?}{nbits} {lhs?}
+    bitwise_{opr}_{imm?}{nbits} {lhs?}
 
-    binary_and32
-    binary_xor64
-    binary_xor32_imm 0xfefefe
+    bitwise_and32
+    bitwise_xor64
+    bitwise_xor32_imm 0xfefefe
 
 
 
-{opr}{nbits}       0   1   0   0   1   0   0   0   0    0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
-              | opr               |nbits |[1] | left hand side (max 24 bits)
+{opr}{nbits}    0   0   1   0   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+              | opr               | nbits | binop |[2] | left hand side (max 22 bits)
     opr: bit pattern
-        0   0   1   1   1  = Bitwise AND
-        0   1   0   0   0  = Bitwise OR
-        0   1   0   0   1  = Bitwise XOR
     
     nbits {n}: bit pattern
         0 0 = 8
         0 1 = 16
         1 0 = 32
         1 1 = 64
+    [1] binop: bit pattern
+        0 0 = bitwise AND
+        0 1 = bitwise OR
+        1 0 = bitwise XOR
 
-    [1] Mode of operation.
+    [2] Mode of operation.
         0 = binary operation on stack:
             - pops the first value %1 as a right-hand side of the operator
             - pops the second value %2 as a left hand side of the operator
             - performs %1 {opt} %2 and pushes to stack
-        1 = left shift operation with immediate 24 bit (max value)
+        1 = left shift operation with immediate 22 bit (max value)
             - pops the first value %1 as a right-hand side of the operator
-            - uses 24 bit immediate value as %2. If the number of bits > 24, all other bits are interpreted as 0 
+            - uses 22 bit immediate value as %2.
             - performs %1 {opt} %2 and pushes to stack
 
 
@@ -521,14 +521,9 @@ sums_imm32: Sums signed values in immediate mode, 32 bits
 mulu64: Sums unsigned values popped from stack, 64 bits
 
 
-{opr}{n}       0   1   1   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0 
-              | opr               |nbits |[1] |[2]|immediate unsigned (max 16 bits)                             
+{opr}{n}       0   0   1   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0 
+              | opr               |nbits |operation  |[1]|[2]|immediate unsigned (max 16 bits)                             
     opr: bit pattern
-        0   1   0   1   0  = Sum
-        0   1   0   1   1  = Subtract
-        0   1   1   0   0  = Multiply
-        0   1   1   0   1  = Divide
-        0   1   1   1   0  = Power
     
     nbits {n}: bit pattern
         0 0 = 8
@@ -536,10 +531,17 @@ mulu64: Sums unsigned values popped from stack, 64 bits
         1 0 = 32
         1 1 = 64
 
-    [2] Signed or unsigned
+    operation: bit pattern
+        0  0  0 = Sum
+        0  0  1 = Subtract
+        0  1  0 = Multiply
+        0  1  1 = Divide
+        1  0  0 = Power
+
+    [1] Signed or unsigned
         0 = both sides of the operation are unsigned
         1 = both sides of the operation are signed
-   [2] Mode of operation.
+    [2] Mode of operation.
         0 = binary operation on stack:
             - pops the first value %2 as a right-hand side of the operator
             - pops the second value %1 as a left hand side of the operator
@@ -553,9 +555,9 @@ For bit shifts with constant values (that coud be given by 2 immediates), maybe 
 The most you can do is use mode 1 and push %1 to the stack with a pushimm if it fits in the instruction.
 
 
-BINARY INTEGER LOGIC FUNCTIONS
+BINARY INTEGER COMPARE FUNCTIONS
 
-Performs an arithmetic binary operation on integers. Pushes a byte to the stack 0x00 if false, 0x01 if true 
+Performs a compare operation on integers. Pushes a byte to the stack 0x00 if false, 0x01 if true 
 
 Operations can be:
 
@@ -579,14 +581,9 @@ eqs_imm32: Compare if 2 signed integer values are equal, taking an immediate 16 
 neu32: Compare if 2 unsigned integer values are NOT equal, taking both values from the stack.
 
 
-{opr}{n}       0   1   1   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0 
-              | opr               |nbits |[1] |[2]|immediate unsigned (max 16 bits)                             
+{opr}{n}       0   0   1   1   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0 
+              | opr               |nbits |operation  |[1] |[2]|immediate unsigned (max 16 bits)                             
     opr: bit pattern
-        0   1   1   1   1  = Equals
-        0   1   0   1   1  = Less than
-        0   1   1   0   0  = Less than on equals
-        0   1   1   0   1  = Greater than
-        0   1   1   1   0  = Greater than or equals
     
     nbits {n}: bit pattern
         0 0 = 8
@@ -594,10 +591,18 @@ neu32: Compare if 2 unsigned integer values are NOT equal, taking both values fr
         1 0 = 32
         1 1 = 64
 
-    [2] Signed or unsigned
+    operation: bit pattern
+        0  0  0 = Equals
+        0  0  1 = Not equals
+        0  1  0 = Less than
+        0  1  1 = Less than or equals
+        1  0  0 = Greater than
+        1  0  1 = Greater than or equals
+
+    [1] Signed or unsigned
         0 = both sides of the operation are unsigned
         1 = both sides of the operation are signed
-   [2] Mode of operation.
+    [2] Mode of operation.
         0 = binary operation on stack:
             - pops the first value %2 as a right-hand side of the operator
             - pops the second value %1 as a left hand side of the operator
@@ -632,21 +637,21 @@ These operations work as follows:
 This operation never works with immediate values. Values must be pushed to the stack.
 
 
-{opr}{n}       1   0   0   1   1   0   0  
-              | opr              |nbits  | unused                           
+{opr}{n}       0   1   0   0   0   0   0   0   0   0
+              | opr              |nbits  | operation |unused                           
     opr: bit pattern
-        0   1   1   1   1  = Float Sum
-        1   0   0   0   0  = Float Subtract
-        1   0   0   0   1  = Float Multiply
-        1   0   0   1   0  = Float Divide
-        1   0   0   1   1  = Float Power
-    
-    nbits {n}: bit pattern
-        0 0 = 8
-        0 1 = 16
-        1 0 = 32
-        1 1 = 64
 
+    nbits {n}: bit pattern
+        0 = 32
+        1 = 64
+
+    operation: bit pattern
+        0  0  0  = Float Sum
+        0  0  1  = Float Subtract
+        0  1  0  = Float Multiply
+        0  1  1  = Float Divide
+        1  0  0  = Float Power
+        
 
 BINARY FLOAT LOGIC FUNCTIONS
 
@@ -675,18 +680,19 @@ Mode of operation:
     - pops the second value %1 as a left hand side of the operator
     - performs %1 {opt} %2 and pushes to stack
 
-{opr}{n}       0   1   1   1   0   0   0   
-              | opr               |nbits | unused                         
-    opr: bit pattern
-        0   1   1   1   1  = Equals
-        0   1   0   1   1  = Less than
-        0   1   1   0   0  = Less than on equals
-        0   1   1   0   1  = Greater than
-        0   1   1   1   0  = Greater than or equals
-    
+{opr}{n}       0   1   0   0   1   0   0   0   0   0   
+              | opr              |nbits |operation   | unused                         
+    opr: bit pattern    
     nbits {n}: bit pattern
         1 0 = 32
         1 1 = 64
+    operation: bit pattern
+        0  0  0 = Equals
+        0  0  1 = Not equals
+        0  1  0 = Less than
+        0  1  1 = Less than or equals
+        1  0  0 = Greater than
+        1  0  1 = Greater than or equals
 
 
 FLOW CONTROL
@@ -699,8 +705,8 @@ PUSH REGISTER
 Pushes a control register value on the stack. 
 Size pushed is determined by the size of the control register, but in general they are 32 bits.
 
-push_reg     0   1   1   1   0   0   0   
-            | opr               |reg    |                    
+push_reg     0   1   0   1   0   0   0   
+            | opr              |reg    |                    
     opr: bit pattern
     reg: bit pattern
         0 0 = bp (function stack base pointer)
@@ -714,7 +720,7 @@ POP REGISTER
 Pops a value from the stack and saves into a control register.
 Size popped is determined by the size of the control register, but in general they are 32 bits.
 
-pop_reg       0   1   1   1   0   0   0   
+pop_reg       0   1   0   1   1   0   0   
             | opr               |reg    |                    
     opr: bit pattern
     reg: bit pattern
@@ -731,7 +737,7 @@ pop32
 pop8
 pop64
 
-{opr}{n}       1   0   0   1   1   0   0   ..
+{opr}{n}       0   1   1   0   0   0   0   ..
               | opr              |nbits  | unused                           
     opr: bit pattern
     nbits {n}: bit pattern
@@ -739,6 +745,19 @@ pop64
         0 1 = 16
         1 0 = 32
         1 1 = 64
+
+
+STACK OFFSET
+
+Sets the stack pointer N bytes away from the base pointer
+
+Syntax:
+stackoffset #{num bytes}
+
+{opr}{n}       0   1   1   0   1   0   0   ..
+              | opr              |num bytes                         
+    opr: bit pattern
+    num bytes {n}: immediate (max 27 bits)
 
 
 SPECIAL

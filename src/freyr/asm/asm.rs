@@ -2,6 +2,7 @@ use core::panic;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LoadStoreMode {
+    StackPop,
     Relative{ offset: i32},
     Immediate{ absolute_address: u32}
 }
@@ -11,7 +12,16 @@ pub enum IntegerArithmeticBinaryOp {
     Sum,
     Subtract,
     Multiply,
-    Divide
+    Divide, 
+    Power
+}
+
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum IntegerBitwiseBinaryOp {
+    And,
+    Or,
+    Xor
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -33,6 +43,12 @@ pub enum AssemblyInstruction {
     LoadAddress { bytes: u8, mode: LoadStoreMode},
     StoreAddress { bytes: u8, mode: LoadStoreMode},
     PushImmediate { bytes: u8, left_shift_16: bool, immediate: u16},
+    IntegerBitwiseBinaryOperation {
+        bytes: u8,
+        operation: IntegerArithmeticBinaryOp,
+        sign: SignFlag,
+        immediate: Option<u32>
+    },
     IntegerArithmeticBinaryOperation {
         bytes: u8,
         operation: IntegerArithmeticBinaryOp,
