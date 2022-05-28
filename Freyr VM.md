@@ -759,6 +759,35 @@ stackoffset #{num bytes}
     opr: bit pattern
     num bytes {n}: immediate (max 27 bits)
 
+CALL
+
+Pushes current IP + 4 to stack and changes IP to the operand provided, or from stack
+
+
+Syntax:
+call #{offset}
+
+{opr}{n}       0   1   1   1   0   0   0   ..
+              | opr              |src| operand bytes                         
+    opr: bit pattern
+    src: bit pattern
+      0 = from operand
+      1 = pop from stack
+    operand: instruction offset (max 26 bits, can address 128mb of code)
+
+
+RETURN
+
+Pops from stack, sets popped value as new IP
+
+
+Syntax:
+return
+
+{opr}{n}       0   1   1   1   1      ..
+              | opr               | unused                        
+    opr: bit pattern
+
 
 SPECIAL
 

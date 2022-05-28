@@ -212,6 +212,23 @@ impl<'a> InstructionDecoder<'a> {
                     control_register: (register_pattern as u8).into(),
                 };
             }
+            0b01100 => {
+                let (bytes_pattern, _) = self.layout.get_part("num bytes", self.instruction);
+                return Instruction::Pop { 
+                    bytes: (bytes_pattern as u8).into(),
+                };
+            }
+            0b01110 => {
+                let (source_pattern, _) = self.layout.get_part("source", self.instruction);
+                let (_, offset) = self.layout.get_part("offset", self.instruction);
+                return Instruction::Call { 
+                    source: (source_pattern as u8).into(),
+                    offset
+                };
+            }
+            0b01111 => {
+                return Instruction::Return;
+            }
            _ => {
                panic!("Not recognized: {inst:#05b}", inst = pseudoop as u8)
            }
@@ -271,18 +288,6 @@ mod tests {
         encoder::*
     };
 
-    #[test]
-    fn encode_decode_stackoffset() {
-        let encoder = LayoutHelper::new();
-        let encoded = encoder.begin_encode("stackoffset")
-            .encode("num bytes", 12347)
-            .make();
-
-        
-        let decoded = encoder.begin_decode(encoded).decode();
-
-        assert_eq!(decoded, Instruction::StackOffset { bytes: 12347 });
-    }
 
     #[test]
     fn encode_decode_push_immediate32_lshift16() {
@@ -783,5 +788,79 @@ mod tests {
             control_register: ControlRegister::InstructionPointer
         });
     }
+
+    #[test]
+    fn encode_decode_pop_stack() {
+        let encoder = LayoutHelper::new();
+        let encoded = encoder.begin_encode("pop")
+            .encode("num bytes", 8)
+            .make();
+        
+        let decoded = encoder.begin_decode(encoded).decode();
+
+        assert_eq!(decoded, Instruction::Pop { 
+            bytes: NumberOfBytes::Bytes8
+        });
+    }
+
+
+    #[test]
+    fn encode_decode_stackoffset() {
+        let encoder = LayoutHelper::new();
+        let encoded = encoder.begin_encode("stackoffset")
+            .encode("num bytes", 12347)
+            .make();
+
+        
+        let decoded = encoder.begin_decode(encoded).decode();
+
+        assert_eq!(decoded, Instruction::StackOffset { bytes: 12347 });
+    }
+
+
+    #[test]
+    fn encode_decode_call_from_operand() {
+        let encoder = LayoutHelper::new();
+        let encoded = encoder.begin_encode("call")
+            .encode("source", 0)
+            .encode("offset", 151)
+            .make();
+
+        let decoded = encoder.begin_decode(encoded).decode();
+
+        assert_eq!(decoded, Instruction::Call { 
+            source: CallAddressSource::FromOperand, 
+            offset: 151
+        });
+    }
+
+    #[test]
+    fn encode_decode_call_from_stack() {
+        let encoder = LayoutHelper::new();
+        let encoded = encoder.begin_encode("call")
+            .encode("source", 1)
+            .make();
+
+        let decoded = encoder.begin_decode(encoded).decode();
+
+        assert_eq!(decoded, Instruction::Call { 
+            source: CallAddressSource::PopFromStack, 
+            offset: 0
+        });
+    }
+
+
+    #[test]
+    fn encode_decode_return() {
+        let encoder = LayoutHelper::new();
+        let encoded = encoder.begin_encode("return")
+            .make();
+
+        let decoded = encoder.begin_decode(encoded).decode();
+
+        assert_eq!(decoded, Instruction::Return);
+    }
+
+
 
 }

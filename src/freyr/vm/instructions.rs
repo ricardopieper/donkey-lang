@@ -200,6 +200,23 @@ impl From<u8> for ControlRegister {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallAddressSource {
+    FromOperand = 0b0,
+    PopFromStack = 0b1
+}
+
+impl From<u8> for CallAddressSource {
+    fn from(u: u8) -> Self {
+        match u {
+            0b0 => Self::FromOperand,
+            0b1 => Self::PopFromStack,
+            _ => panic!("Cannot convert {u} to CallAddressSource")
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     Noop,
@@ -214,7 +231,10 @@ pub enum Instruction {
     FloatArithmetic { bytes: NumberOfBytes, operation: ArithmeticOperation },
     FloatCompare { bytes: NumberOfBytes, operation: CompareOperation },
     PushToRegister { control_register: ControlRegister },
-    PopIntoRegister { control_register: ControlRegister }
+    PopIntoRegister { control_register: ControlRegister },
+    Pop { bytes: NumberOfBytes },
+    Call { source: CallAddressSource, offset: u32 },
+    Return
 }
 
 
@@ -420,11 +440,6 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
     );
 
     table.add(layout!(
-        0b1101 "stackoffset",  
-        part!(27 bits, "num bytes", "offset from bp")
-    ));
-
-    table.add(layout!(
         0b00001 "push_imm",
         num_bits,
         part!(2 bits, "lshift", "amount of bits to shift left", 
@@ -573,6 +588,34 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
         register,
         unused!(24 bits)
     ));
+
+    table.add(layout!(
+        0b01100 "pop",
+        num_bits,
+        unused!(25 bits)
+    ));
+
+    table.add(layout!(
+        0b1101 "stackoffset",  
+        part!(27 bits, "num bytes", "offset from bp")
+    ));
+
+    table.add(layout!(
+        0b01110 "call",
+        part!(1 bit, "source", "pop from stack or use operand",
+            bit_pattern![
+                0 => "from operand",
+                1 => "pop from stack"
+            ]    
+        ),
+        part!(26 bits, "offset", "instruction offset")
+    ));
+    
+    table.add(layout!(
+        0b01111 "return",
+        unused!(27 bits)
+    ));
+
     
    
     validate_instruction_sizes(&table);
