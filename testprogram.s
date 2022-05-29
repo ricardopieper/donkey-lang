@@ -11,7 +11,7 @@
     push_imm32      5       
     push_imm32      0       
     loadaddr_rel32  bp+8    
-    loadaddr rel32  bp+0    
+    loadaddr_rel32  bp+0    
     push_reg        bp      
     call            some_function    
     pop_reg         bp      

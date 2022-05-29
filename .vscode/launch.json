@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["example.py"],
+            "args": ["asm", "testprogram.s"],
             "cwd": "${workspaceFolder}"
         },
         {

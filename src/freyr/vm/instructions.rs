@@ -16,11 +16,21 @@ impl From<u8> for LoadStoreAddressingMode {
             0b01 => Self::RelativeForward,
             0b10 => Self::RelativeBackward,
             0b11 => Self::Absolute,
-            _ => panic!("Cannot convert {u} to LoadStoreAddressingMode")
+            _ => panic!("Cannot convert {u} to LoadStoreAddressingMode"),
         }
     }
 }
 
+impl LoadStoreAddressingMode {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            LoadStoreAddressingMode::Stack => 0b00,
+            LoadStoreAddressingMode::RelativeForward => 0b01,
+            LoadStoreAddressingMode::RelativeBackward => 0b10,
+            LoadStoreAddressingMode::Absolute => 0b11,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NumberOfBytes {
@@ -30,6 +40,16 @@ pub enum NumberOfBytes {
     Bytes8 = 0b11,
 }
 
+impl NumberOfBytes {
+    pub fn get_bytes(&self) -> u8 {
+        match self {
+            NumberOfBytes::Bytes1 => 1,
+            NumberOfBytes::Bytes2 => 2,
+            NumberOfBytes::Bytes4 => 4,
+            NumberOfBytes::Bytes8 => 8,
+        }
+    }
+}
 
 impl From<u8> for NumberOfBytes {
     fn from(u: u8) -> Self {
@@ -38,7 +58,7 @@ impl From<u8> for NumberOfBytes {
             0b01 => Self::Bytes2,
             0b10 => Self::Bytes4,
             0b11 => Self::Bytes8,
-            _ => panic!("Cannot convert {u} to NumberOfBytes")
+            _ => panic!("Cannot convert {u} to NumberOfBytes"),
         }
     }
 }
@@ -46,7 +66,7 @@ impl From<u8> for NumberOfBytes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperationMode {
     PureStack = 0b00,
-    StackAndImmediate = 0b01
+    StackAndImmediate = 0b01,
 }
 
 impl From<u8> for OperationMode {
@@ -54,7 +74,16 @@ impl From<u8> for OperationMode {
         match u {
             0b00 => Self::PureStack,
             0b01 => Self::StackAndImmediate,
-            _ => panic!("Cannot convert {u} to OperationMode")
+            _ => panic!("Cannot convert {u} to OperationMode"),
+        }
+    }
+}
+
+impl OperationMode {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            OperationMode::PureStack => 0b00,
+            OperationMode::StackAndImmediate => 0b01,
         }
     }
 }
@@ -67,23 +96,6 @@ pub enum LeftShift {
     Shift48 = 0b11,
 }
 
-impl From<u8> for ShiftDirection {
-    fn from(u: u8) -> Self {
-        match u {
-            0b00 => Self::Left,
-            0b01 => Self::Right,
-            _ => panic!("Cannot convert {u} to ShiftDirection")
-        }
-    }
-}
-
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ShiftDirection {
-    Left = 0b00,
-    Right = 0b01,
-}
-
 impl From<u8> for LeftShift {
     fn from(u: u8) -> Self {
         match u {
@@ -91,7 +103,43 @@ impl From<u8> for LeftShift {
             0b01 => Self::Shift16,
             0b10 => Self::Shift32,
             0b11 => Self::Shift48,
-            _ => panic!("Cannot convert {u} to LoadStoreAddressingMode")
+            _ => panic!("Cannot convert {u} to LoadStoreAddressingMode"),
+        }
+    }
+}
+
+impl LeftShift {
+    pub fn get_shift_size(&self) -> u8 {
+        match self {
+            LeftShift::None => 0,
+            LeftShift::Shift16 => 16,
+            LeftShift::Shift32 => 32,
+            LeftShift::Shift48 => 48,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShiftDirection {
+    Left = 0b00,
+    Right = 0b01,
+}
+
+impl From<u8> for ShiftDirection {
+    fn from(u: u8) -> Self {
+        match u {
+            0b00 => Self::Left,
+            0b01 => Self::Right,
+            _ => panic!("Cannot convert {u} to ShiftDirection"),
+        }
+    }
+}
+
+impl ShiftDirection {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            ShiftDirection::Left => 0b00,
+            ShiftDirection::Right => 0b01,
         }
     }
 }
@@ -100,7 +148,7 @@ impl From<u8> for LeftShift {
 pub enum BitwiseOperation {
     And = 0b00,
     Or = 0b01,
-    Xor = 0b10
+    Xor = 0b10,
 }
 
 impl From<u8> for BitwiseOperation {
@@ -109,11 +157,20 @@ impl From<u8> for BitwiseOperation {
             0b00 => Self::And,
             0b01 => Self::Or,
             0b10 => Self::Xor,
-            _ => panic!("Cannot convert {u} to BitwiseOperation")
+            _ => panic!("Cannot convert {u} to BitwiseOperation"),
         }
     }
 }
 
+impl BitwiseOperation {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            BitwiseOperation::And => 0b00,
+            BitwiseOperation::Or => 0b01,
+            BitwiseOperation::Xor => 0b10,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArithmeticOperation {
@@ -132,11 +189,22 @@ impl From<u8> for ArithmeticOperation {
             0b010 => Self::Multiply,
             0b011 => Self::Divide,
             0b100 => Self::Power,
-            _ => panic!("Cannot convert {u} to ArithmeticOperation")
+            _ => panic!("Cannot convert {u} to ArithmeticOperation"),
         }
     }
 }
 
+impl ArithmeticOperation {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            ArithmeticOperation::Sum => 0b000,
+            ArithmeticOperation::Subtract => 0b001,
+            ArithmeticOperation::Multiply => 0b010,
+            ArithmeticOperation::Divide => 0b011,
+            ArithmeticOperation::Power => 0b100,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompareOperation {
@@ -145,7 +213,7 @@ pub enum CompareOperation {
     LessThan = 0b010,
     LessThanOrEquals = 0b011,
     GreaterThan = 0b100,
-    GreaterThanOrEquals = 0b101
+    GreaterThanOrEquals = 0b101,
 }
 
 impl From<u8> for CompareOperation {
@@ -157,11 +225,23 @@ impl From<u8> for CompareOperation {
             0b011 => Self::LessThanOrEquals,
             0b100 => Self::GreaterThan,
             0b101 => Self::GreaterThanOrEquals,
-            _ => panic!("Cannot convert {u} to CompareOperation")
+            _ => panic!("Cannot convert {u} to CompareOperation"),
         }
     }
 }
 
+impl CompareOperation {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            CompareOperation::Equals => 0b000,
+            CompareOperation::NotEquals => 0b001,
+            CompareOperation::LessThan => 0b010,
+            CompareOperation::LessThanOrEquals => 0b011,
+            CompareOperation::GreaterThan => 0b100,
+            CompareOperation::GreaterThanOrEquals => 0b101,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignFlag {
@@ -172,22 +252,38 @@ pub enum SignFlag {
 impl From<u8> for SignFlag {
     fn from(u: u8) -> Self {
         match u {
-            0b000 => Self::Unsigned,
-            0b001 => Self::Signed,
-            _ => panic!("Cannot convert {u} to SignFlag")
+            0b0 => Self::Unsigned,
+            0b1 => Self::Signed,
+            _ => panic!("Cannot convert {u} to SignFlag"),
         }
     }
 }
 
-
+impl SignFlag {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            SignFlag::Unsigned => 0b0,
+            SignFlag::Signed => 0b1,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlRegister {
     BasePointer = 0b00,
     StackPointer = 0b01,
-    InstructionPointer = 0b10
+    InstructionPointer = 0b10,
 }
 
+impl ControlRegister {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            ControlRegister::BasePointer => 0b00,
+            ControlRegister::StackPointer => 0b01,
+            ControlRegister::InstructionPointer => 0b10,
+        }
+    }
+}
 
 impl From<u8> for ControlRegister {
     fn from(u: u8) -> Self {
@@ -195,16 +291,15 @@ impl From<u8> for ControlRegister {
             0b00 => Self::BasePointer,
             0b01 => Self::StackPointer,
             0b10 => Self::InstructionPointer,
-            _ => panic!("Cannot convert {u} to ControlRegister")
+            _ => panic!("Cannot convert {u} to ControlRegister"),
         }
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallAddressSource {
     FromOperand = 0b0,
-    PopFromStack = 0b1
+    PopFromStack = 0b1,
 }
 
 impl From<u8> for CallAddressSource {
@@ -212,7 +307,16 @@ impl From<u8> for CallAddressSource {
         match u {
             0b0 => Self::FromOperand,
             0b1 => Self::PopFromStack,
-            _ => panic!("Cannot convert {u} to CallAddressSource")
+            _ => panic!("Cannot convert {u} to CallAddressSource"),
+        }
+    }
+}
+
+impl CallAddressSource {
+    pub fn get_bit_pattern(&self) -> u8 {
+        match self {
+            CallAddressSource::FromOperand => 0b00,
+            CallAddressSource::PopFromStack => 0b01,
         }
     }
 }
@@ -220,29 +324,79 @@ impl From<u8> for CallAddressSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     Noop,
-    StackOffset{ bytes: u32},
-    PushImmediate { bytes: NumberOfBytes, lshift: LeftShift, immediate: u32 },
-    LoadAddress { bytes: NumberOfBytes, mode: LoadStoreAddressingMode, operand: u32 },
-    StoreAddress { bytes: NumberOfBytes, mode: LoadStoreAddressingMode, operand: u32 },
-    BitShift { bytes: NumberOfBytes, direction: ShiftDirection, mode: OperationMode, operand: u8 },
-    Bitwise { bytes: NumberOfBytes, operation: BitwiseOperation, mode: OperationMode, operand: u32 },
-    IntegerArithmetic { bytes: NumberOfBytes, operation: ArithmeticOperation, sign: SignFlag, mode: OperationMode, operand: u16 },
-    IntegerCompare { bytes: NumberOfBytes, operation: CompareOperation, sign: SignFlag, mode: OperationMode, operand: u32 },
-    FloatArithmetic { bytes: NumberOfBytes, operation: ArithmeticOperation },
-    FloatCompare { bytes: NumberOfBytes, operation: CompareOperation },
-    PushToRegister { control_register: ControlRegister },
-    PopIntoRegister { control_register: ControlRegister },
-    Pop { bytes: NumberOfBytes },
-    Call { source: CallAddressSource, offset: u32 },
-    Return
+    StackOffset {
+        bytes: u32,
+    },
+    PushImmediate {
+        bytes: NumberOfBytes,
+        lshift: LeftShift,
+        immediate: u16,
+    },
+    LoadAddress {
+        bytes: NumberOfBytes,
+        mode: LoadStoreAddressingMode,
+        operand: u32,
+    },
+    StoreAddress {
+        bytes: NumberOfBytes,
+        mode: LoadStoreAddressingMode,
+        operand: u32,
+    },
+    BitShift {
+        bytes: NumberOfBytes,
+        direction: ShiftDirection,
+        mode: OperationMode,
+        operand: u8,
+    },
+    Bitwise {
+        bytes: NumberOfBytes,
+        operation: BitwiseOperation,
+        sign: SignFlag,
+        mode: OperationMode,
+        operand: u32,
+    },
+    IntegerArithmetic {
+        bytes: NumberOfBytes,
+        operation: ArithmeticOperation,
+        sign: SignFlag,
+        mode: OperationMode,
+        operand: u16,
+    },
+    IntegerCompare {
+        bytes: NumberOfBytes,
+        operation: CompareOperation,
+        sign: SignFlag,
+        mode: OperationMode,
+        operand: u32,
+    },
+    FloatArithmetic {
+        bytes: NumberOfBytes,
+        operation: ArithmeticOperation,
+    },
+    FloatCompare {
+        bytes: NumberOfBytes,
+        operation: CompareOperation,
+    },
+    PushToRegister {
+        control_register: ControlRegister,
+    },
+    PopIntoRegister {
+        control_register: ControlRegister,
+    },
+    Pop {
+        bytes: NumberOfBytes,
+    },
+    Call {
+        source: CallAddressSource,
+        offset: u32,
+    },
+    Return,
 }
-
-
 
 pub struct BitLayout {
     pub instruction_pseudoop: u8,
     pub layout: Vec<BitLayoutPart>,
-    pub name: String
+    pub name: String,
 }
 
 impl BitLayout {
@@ -257,52 +411,51 @@ impl BitLayout {
                 match &layout_item.layout_type {
                     PartType::BitPattern(patterns) => {
                         //find in patterns, return
-                        let found_pattern = patterns.iter().find(|x| x.pattern == extracted).unwrap();
+                        let found_pattern =
+                            patterns.iter().find(|x| x.pattern == extracted).unwrap();
                         return (found_pattern.pattern, found_pattern.value);
-                    },
+                    }
                     PartType::Immediate => {
                         return (extracted, extracted);
-                    },
+                    }
                 }
             }
             skipped_bits += layout_item.length
         }
         panic!("Failed to get pattern {name} from bits {value:#034b}");
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitPattern {
     pub value: u32,
     pub pattern: u32,
-    pub description: String
+    pub description: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PartType {
     BitPattern(Vec<BitPattern>),
-    Immediate
+    Immediate,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitLayoutPart {
     pub length: u8,
     pub name: String,
     pub description: String,
-    pub layout_type: PartType
+    pub layout_type: PartType,
 }
-
 
 fn validate_instruction_sizes(table: &InstructionTable) {
     for layout in table.table.values() {
-
-        let sum: u8 = (5 as u8) + layout.layout.iter().map(|x|x.length as u8).sum::<u8>() as u8;
+        let sum: u8 = (5 as u8) + layout.layout.iter().map(|x| x.length as u8).sum::<u8>() as u8;
         if sum != 32 {
-            panic!("Instruction {ins} has {defined} bits defined instead of required 32!", 
+            panic!(
+                "Instruction {ins} has {defined} bits defined instead of required 32!",
                 ins = layout.name,
-                defined = sum);
+                defined = sum
+            );
         }
     }
 }
@@ -321,30 +474,34 @@ macro_rules! bit_pattern {
     }
 }
 
-
-
 pub struct InstructionTable {
     pub table: HashMap<String, BitLayout>,
-    pub pseudoops: HashMap<u8, String>
+    pub pseudoops: HashMap<u8, String>,
 }
 
 impl InstructionTable {
     pub fn new() -> InstructionTable {
-        Self { table: HashMap::new(), pseudoops: HashMap::new() }
+        Self {
+            table: HashMap::new(),
+            pseudoops: HashMap::new(),
+        }
     }
 
     pub fn add(&mut self, layout: BitLayout) {
-
-        if self.pseudoops.contains_key(&(layout.instruction_pseudoop as u8)) {
-            panic!("Instruction already exists> {instruction_pattern:#034b}", instruction_pattern = layout.instruction_pseudoop);
+        if self
+            .pseudoops
+            .contains_key(&(layout.instruction_pseudoop as u8))
+        {
+            panic!(
+                "Instruction already exists> {instruction_pattern:#034b}",
+                instruction_pattern = layout.instruction_pseudoop
+            );
         }
-        self.pseudoops.insert(layout.instruction_pseudoop, layout.name.clone());
+        self.pseudoops
+            .insert(layout.instruction_pseudoop, layout.name.clone());
         self.table.insert(layout.name.clone(), layout);
-
     }
-
 }
-
 
 macro_rules! bit_pattern_values {
     ($(($pattern:expr, $value:expr) => $name:expr), *) => {
@@ -371,9 +528,6 @@ macro_rules! bit_pattern_values {
     }
 
 }
-
-
-
 
 macro_rules! part {
     ($length:literal bit, $name:literal, $desc:literal, $layout:expr) => {
@@ -406,19 +560,18 @@ macro_rules! unused {
 
 macro_rules! operand {
     ($length:literal bits) => {
-        
+
         part!($length bits, "operand", "operand", PartType::Immediate)
-        
+
     };
 }
-
 
 macro_rules! layout {
     ($pattern:literal $name:literal $(, $layout:expr)*) => {
         BitLayout {
             instruction_pseudoop: $pattern,
             name: $name.into(),
-            layout: vec![ 
+            layout: vec![
                $( $layout.clone(), )*
             ]
         }
@@ -442,7 +595,7 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
     table.add(layout!(
         0b00001 "push_imm",
         num_bits,
-        part!(2 bits, "lshift", "amount of bits to shift left", 
+        part!(2 bits, "lshift", "amount of bits to shift left",
             bit_pattern_values![
                 (0b00, 0) => "No shift",
                 (0b01, 16) => "16 bit left shift",
@@ -464,7 +617,7 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
     );
 
     let load_store_operand = part!(23 bits, "operand", "address or offset");
-   
+
     table.add(layout!(
         0b00010 "loadaddr",
         num_bits, addressing_mode, load_store_operand
@@ -474,7 +627,7 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
         0b00011 "storeaddr",
         num_bits, addressing_mode, load_store_operand
     ));
-   
+
     let binary_op_mode = part!(
         1 bit, "mode", "pure stack or stack and immediate",
         bit_pattern![
@@ -485,10 +638,10 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
 
     table.add(layout!(
         0b00100 "shift",
-        num_bits, 
+        num_bits,
         part!(1 bit, "direction", "left 0 or right 1",
             bit_pattern![
-                0b00 => "left", 
+                0b00 => "left",
                 0b01 => "right"
             ]
         ),
@@ -497,9 +650,18 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
         unused!(18 bits)
     ));
 
+    let sign = part!(1 bit, "sign", "signed or unsigned",
+    bit_pattern![
+        0 => "unsigned", 1 => "signed"
+    ]);
+
     table.add(layout!(
         0b00101 "bitwise",
-        num_bits, 
+        num_bits,
+        part!(1 bit, "sign", "signed or unsigned, signed keeps the signal, unsigned does not",
+            bit_pattern![
+                0 => "unsigned", 1 => "signed"
+            ]),
         part!(2 bits, "operation", "and, or, xor",
             bit_pattern![
                 0b00 => "and",
@@ -508,13 +670,8 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
             ]
         ),
         binary_op_mode,
-        part!(22 bits, "operand", "operand 22 bits")
+        part!(21 bits, "operand", "operand 22 bits")
     ));
-
-    let sign = part!(1 bit, "sign", "signed or unsigned",
-        bit_pattern![
-            0 => "unsigned", 1 => "signed"
-        ]);
 
     let arith_ops = part!(3 bits, "operation", "sum, subtract, multiply, divide or power",
         bit_pattern![
@@ -539,7 +696,7 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
 
     table.add(layout!(
         0b00110 "integer_binary_op",
-        num_bits, 
+        num_bits,
         arith_ops,
         sign,
         binary_op_mode,
@@ -549,7 +706,7 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
 
     table.add(layout!(
         0b00111 "integer_compare",
-        num_bits, 
+        num_bits,
         compare_ops,
         sign,
         binary_op_mode,
@@ -558,18 +715,17 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
 
     table.add(layout!(
         0b01000 "float_binary_op",
-        num_bits, 
+        num_bits,
         arith_ops,
         unused!(22 bits)
     ));
 
     table.add(layout!(
         0b01001 "float_compare_op",
-        num_bits, 
+        num_bits,
         compare_ops,
         unused!(22 bits)
     ));
-
 
     let register = part!(3 bits, "register", "ip, sp or ip",
          bit_pattern![
@@ -596,7 +752,7 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
     ));
 
     table.add(layout!(
-        0b1101 "stackoffset",  
+        0b1101 "stackoffset",
         part!(27 bits, "num bytes", "offset from bp")
     ));
 
@@ -606,21 +762,17 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
             bit_pattern![
                 0 => "from operand",
                 1 => "pop from stack"
-            ]    
+            ]
         ),
         part!(26 bits, "offset", "instruction offset")
     ));
-    
+
     table.add(layout!(
         0b01111 "return",
         unused!(27 bits)
     ));
 
-    
-   
     validate_instruction_sizes(&table);
 
     return table;
 }
-
-

@@ -1,65 +1,99 @@
 use core::panic;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum LoadStoreMode {
+pub enum AsmLoadStoreMode {
     StackPop,
-    Relative{ offset: i32},
-    Immediate{ absolute_address: u32}
+    Relative { offset: i32 },
+    Immediate { absolute_address: u32 },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum IntegerArithmeticBinaryOp {
+pub enum AsmArithmeticBinaryOp {
     Sum,
     Subtract,
     Multiply,
-    Divide, 
-    Power
+    Divide,
+    Power,
 }
 
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum IntegerBitwiseBinaryOp {
+pub enum AsmIntegerBitwiseBinaryOp {
     And,
     Or,
-    Xor
+    Xor,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum SignFlag {
+pub enum AsmIntegerCompareBinaryOp {
+    Equals,
+    NotEquals,
+    LessThan,
+    LessThanOrEquals,
+    GreaterThan,
+    GreaterThanOrEquals,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AsmSignFlag {
     Signed,
-    Unsigned
+    Unsigned,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ControlRegister {
+pub enum AsmControlRegister {
     BasePointer,
     StackPointer,
-    InstructionPointer
+    InstructionPointer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssemblyInstruction {
-    StackOffset{ bytes: u32 },
-    LoadAddress { bytes: u8, mode: LoadStoreMode},
-    StoreAddress { bytes: u8, mode: LoadStoreMode},
-    PushImmediate { bytes: u8, left_shift_16: bool, immediate: u16},
+    StackOffset {
+        bytes: u32,
+    },
+    LoadAddress {
+        bytes: u8,
+        mode: AsmLoadStoreMode,
+    },
+    StoreAddress {
+        bytes: u8,
+        mode: AsmLoadStoreMode,
+    },
+    PushImmediate {
+        bytes: u8,
+        shift_size: u8,
+        immediate: u16,
+    },
     IntegerBitwiseBinaryOperation {
         bytes: u8,
-        operation: IntegerArithmeticBinaryOp,
-        sign: SignFlag,
-        immediate: Option<u32>
+        operation: AsmIntegerBitwiseBinaryOp,
+        sign: AsmSignFlag,
+        immediate: Option<u32>,
     },
     IntegerArithmeticBinaryOperation {
         bytes: u8,
-        operation: IntegerArithmeticBinaryOp,
-        sign: SignFlag,
-        immediate: Option<u32>
+        operation: AsmArithmeticBinaryOp,
+        sign: AsmSignFlag,
+        immediate: Option<u32>,
     },
-    PopRegister {register: ControlRegister},
-    PushRegister{register: ControlRegister},
-    PopBytes { bytes: u8},
-    UnresolvedCall {label: String},
-    Call { offset: u32},
-    Label {label: String},
-    Return
+    PopRegister {
+        register: AsmControlRegister,
+    },
+    PushRegister {
+        register: AsmControlRegister,
+    },
+    PopBytes {
+        bytes: u8,
+    },
+    UnresolvedCall {
+        label: String,
+    },
+    Call {
+        offset: u32,
+    },
+    CallFromStack,
+    Label {
+        label: String,
+    },
+    Return,
 }

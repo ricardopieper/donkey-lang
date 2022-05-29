@@ -1,6 +1,15 @@
-use super::asm::{AssemblyInstruction, LoadStoreMode, IntegerArithmeticBinaryOp, SignFlag, ControlRegister};
+use crate::freyr::{
+    asm::asm::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
+    vm::instructions::{
+        ArithmeticOperation, BitwiseOperation, CallAddressSource, CompareOperation,
+        ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes,
+        OperationMode, SignFlag,
+    },
+};
 
-
+use super::asm::{
+    AsmArithmeticBinaryOp, AsmControlRegister, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction,
+};
 
 fn split_in_whitespace_tab_etc_ignore_comment(asm_line: &str) -> Vec<String> {
     let mut all_parts: Vec<String> = vec![String::new()];
@@ -19,7 +28,6 @@ fn split_in_whitespace_tab_etc_ignore_comment(asm_line: &str) -> Vec<String> {
         last_was_unimportant = false;
         let current_buffer = all_parts.last_mut().unwrap();
         current_buffer.push(c);
-
     }
     return all_parts;
 }
@@ -28,7 +36,7 @@ fn split_instruction_mnemonic(mnemonic: &str) -> Vec<String> {
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum CurrentPart {
         String,
-        Number
+        Number,
     }
     let mut current = CurrentPart::String;
     let mut all_parts: Vec<String> = vec![String::new()];
@@ -38,13 +46,10 @@ fn split_instruction_mnemonic(mnemonic: &str) -> Vec<String> {
                 current = CurrentPart::Number;
                 all_parts.push(String::new());
             }
-            
-        }
-        else if c == '_' {
+        } else if c == '_' {
             all_parts.push(String::new());
             continue;
-        }
-        else {
+        } else {
             if current != CurrentPart::String {
                 current = CurrentPart::String;
                 all_parts.push(String::new());
@@ -56,181 +61,188 @@ fn split_instruction_mnemonic(mnemonic: &str) -> Vec<String> {
     return all_parts;
 }
 
-fn parse_asm_line(asm_line: &str) -> Option<AssemblyInstruction> {
+fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
     let splitted = split_in_whitespace_tab_etc_ignore_comment(asm_line);
     if splitted.len() == 1 && splitted[0] == "" {
-        return None
+        return None;
     }
 
     if splitted[0].ends_with(":") {
         return Some(AssemblyInstruction::Label {
-            label: splitted[0].replace(":", "")
-        })
+            label: splitted[0].replace(":", ""),
+        });
     }
 
     let mnemonics = split_instruction_mnemonic(splitted[0].to_lowercase().as_str());
-    let mnems_str_vec = mnemonics
-        .iter()
-        .map(|x| x.as_str())
-        .collect::<Vec<_>>();
+    let mnems_str_vec = mnemonics.iter().map(|x| x.as_str()).collect::<Vec<_>>();
 
     let mnems_str = mnems_str_vec.as_slice();
-
-
-    println!("menms: {:?}", mnems_str);
 
     Some(match mnems_str {
         ["stackoffset"] => {
             let arg = splitted[1].parse().unwrap();
             AssemblyInstruction::StackOffset { bytes: arg }
         }
-        ["push", "imm", size]  => {
+        ["push", "imm", size] => {
             let bytes = size.parse::<u8>().unwrap() / 8;
             let immediate = splitted[1].parse().unwrap();
-            let left_shift = splitted.len() > 2 && splitted[2] == "<<16";
-            
+            let left_shift = splitted.len() > 2 && splitted[2].contains("<<");
+
+            let shift_size = if left_shift {
+                splitted[2].replace("<<", "").parse().unwrap()
+            } else {
+                0
+            };
+
             AssemblyInstruction::PushImmediate {
-                bytes: bytes, 
+                bytes: bytes,
                 immediate: immediate,
-                left_shift_16: left_shift }
+                shift_size: shift_size,
+            }
         }
         ["storeaddr", rest @ ..] => {
-
             let (bytes, lsm) = match rest {
                 ["rel", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     if !splitted[1].contains("bp") {
-                        panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data");
+                        panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
                     }
                     if !splitted[1].contains("+") && !splitted[1].contains("-") {
-                        panic!("Please say whether the offset in storeaddr is positive or negative.");
+                        panic!("Please say whether the offset in storeaddr is positive or negative at line {line}");
                     }
                     let remove_bp = splitted[1].replace("bp", "");
                     let offset = remove_bp.parse().unwrap();
-                    (bytes, LoadStoreMode::Relative { offset: offset } )
-                },
+                    (bytes, AsmLoadStoreMode::Relative { offset: offset })
+                }
                 ["imm", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     let address = splitted[1].parse::<u32>().unwrap();
-                    
-                    (bytes, LoadStoreMode::Immediate { absolute_address: address } )
-                },
+
+                    (
+                        bytes,
+                        AsmLoadStoreMode::Immediate {
+                            absolute_address: address,
+                        },
+                    )
+                }
                 [size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
-                  
-                    (bytes, LoadStoreMode::StackPop)
-                
+
+                    (bytes, AsmLoadStoreMode::StackPop)
                 }
-                _ => panic!("Could not parse instruction loadaddr {rest:?}")
+                _ => panic!("Could not parse instruction storeaddr {rest:?} at line {line}"),
             };
             AssemblyInstruction::StoreAddress {
-                bytes: bytes, 
-                mode: lsm
+                bytes: bytes,
+                mode: lsm,
             }
         }
-        
-        ["loadaddr", rest @ ..] => {
 
+        ["loadaddr", rest @ ..] => {
             let (bytes, lsm) = match &rest {
                 ["rel", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     if !splitted[1].contains("bp") {
-                        panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data");
+                        panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
                     }
                     if !splitted[1].contains("+") && !splitted[1].contains("-") {
-                        panic!("Please say whether the offset in storeaddr is positive or negative.");
+                        panic!("Please say whether the offset in storeaddr is positive or negative at line {line}");
                     }
                     let remove_bp = splitted[1].replace("bp", "");
                     let offset = remove_bp.parse().unwrap();
-                    (bytes, LoadStoreMode::Relative { offset: offset } )
-                },
+                    (bytes, AsmLoadStoreMode::Relative { offset: offset })
+                }
                 ["imm", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     let address = splitted[1].parse::<u32>().unwrap();
-                    
-                    (bytes, LoadStoreMode::Immediate { absolute_address: address } )
-                },
+
+                    (
+                        bytes,
+                        AsmLoadStoreMode::Immediate {
+                            absolute_address: address,
+                        },
+                    )
+                }
                 [size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
-                    (bytes, LoadStoreMode::StackPop)
-                
+                    (bytes, AsmLoadStoreMode::StackPop)
                 }
-                _ => panic!("Could not parse instruction loadaddr {rest:?}")
+                _ => panic!("Could not parse instruction loadaddr {rest:?} at line {line}"),
             };
             AssemblyInstruction::LoadAddress {
-                bytes: bytes, 
-                mode: lsm
+                bytes: bytes,
+                mode: lsm,
             }
         }
-       
-        ["sums", "32"] => {
-            AssemblyInstruction::IntegerArithmeticBinaryOperation { 
-                bytes: 4, 
-                operation: IntegerArithmeticBinaryOp::Sum, 
-                sign: SignFlag::Signed,
-                immediate: None
-            }
-        }
-        ["muls","32"] => {
-            AssemblyInstruction::IntegerArithmeticBinaryOperation { 
-                bytes: 4, 
-                operation: IntegerArithmeticBinaryOp::Multiply, 
-                sign: SignFlag::Signed ,
-                immediate: None
-            }
-        }
-        ["divs","imm","32"] => {
 
+        ["sums", "32"] => AssemblyInstruction::IntegerArithmeticBinaryOperation {
+            bytes: 4,
+            operation: AsmArithmeticBinaryOp::Sum,
+            sign: AsmSignFlag::Signed,
+            immediate: None,
+        },
+        ["muls", "32"] => AssemblyInstruction::IntegerArithmeticBinaryOperation {
+            bytes: 4,
+            operation: AsmArithmeticBinaryOp::Multiply,
+            sign: AsmSignFlag::Signed,
+            immediate: None,
+        },
+        ["divs", "imm", "32"] => {
             let immediate = splitted[1].parse().unwrap();
 
-            AssemblyInstruction::IntegerArithmeticBinaryOperation { 
-                bytes: 4, 
-                operation: IntegerArithmeticBinaryOp::Divide, 
-                sign: SignFlag::Signed ,
-                immediate: Some(immediate)
+            AssemblyInstruction::IntegerArithmeticBinaryOperation {
+                bytes: 4,
+                operation: AsmArithmeticBinaryOp::Divide,
+                sign: AsmSignFlag::Signed,
+                immediate: Some(immediate),
             }
         }
         ["pop", "reg"] => {
             let register = match splitted[1].as_str() {
-                "bp" => ControlRegister::BasePointer,
-                "ip" => ControlRegister::InstructionPointer,
-                "sp" => ControlRegister::StackPointer,
-                _ => panic!("control register not found, invalid instruction: {splitted:?}")
+                "bp" => AsmControlRegister::BasePointer,
+                "ip" => AsmControlRegister::InstructionPointer,
+                "sp" => AsmControlRegister::StackPointer,
+                _ => panic!(
+                    "control register not found, invalid instruction: {splitted:?} at line {line}"
+                ),
             };
 
-            AssemblyInstruction::PopRegister { 
-                register: register,
-            }
+            AssemblyInstruction::PopRegister { register: register }
         }
-        ["push","reg"] => {
+        ["push", "reg"] => {
             let register = match splitted[1].as_str() {
-                "bp" => ControlRegister::BasePointer,
-                "ip" => ControlRegister::InstructionPointer,
-                "sp" => ControlRegister::StackPointer,
-                _ => panic!("control register not found, invalid instruction: {splitted:?}")
+                "bp" => AsmControlRegister::BasePointer,
+                "ip" => AsmControlRegister::InstructionPointer,
+                "sp" => AsmControlRegister::StackPointer,
+                _ => panic!(
+                    "control register not found, invalid instruction: {splitted:?} at line {line}"
+                ),
             };
 
-            AssemblyInstruction::PushRegister { 
-                register: register,
-            }
+            AssemblyInstruction::PushRegister { register: register }
         }
-        ["call"] => {
-            AssemblyInstruction::UnresolvedCall {label: splitted[1].to_string() }
+        ["pop", size] => {
+            let bytes = size.parse::<u8>().unwrap() / 8;
+            AssemblyInstruction::PopBytes { bytes }
         }
-        ["return"] => {
-            AssemblyInstruction::Return
+        ["call"] => AssemblyInstruction::UnresolvedCall {
+            label: splitted[1].to_string(),
+        },
+        ["return"] => AssemblyInstruction::Return,
+        _ => {
+            panic!("Freyr assembly instruction not recognized at line {line}: {asm_line}")
         }
-        _ => {panic!("Freyr assembly instruction not recognized: {asm_line}")}
     })
 }
 
 pub fn parse_asm(asm: &str) -> Vec<AssemblyInstruction> {
     let lines = asm.lines();
-    let parsed = lines.into_iter().map(parse_asm_line);
-    return parsed.into_iter()
-        .filter(|x|x.is_some())
-        .map(|x| x.unwrap())
-        .collect()
+    let parsed = lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, x)| parse_asm_line(i as u32 + 1, x));
+
+    return parsed.filter(|x| x.is_some()).map(|x| x.unwrap()).collect();
 }
 
 pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction> {
@@ -241,9 +253,9 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
     for instruction in instructions {
         match instruction {
             AssemblyInstruction::Label { label } => {
-                label_offsets.insert(label.clone(), current_instruction_index );
-            },
-            _ => {  
+                label_offsets.insert(label.clone(), current_instruction_index);
+            }
+            _ => {
                 current_instruction_index = current_instruction_index + 1;
             }
         }
@@ -253,24 +265,197 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
         match instruction {
             AssemblyInstruction::Label { .. } => {
                 continue; //ignore labels
-            },
-            AssemblyInstruction::UnresolvedCall { label, .. } => {  
+            }
+            AssemblyInstruction::UnresolvedCall { label, .. } => {
                 let offset = label_offsets.get(label);
                 current_instruction_index = current_instruction_index + 1;
-                resolved_instructions.push(AssemblyInstruction::Call { 
-                    offset: *offset.unwrap() 
+                resolved_instructions.push(AssemblyInstruction::Call {
+                    offset: *offset.unwrap(),
                 })
-            },
-            _ => {
-                resolved_instructions.push(instruction.clone())
             }
+            _ => resolved_instructions.push(instruction.clone()),
         }
     }
 
     return resolved_instructions;
 }
 
+pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instruction> {
+    fn load_store(ls: AsmLoadStoreMode) -> (LoadStoreAddressingMode, u32) {
+        match ls {
+            AsmLoadStoreMode::StackPop => (LoadStoreAddressingMode::Stack, 0),
+            AsmLoadStoreMode::Relative { offset } => {
+                if offset > 0 {
+                    (LoadStoreAddressingMode::RelativeForward, offset as u32)
+                } else {
+                    (
+                        LoadStoreAddressingMode::RelativeBackward,
+                        offset.abs() as u32,
+                    )
+                }
+            }
+            AsmLoadStoreMode::Immediate { absolute_address } => {
+                (LoadStoreAddressingMode::Absolute, absolute_address)
+            }
+        }
+    }
 
+    fn num_bytes(bytes: &u8) -> NumberOfBytes {
+        match bytes {
+            1 => NumberOfBytes::Bytes1,
+            2 => NumberOfBytes::Bytes2,
+            4 => NumberOfBytes::Bytes4,
+            8 => NumberOfBytes::Bytes8,
+            _ => panic!("Unsupported number of bytes: {bytes}"),
+        }
+    }
+
+    fn lshift_size(shift: &u8) -> LeftShift {
+        match shift {
+            0 => LeftShift::None,
+            16 => LeftShift::Shift16,
+            32 => LeftShift::Shift32,
+            48 => LeftShift::Shift48,
+            _ => panic!("Unsupported shift size: {shift}"),
+        }
+    }
+
+    fn arith_op(op: &AsmArithmeticBinaryOp) -> ArithmeticOperation {
+        match op {
+            AsmArithmeticBinaryOp::Sum => ArithmeticOperation::Sum,
+            AsmArithmeticBinaryOp::Multiply => ArithmeticOperation::Multiply,
+            AsmArithmeticBinaryOp::Subtract => ArithmeticOperation::Subtract,
+            AsmArithmeticBinaryOp::Divide => ArithmeticOperation::Divide,
+            AsmArithmeticBinaryOp::Power => ArithmeticOperation::Power,
+        }
+    }
+
+    fn bitwise_op(op: &AsmIntegerBitwiseBinaryOp) -> BitwiseOperation {
+        match op {
+            AsmIntegerBitwiseBinaryOp::And => BitwiseOperation::And,
+            AsmIntegerBitwiseBinaryOp::Or => BitwiseOperation::Or,
+            AsmIntegerBitwiseBinaryOp::Xor => BitwiseOperation::Xor,
+        }
+    }
+
+    fn compare_op(op: &AsmIntegerCompareBinaryOp) -> CompareOperation {
+        match op {
+            AsmIntegerCompareBinaryOp::Equals => CompareOperation::Equals,
+            AsmIntegerCompareBinaryOp::NotEquals => CompareOperation::NotEquals,
+            AsmIntegerCompareBinaryOp::LessThan => CompareOperation::LessThan,
+            AsmIntegerCompareBinaryOp::LessThanOrEquals => CompareOperation::LessThanOrEquals,
+            AsmIntegerCompareBinaryOp::GreaterThan => CompareOperation::GreaterThan,
+            AsmIntegerCompareBinaryOp::GreaterThanOrEquals => CompareOperation::GreaterThanOrEquals,
+        }
+    }
+
+    fn sign_flag(sign: &AsmSignFlag) -> SignFlag {
+        match sign {
+            AsmSignFlag::Signed => SignFlag::Signed,
+            AsmSignFlag::Unsigned => SignFlag::Unsigned,
+        }
+    }
+
+    fn control_register(sign: &AsmControlRegister) -> ControlRegister {
+        match sign {
+            AsmControlRegister::BasePointer => ControlRegister::BasePointer,
+            AsmControlRegister::StackPointer => ControlRegister::StackPointer,
+            AsmControlRegister::InstructionPointer => ControlRegister::InstructionPointer,
+        }
+    }
+
+    instructions
+        .iter()
+        .map(|x| match x {
+            AssemblyInstruction::StackOffset { bytes } => {
+                Instruction::StackOffset { bytes: *bytes }
+            }
+            AssemblyInstruction::LoadAddress { bytes, mode } => {
+                let (addressing_mode, operand) = load_store(*mode);
+                Instruction::LoadAddress {
+                    bytes: num_bytes(bytes),
+                    mode: addressing_mode,
+                    operand: operand,
+                }
+            }
+            AssemblyInstruction::StoreAddress { bytes, mode } => {
+                let (addressing_mode, operand) = load_store(*mode);
+                Instruction::StoreAddress {
+                    bytes: num_bytes(bytes),
+                    mode: addressing_mode,
+                    operand: operand,
+                }
+            }
+            AssemblyInstruction::PushImmediate {
+                bytes,
+                shift_size,
+                immediate,
+            } => Instruction::PushImmediate {
+                bytes: num_bytes(bytes),
+                lshift: lshift_size(shift_size),
+                immediate: *immediate,
+            },
+            AssemblyInstruction::IntegerArithmeticBinaryOperation {
+                bytes,
+                operation,
+                sign,
+                immediate,
+            } => {
+                let (mode, operand) = match immediate {
+                    Some(operand) => (OperationMode::StackAndImmediate, *operand as u16),
+                    None => (OperationMode::PureStack, 0),
+                };
+                Instruction::IntegerArithmetic {
+                    bytes: num_bytes(bytes),
+                    operation: arith_op(operation),
+                    sign: sign_flag(sign),
+                    mode,
+                    operand,
+                }
+            }
+            AssemblyInstruction::IntegerBitwiseBinaryOperation {
+                bytes,
+                operation,
+                sign,
+                immediate,
+            } => {
+                let (mode, operand) = match immediate {
+                    Some(operand) => (OperationMode::StackAndImmediate, *operand as u32),
+                    None => (OperationMode::PureStack, 0),
+                };
+                Instruction::Bitwise {
+                    bytes: num_bytes(bytes),
+                    operation: bitwise_op(operation),
+                    sign: sign_flag(sign),
+                    mode,
+                    operand,
+                }
+            }
+            AssemblyInstruction::PopRegister { register } => Instruction::PopIntoRegister {
+                control_register: control_register(register),
+            },
+            AssemblyInstruction::PushRegister { register } => Instruction::PushToRegister {
+                control_register: control_register(register),
+            },
+            AssemblyInstruction::PopBytes { bytes } => Instruction::Pop {
+                bytes: num_bytes(bytes),
+            },
+            AssemblyInstruction::UnresolvedCall { label } => {
+                panic!("Unresolved call reached ASM compiler!")
+            }
+            AssemblyInstruction::Call { offset } => Instruction::Call {
+                source: CallAddressSource::FromOperand,
+                offset: *offset,
+            },
+            AssemblyInstruction::CallFromStack => Instruction::Call {
+                source: CallAddressSource::PopFromStack,
+                offset: 0,
+            },
+            AssemblyInstruction::Label { label } => panic!("Label reached ASM compiler"),
+            AssemblyInstruction::Return => Instruction::Return,
+        })
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {
@@ -278,7 +463,10 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::freyr::asm::{asm::*, assembler::{parse_asm, resolve}};
+    use crate::freyr::asm::{
+        asm::*,
+        assembler::{parse_asm, resolve},
+    };
 
     #[test]
     fn parse_test() {
@@ -308,30 +496,80 @@ main:
         let result = parse_asm(asm);
 
         let expected = vec![
-            AssemblyInstruction::Label { label: "main".to_string() },
+            AssemblyInstruction::Label {
+                label: "main".to_string(),
+            },
             AssemblyInstruction::StackOffset { bytes: 16 },
-            AssemblyInstruction::PushImmediate { bytes: 4, left_shift_16: false, immediate: 15 },
-            AssemblyInstruction::PushImmediate { bytes: 4, left_shift_16: true, immediate: 256 },
-            AssemblyInstruction::StoreAddress { bytes: 4, mode: LoadStoreMode::Relative { offset: 8 } },
-            AssemblyInstruction::StoreAddress { bytes: 4, mode: LoadStoreMode::Relative { offset: -8 } },
-            AssemblyInstruction::LoadAddress { bytes: 4, mode: LoadStoreMode::Relative { offset: 4 } },
-            AssemblyInstruction::LoadAddress { bytes: 4, mode: LoadStoreMode::Relative { offset: -4 } },
-            AssemblyInstruction::IntegerArithmeticBinaryOperation { bytes: 4, sign: SignFlag::Signed, operation: IntegerArithmeticBinaryOp::Sum, immediate: None },
-            AssemblyInstruction::IntegerArithmeticBinaryOperation { bytes: 4, sign: SignFlag::Signed, operation: IntegerArithmeticBinaryOp::Multiply, immediate: None },
-            AssemblyInstruction::IntegerArithmeticBinaryOperation { bytes: 4, sign: SignFlag::Signed, operation: IntegerArithmeticBinaryOp::Divide, immediate: Some(3) },
-            AssemblyInstruction::PopRegister { register: ControlRegister::BasePointer },
-            AssemblyInstruction::PopRegister { register: ControlRegister::StackPointer },
-            AssemblyInstruction::PopRegister { register: ControlRegister::InstructionPointer },
-            AssemblyInstruction::PushRegister { register: ControlRegister::BasePointer },
-            AssemblyInstruction::PushRegister { register: ControlRegister::StackPointer },
-            AssemblyInstruction::PushRegister { register: ControlRegister::InstructionPointer },
-            AssemblyInstruction::UnresolvedCall { label: "main".to_string() },
+            AssemblyInstruction::PushImmediate {
+                bytes: 4,
+                shift_size: 0,
+                immediate: 15,
+            },
+            AssemblyInstruction::PushImmediate {
+                bytes: 4,
+                shift_size: 16,
+                immediate: 256,
+            },
+            AssemblyInstruction::StoreAddress {
+                bytes: 4,
+                mode: AsmLoadStoreMode::Relative { offset: 8 },
+            },
+            AssemblyInstruction::StoreAddress {
+                bytes: 4,
+                mode: AsmLoadStoreMode::Relative { offset: -8 },
+            },
+            AssemblyInstruction::LoadAddress {
+                bytes: 4,
+                mode: AsmLoadStoreMode::Relative { offset: 4 },
+            },
+            AssemblyInstruction::LoadAddress {
+                bytes: 4,
+                mode: AsmLoadStoreMode::Relative { offset: -4 },
+            },
+            AssemblyInstruction::IntegerArithmeticBinaryOperation {
+                bytes: 4,
+                sign: AsmSignFlag::Signed,
+                operation: AsmArithmeticBinaryOp::Sum,
+                immediate: None,
+            },
+            AssemblyInstruction::IntegerArithmeticBinaryOperation {
+                bytes: 4,
+                sign: AsmSignFlag::Signed,
+                operation: AsmArithmeticBinaryOp::Multiply,
+                immediate: None,
+            },
+            AssemblyInstruction::IntegerArithmeticBinaryOperation {
+                bytes: 4,
+                sign: AsmSignFlag::Signed,
+                operation: AsmArithmeticBinaryOp::Divide,
+                immediate: Some(3),
+            },
+            AssemblyInstruction::PopRegister {
+                register: AsmControlRegister::BasePointer,
+            },
+            AssemblyInstruction::PopRegister {
+                register: AsmControlRegister::StackPointer,
+            },
+            AssemblyInstruction::PopRegister {
+                register: AsmControlRegister::InstructionPointer,
+            },
+            AssemblyInstruction::PushRegister {
+                register: AsmControlRegister::BasePointer,
+            },
+            AssemblyInstruction::PushRegister {
+                register: AsmControlRegister::StackPointer,
+            },
+            AssemblyInstruction::PushRegister {
+                register: AsmControlRegister::InstructionPointer,
+            },
+            AssemblyInstruction::UnresolvedCall {
+                label: "main".to_string(),
+            },
             AssemblyInstruction::Return,
         ];
 
         assert_eq!(result, expected);
     }
-
 
     #[test]
     fn resolve_test() {
@@ -352,16 +590,16 @@ another:
         let expected = vec![
             AssemblyInstruction::StackOffset { bytes: 16 },
             AssemblyInstruction::Call { offset: 2 },
-            AssemblyInstruction::PushImmediate { bytes: 4, left_shift_16: false, immediate: 2 },
+            AssemblyInstruction::PushImmediate {
+                bytes: 4,
+                shift_size: 0,
+                immediate: 2,
+            },
             AssemblyInstruction::Call { offset: 4 },
             AssemblyInstruction::Call { offset: 0 },
-            AssemblyInstruction::Return
+            AssemblyInstruction::Return,
         ];
 
         assert_eq!(result, expected);
     }
-
-
-
-
 }
