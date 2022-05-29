@@ -460,16 +460,16 @@ Operations can be:
 
 Syntax:
 
-    bitwise_{opr}_{imm?}{nbits} {lhs?}
+    bitwise_{opr}{k?}_{imm?}{nbits} {lhs?}
 
-    bitwise_and32
+    bitwise_andk32
     bitwise_xor64
     bitwise_xor32_imm 0xfefefe
 
 
 
 {opr}{nbits}    0   0   1   0   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
-              | opr               | nbits | binop |[2] | left hand side (max 22 bits)
+              | opr               | nbits | binop |[1]|[2] | left hand side (max 22 bits)
     opr: bit pattern
     
     nbits {n}: bit pattern
@@ -477,19 +477,23 @@ Syntax:
         0 1 = 16
         1 0 = 32
         1 1 = 64
-    [1] binop: bit pattern
+    binop: bit pattern
         0 0 = bitwise AND
         0 1 = bitwise OR
         1 0 = bitwise XOR
+
+    [1] keep sign flag
+        0 = not keep
+        1 = keep
 
     [2] Mode of operation.
         0 = binary operation on stack:
             - pops the first value %1 as a right-hand side of the operator
             - pops the second value %2 as a left hand side of the operator
             - performs %1 {opt} %2 and pushes to stack
-        1 = left shift operation with immediate 22 bit (max value)
+        1 = left shift operation with immediate 21 bit (max value)
             - pops the first value %1 as a right-hand side of the operator
-            - uses 22 bit immediate value as %2.
+            - uses 21 bit immediate value as %2.
             - performs %1 {opt} %2 and pushes to stack
 
 
