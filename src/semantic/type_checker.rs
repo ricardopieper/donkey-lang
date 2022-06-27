@@ -394,6 +394,7 @@ mod tests {
 
         println!("{:#?}", &mir);
         println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
+        
         return TestContext {
             mir: mir,
             database: analysis_result.type_db,

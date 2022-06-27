@@ -267,7 +267,7 @@ Opcodes
 =======
 
 All instructions are 32 bits in length.
- 
+All instructions increment the instruction pointer by 1 unless explicitly documented otherwise.
 
 There are pseudo-ops, flags, and operands. 
 At this point, the bit pattern of each pseudo-operation is not final. The bit layout should be final,
@@ -370,7 +370,7 @@ storeaddr_{mode}{num_bytes} bp{+|-}#{operand}
 
 
 Modes:
-    -       = pops an address from the stack, and stores to it
+    -       = pops an address from the stack, and stores to it. Pops the value and then the address.
     rel     = compute address relative (+/-) to function base pointer. See +/- notation
     imm     = (Immediate) load address given by an absolute address
 
@@ -389,7 +389,7 @@ storeaddr_{n}  0   0   0   1   1   0   0   0   0   0   0   0   0   0   0   0   .
         1 0 = 32
         1 1 = 64
     mode: bit pattern
-        0 0 = pops an address from the stack, then the value, and stores value in address
+        0 0 = pops a value from the stack, then the address, and stores value in address
             operand is unused
         0 1 = (rel) compute address relative forward to function base pointer
         1 0 = (rel) compute address relative backward to function base pointer
@@ -397,8 +397,12 @@ storeaddr_{n}  0   0   0   1   1   0   0   0   0   0   0   0   0   0   0   0   .
         1 1 = (imm) store at address given by an absolute address
             operand is the raw address, 23 bits. Max value is 16777215 (16MB), which might cover most of the average program data section. 
 
+    On stack mode (0 0), the memory will look like this:
+    ... | 0 1 0 1 0 1 0 1 0 0 0 0 0 0 0 1 0 1 0 0 0 0 0 0 0 0 0 0 1 0 0 0 | 1 0 1 0 1 0 0 0 |
+          ˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆ   ˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆ
+                                    address                                     value
 
-    
+
 BIT SHIFT
 
 Performs a bit shift operation, left or right
@@ -419,8 +423,8 @@ Examples:
     lshift16
 
 
-{d}shift{n}     0   0   1   0   0   0   0   0   0   0   0   0   0   0 
-              | opr               | nbits |[1]|[2]| shift size       | ...
+{d}shift{n}     0   0   1   0   0   0   0   0   0   0   0   0   0   0   0 
+              | opr               | nbits |[1]|[2]|[3]|shift size       | ...
     opr: bit pattern
     nbits {n}: bit pattern
         0 0 = 8
@@ -440,6 +444,10 @@ Examples:
             - uses 8 bit value from immediate as %2 
             - performs %1 (<< or >>) %2 and pushes to stack
             - shift size: Size of the shift, 5 bits (max shift size = 63)
+    [3] Keep sign bit
+        0 = Don't keep
+        1 = Keep
+
 
 For bit shifts with constant values (that coud be given by 2 immediates), maybe the compiler should perform constant folding on it instead of
 executing it on the VM.
@@ -460,11 +468,11 @@ Operations can be:
 
 Syntax:
 
-    bitwise_{opr}{k?}_{imm?}{nbits} {lhs?}
+    {opr}{k?}_{imm?}{nbits} {lhs?}
 
-    bitwise_andk32
-    bitwise_xor64
-    bitwise_xor32_imm 0xfefefe
+    andk_imm32
+    xor64
+    xor_imm32 0xfefefe
 
 
 
@@ -526,7 +534,8 @@ mulu64: Sums unsigned values popped from stack, 64 bits
 
 
 {opr}{n}       0   0   1   1   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0 
-              | opr               |nbits |operation  |[1]|[2]|immediate unsigned (max 16 bits)                             
+              | opr               |nbits |operation  |[1]|[2]|immediate unsigned (max 16 bits)
+    
     opr: bit pattern
     
     nbits {n}: bit pattern
@@ -684,8 +693,8 @@ Mode of operation:
     - pops the second value %1 as a left hand side of the operator
     - performs %1 {opt} %2 and pushes to stack
 
-{opr}{n}       0   1   0   0   1   0   0   0   0   0   
-              | opr              |nbits |operation   | unused                         
+{opr}{n}       0   1   0   0   1   0   0   0   0   0  ...  
+              | opr              |nbits |operation  | unused                         
     opr: bit pattern    
     nbits {n}: bit pattern
         1 0 = 32
@@ -697,6 +706,8 @@ Mode of operation:
         0  1  1 = Less than or equals
         1  0  0 = Greater than
         1  0  1 = Greater than or equals
+        1  1  0 = And
+        1  1  1 = Or
 
 
 FLOW CONTROL
@@ -723,6 +734,7 @@ POP REGISTER
 
 Pops a value from the stack and saves into a control register.
 Size popped is determined by the size of the control register, but in general they are 32 bits.
+If a value is popped to the instruction pointer, then the IP is not automatically incremented.
 
 pop_reg       0   1   0   1   1   0   0   
             | opr               |reg    |                    
@@ -766,24 +778,25 @@ stackoffset #{num bytes}
 CALL
 
 Pushes current IP + 4 to stack and changes IP to the operand provided, or from stack
-
+Sets BP = SP + 4
 
 Syntax:
-call #{offset}
+call #{offset} (offset from operand)
+call_stack (pops operand from stack)
 
 {opr}{n}       0   1   1   1   0   0   0   ..
               | opr              |src| operand bytes                         
     opr: bit pattern
     src: bit pattern
-      0 = from operand
-      1 = pop from stack
+      0 = offset from operand
+      1 = offset popped from stack
     operand: instruction offset (max 26 bits, can address 128mb of code)
 
 
 RETURN
 
 Pops from stack, sets popped value as new IP
-
+If popped value is u32::MAX, then the program exits.
 
 Syntax:
 return
@@ -791,6 +804,72 @@ return
 {opr}{n}       0   1   1   1   1      ..
               | opr               | unused                        
     opr: bit pattern
+
+
+JUMP IF ZERO
+
+Pops value from stack, and if the value is zero, jumps to offset from 0. Offset can be either 
+popped from stack or given by an immediate.
+
+
+Syntax:
+jz_stack (pops a value from stack and jumps to it)
+jz #{label}
+
+{opr}{n}       1   0   0   0   0   0   0      ..
+              | opr              |src |operand                       
+    src: bit pattern
+      0 = offset from operand
+      1 = offset popped from stack
+    operand: instruction offset (max 26 bits, can address 128mb of code)
+
+JUMP IF NOT ZERO
+
+Pops value from stack, and if the value is not zero, jumps to offset from 0. Offset can be either 
+popped from stack or given by an immediate.
+
+
+Syntax:
+jnz_stack (pops a value from stack and jumps to it)
+jnz #{label}
+
+{opr}{n}       1   0   0   0   1   0   0      ..
+              | opr              |src |operand                       
+    src: bit pattern
+      0 = offset from operand
+      1 = offset popped from stack
+    operand: instruction offset (max 26 bits, can address 128mb of code)
+
+JUMP UNCONDITIONAL
+
+Jumps unconditionally. Offset can be either 
+popped from stack or given by an immediate.
+
+
+Syntax:
+jmp_stack (pops a value from stack and jumps to it)
+jmp #{label}
+
+{opr}{n}       1   0   0   1   0   0   0      ..
+              | opr              |src |operand                       
+    src: bit pattern
+      0 = offset from operand
+      1 = offset popped from stack
+    operand: instruction offset (max 26 bits, can address 128mb of code)
+
+
+
+EXIT
+
+Finishes the program immediately.
+
+
+Syntax:
+exit
+
+{opr}{n}       1   0   0   1   1  ...
+              | opr              | unused              
+
 
 
 SPECIAL

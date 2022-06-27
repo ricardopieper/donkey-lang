@@ -7,6 +7,7 @@ use crate::types::type_db::TypeInstance;
 
 use super::type_inference::*;
 use std::collections::VecDeque;
+use std::thread::current;
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
 and block definitions, not much else. All other features in the language will be reduced
@@ -37,9 +38,9 @@ pub enum MIRTopLevelNode {
     },
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ScopeId(pub usize);
 
 /*
@@ -95,6 +96,7 @@ pub struct MIRScope {
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockFinal {
+    //expression, true, else, meta
     If(TypedTrivialHIRExpr, BlockId, BlockId, HIRAstMetadata),
     GotoBlock(BlockId),
     Return(HIRExpr, HIRAstMetadata),
@@ -182,6 +184,9 @@ impl MIRFunctionEmitter {
 
     fn set_current_block(&mut self, current: BlockId) {
         self.current_block = current;
+    }
+    fn set_current_scope(&mut self, current: ScopeId) {
+        self.current_scope = current;
     }
 
     fn finish_with_branch(
@@ -291,6 +296,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR], type_db: &TypeDa
 
                 emitter.finish_with_goto_block(after_creation_variable_block);
                 emitter.set_current_block(after_creation_variable_block);
+                emitter.set_current_scope(after_creation_variable_scope);
             }
             HIR::FunctionCall { function, args, meta } => {
                 match &function.0 {
@@ -686,12 +692,12 @@ def main(x: i32) -> i32:
     defscope 2:
         inheritscope 1
     defscope 3:
-        inheritscope 0
+        inheritscope 2
         z : i32
     defscope 4:
         inheritscope 3
     defscope 5:
-        inheritscope 0
+        inheritscope 4
         $0 : i32
     defscope 6:
         inheritscope 5
@@ -781,7 +787,7 @@ def main() -> Void:
     defscope 2:
         inheritscope 1
     defscope 3:
-        inheritscope 0
+        inheritscope 2
         x : i32
     defscope 4:
         inheritscope 3
@@ -827,14 +833,14 @@ def main() -> Void:
     defscope 2:
         inheritscope 1
     defscope 3:
-        inheritscope 0
+        inheritscope 2
         $0 : bool
     defscope 4:
         inheritscope 3
     defscope 5:
-        inheritscope 0
+        inheritscope 4
     defscope 6:
-        inheritscope 0
+        inheritscope 4
     defblock 0:
         usescope 0
         gotoblock 1
@@ -972,16 +978,16 @@ def main() -> i32:
     defscope 2:
         inheritscope 1
     defscope 3:
-        inheritscope 0
+        inheritscope 2
     defscope 4:
-        inheritscope 0
+        inheritscope 2
         y : i32
     defscope 5:
         inheritscope 4
     defscope 6:
-        inheritscope 0
+        inheritscope 2
     defscope 7:
-        inheritscope 0
+        inheritscope 5
         y : i32
     defscope 8:
         inheritscope 7
@@ -1044,14 +1050,14 @@ def main() -> i32:
     defscope 2:
         inheritscope 1
     defscope 3:
-        inheritscope 0
+        inheritscope 2
         $0 : bool
     defscope 4:
         inheritscope 3
     defscope 5:
-        inheritscope 0
+        inheritscope 4
     defscope 6:
-        inheritscope 0
+        inheritscope 4
     defblock 0:
         usescope 0
         gotoblock 1
@@ -1107,16 +1113,16 @@ def main() -> i32:
     defscope 2:
         inheritscope 1
     defscope 3:
-        inheritscope 0
+        inheritscope 2
         $0 : bool
     defscope 4:
         inheritscope 3
     defscope 5:
-        inheritscope 0
+        inheritscope 4
     defscope 6:
-        inheritscope 0
+        inheritscope 4
     defscope 7:
-        inheritscope 0
+        inheritscope 4
     defblock 0:
         usescope 0
         gotoblock 1
@@ -1175,16 +1181,16 @@ def main() -> i32:
     defscope 2:
         inheritscope 1
     defscope 3:
-        inheritscope 0
+        inheritscope 2
         $0 : bool
     defscope 4:
         inheritscope 3
     defscope 5:
-        inheritscope 0
+        inheritscope 4
     defscope 6:
-        inheritscope 0
+        inheritscope 4
     defscope 7:
-        inheritscope 0
+        inheritscope 4
     defblock 0:
         usescope 0
         gotoblock 1
@@ -1247,16 +1253,16 @@ def main() -> i32:
     defscope 2:
         inheritscope 1
     defscope 3:
-        inheritscope 0
+        inheritscope 2
     defscope 4:
-        inheritscope 0
+        inheritscope 2
         y : i32
     defscope 5:
         inheritscope 4
     defscope 6:
-        inheritscope 0
+        inheritscope 2
     defscope 7:
-        inheritscope 0
+        inheritscope 5
         y : i32
     defscope 8:
         inheritscope 7
@@ -1333,30 +1339,30 @@ def main() -> i32:
     defscope 3:
         inheritscope 2
     defscope 4:
-        inheritscope 0
+        inheritscope 3
         $0 : bool
     defscope 5:
         inheritscope 4
     defscope 6:
-        inheritscope 0
+        inheritscope 5
     defscope 7:
-        inheritscope 0
+        inheritscope 5
     defscope 8:
         inheritscope 0
     defscope 9:
-        inheritscope 0
+        inheritscope 5
         y : i32
     defscope 10:
         inheritscope 9
     defscope 11:
-        inheritscope 0
+        inheritscope 10
         $0 : bool
     defscope 12:
         inheritscope 11
     defscope 13:
-        inheritscope 0
+        inheritscope 12
     defscope 14:
-        inheritscope 0
+        inheritscope 12
     defblock 0:
         usescope 0
         if True:
@@ -1457,34 +1463,34 @@ def main() -> i32:
     defscope 3:
         inheritscope 2
     defscope 4:
-        inheritscope 0
+        inheritscope 3
         $0 : bool
     defscope 5:
         inheritscope 4
     defscope 6:
-        inheritscope 0
+        inheritscope 5
     defscope 7:
-        inheritscope 0
+        inheritscope 5
     defscope 8:
-        inheritscope 0
+        inheritscope 5
     defscope 9:
         inheritscope 0
     defscope 10:
-        inheritscope 0
+        inheritscope 5
         y : i32
     defscope 11:
         inheritscope 10
     defscope 12:
-        inheritscope 0
+        inheritscope 11
         $0 : bool
     defscope 13:
         inheritscope 12
     defscope 14:
-        inheritscope 0
+        inheritscope 13
     defscope 15:
-        inheritscope 0
+        inheritscope 13
     defscope 16:
-        inheritscope 0
+        inheritscope 13
     defblock 0:
         usescope 0
         if True:
@@ -1558,4 +1564,78 @@ def main() -> i32:
 
         assert_eq!(expected.trim(), final_result.trim());
     }
+
+
+    #[test]
+    fn set_some_vars_exprssimplest_case() {
+        let (mir, type_db) = mir("
+def main():
+    x : i32 = 15
+    y : i32 = 3
+    z : i32 = x + y
+    result: i32 = 5 + z
+    result = result + y");
+
+        let final_result = mir_printer::print_mir(&mir, &type_db);
+        println!("{}", final_result);
+        let expected = "
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        x : i32
+    defscope 2:
+        inheritscope 1
+    defscope 3:
+        inheritscope 2
+        y : i32
+    defscope 4:
+        inheritscope 3
+    defscope 5:
+        inheritscope 4
+        z : i32
+    defscope 6:
+        inheritscope 5
+    defscope 7:
+        inheritscope 6
+        result : i32
+    defscope 8:
+        inheritscope 7
+    defblock 0:
+        usescope 0
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        x = 15
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        gotoblock 3
+    defblock 3:
+        usescope 3
+        y = 3
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        gotoblock 5
+    defblock 5:
+        usescope 5
+        z = x + y
+        gotoblock 6
+    defblock 6:
+        usescope 6
+        gotoblock 7
+    defblock 7:
+        usescope 7
+        result = 5 + z
+        gotoblock 8
+    defblock 8:
+        usescope 8
+        result = result + y
+        return";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
 }

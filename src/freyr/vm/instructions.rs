@@ -1,11 +1,14 @@
-use core::num;
-use std::collections::HashMap;
+use std::{collections::HashMap};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadStoreAddressingMode {
+    //Loads an address from the stack
     Stack = 0b00,
+    //Uses BP + operand as address
     RelativeForward = 0b01,
+    //Uses BP - operand as address
     RelativeBackward = 0b10,
+    //Absolute operand
     Absolute = 0b11,
 }
 
@@ -32,7 +35,8 @@ impl LoadStoreAddressingMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum NumberOfBytes {
     Bytes1 = 0b00,
     Bytes2 = 0b01,
@@ -42,12 +46,7 @@ pub enum NumberOfBytes {
 
 impl NumberOfBytes {
     pub fn get_bytes(&self) -> u8 {
-        match self {
-            NumberOfBytes::Bytes1 => 1,
-            NumberOfBytes::Bytes2 => 2,
-            NumberOfBytes::Bytes4 => 4,
-            NumberOfBytes::Bytes8 => 8,
-        }
+        2u8.pow(*self as u8 as u32)
     }
 }
 
@@ -63,7 +62,7 @@ impl From<u8> for NumberOfBytes {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationMode {
     PureStack = 0b00,
     StackAndImmediate = 0b01,
@@ -88,7 +87,8 @@ impl OperationMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum LeftShift {
     None = 0b00,
     Shift16 = 0b01,
@@ -119,7 +119,7 @@ impl LeftShift {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShiftDirection {
     Left = 0b00,
     Right = 0b01,
@@ -144,7 +144,7 @@ impl ShiftDirection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitwiseOperation {
     And = 0b00,
     Or = 0b01,
@@ -172,7 +172,7 @@ impl BitwiseOperation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithmeticOperation {
     Sum = 0b000,
     Subtract = 0b001,
@@ -206,7 +206,7 @@ impl ArithmeticOperation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOperation {
     Equals = 0b000,
     NotEquals = 0b001,
@@ -243,7 +243,7 @@ impl CompareOperation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignFlag {
     Unsigned = 0b0,
     Signed = 0b1,
@@ -268,7 +268,7 @@ impl SignFlag {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlRegister {
     BasePointer = 0b00,
     StackPointer = 0b01,
@@ -296,13 +296,13 @@ impl From<u8> for ControlRegister {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CallAddressSource {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddressJumpAddressSource {
     FromOperand = 0b0,
     PopFromStack = 0b1,
 }
 
-impl From<u8> for CallAddressSource {
+impl From<u8> for AddressJumpAddressSource {
     fn from(u: u8) -> Self {
         match u {
             0b0 => Self::FromOperand,
@@ -312,11 +312,11 @@ impl From<u8> for CallAddressSource {
     }
 }
 
-impl CallAddressSource {
+impl AddressJumpAddressSource {
     pub fn get_bit_pattern(&self) -> u8 {
         match self {
-            CallAddressSource::FromOperand => 0b00,
-            CallAddressSource::PopFromStack => 0b01,
+            AddressJumpAddressSource::FromOperand => 0b00,
+            AddressJumpAddressSource::PopFromStack => 0b01,
         }
     }
 }
@@ -330,7 +330,7 @@ pub enum Instruction {
     PushImmediate {
         bytes: NumberOfBytes,
         lshift: LeftShift,
-        immediate: u16,
+        immediate: [u8; 2],
     },
     LoadAddress {
         bytes: NumberOfBytes,
@@ -346,6 +346,7 @@ pub enum Instruction {
         bytes: NumberOfBytes,
         direction: ShiftDirection,
         mode: OperationMode,
+        sign: SignFlag,
         operand: u8,
     },
     Bitwise {
@@ -353,21 +354,21 @@ pub enum Instruction {
         operation: BitwiseOperation,
         sign: SignFlag,
         mode: OperationMode,
-        operand: u32,
+        operand: [u8; 2],
     },
     IntegerArithmetic {
         bytes: NumberOfBytes,
         operation: ArithmeticOperation,
         sign: SignFlag,
         mode: OperationMode,
-        operand: u16,
+        operand: [u8; 2],
     },
     IntegerCompare {
         bytes: NumberOfBytes,
         operation: CompareOperation,
         sign: SignFlag,
         mode: OperationMode,
-        operand: u32,
+        operand: [u8; 2],
     },
     FloatArithmetic {
         bytes: NumberOfBytes,
@@ -377,7 +378,7 @@ pub enum Instruction {
         bytes: NumberOfBytes,
         operation: CompareOperation,
     },
-    PushToRegister {
+    PushFromRegister {
         control_register: ControlRegister,
     },
     PopIntoRegister {
@@ -387,9 +388,22 @@ pub enum Instruction {
         bytes: NumberOfBytes,
     },
     Call {
-        source: CallAddressSource,
+        source: AddressJumpAddressSource,
         offset: u32,
     },
+    JumpIfZero {
+        source: AddressJumpAddressSource,
+        offset: u32
+    },
+    JumpIfNotZero {
+        source: AddressJumpAddressSource,
+        offset: u32
+    },
+    JumpUnconditional {
+        source: AddressJumpAddressSource,
+        offset: u32
+    },
+    Exit,
     Return,
 }
 
@@ -493,8 +507,9 @@ impl InstructionTable {
             .contains_key(&(layout.instruction_pseudoop as u8))
         {
             panic!(
-                "Instruction already exists> {instruction_pattern:#034b}",
-                instruction_pattern = layout.instruction_pseudoop
+                "Instruction already exists> {instruction_pattern:#034b} {name}",
+                instruction_pattern = layout.instruction_pseudoop,
+                name = layout.name
             );
         }
         self.pseudoops
@@ -646,9 +661,15 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
             ]
         ),
         binary_op_mode,
+        part!(1 bit, "keep sign", "whether to keep the sign flag", 
+            bit_pattern![
+                0b0 => "don't keep",
+                0b1 => "keep"
+            ]),
         part!(5 bits, "operand", "size of the shift (max 63)"),
-        unused!(18 bits)
+        unused!(17 bits)
     ));
+
 
     let sign = part!(1 bit, "sign", "signed or unsigned",
     bit_pattern![
@@ -752,7 +773,7 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
     ));
 
     table.add(layout!(
-        0b1101 "stackoffset",
+        0b01101 "stackoffset",
         part!(27 bits, "num bytes", "offset from bp")
     ));
 
@@ -769,6 +790,33 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
 
     table.add(layout!(
         0b01111 "return",
+        unused!(27 bits)
+    ));
+
+    table.add(layout!(
+        0b10000 "jz",
+        part!(1 bit, "source", "pop from stack or use operand",
+            bit_pattern![
+                0 => "from operand",
+                1 => "pop from stack"
+            ]
+        ),
+        part!(26 bits, "offset", "instruction offset")
+    ));
+
+    table.add(layout!(
+        0b10001 "jnz",
+        part!(1 bit, "source", "pop from stack or use operand",
+            bit_pattern![
+                0 => "from operand",
+                1 => "pop from stack"
+            ]
+        ),
+        part!(26 bits, "offset", "instruction offset")
+    ));
+
+    table.add(layout!(
+        0b10010 "exit",
         unused!(27 bits)
     ));
 

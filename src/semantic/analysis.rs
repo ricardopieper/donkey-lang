@@ -29,7 +29,7 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
     let after_make_declarations_mir = hir.clone();
     undeclared_vars::detect_undeclared_vars_and_redeclarations(&globals, &hir);
 
-    println!("Before type inference:\n{}", print_hir(&hir, &type_db));
+    //println!("Before type inference:\n{}", print_hir(&hir, &type_db));
 
     let mut errors = TypeErrors::new();
 
@@ -92,7 +92,15 @@ def my_function() -> i32:
 
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", result);
+//1 + 2 / 3.2 + func(1, 5);
+/*
+$0 : i32 = 1 + 2
+$1 : i32 = func(1, 5)
+$2 : f32 = 3.2 + $1
+$3 : <erro> = $0 + $2
 
+
+*/
         let expected = "
 def my_function() -> i32:
     x : f64 = 1.0

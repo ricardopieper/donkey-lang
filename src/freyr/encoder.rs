@@ -43,6 +43,25 @@ pub struct InstructionEncoder<'a> {
 }
 
 impl<'a> InstructionEncoder<'a> {
+    
+    pub fn encode_bytes(&mut self, part: &str, value: &[u8]) -> &mut Self {
+        let as_u32 = {
+            if value.len() < 4 {
+                let mut vec = vec![];
+                vec.extend(value);
+
+                for _ in value.len() .. 4 {
+                    vec.push(0);
+                }
+                
+                u32::from_le_bytes(vec.try_into().unwrap())
+            }else {
+                u32::from_le_bytes(value.try_into().unwrap())
+            }
+        };
+        self.encode(part, as_u32)
+    }
+
     pub fn encode(&mut self, part: &str, value: u32) -> &mut Self {
         let mut bit_offset = 5;
         let mut found = false;
@@ -97,7 +116,7 @@ impl<'a> InstructionDecoder<'a> {
                 let immediate_lsb = self.layout.get_part("immediate lsb", self.instruction);
                 return Instruction::PushImmediate {
                     bytes: (num_bytes_pattern as u8).into(),
-                    immediate: immediate_lsb.0 as u16,
+                    immediate: (immediate_lsb.0 as u16).to_le_bytes(),
                     lshift: (shift_pattern as u8).into(),
                 };
             }
@@ -129,11 +148,13 @@ impl<'a> InstructionDecoder<'a> {
                 let (bytes_pattern, _) = self.layout.get_part("num bytes", self.instruction);
                 let (direction_pattern, _) = self.layout.get_part("direction", self.instruction);
                 let (mode_pattern, _) = self.layout.get_part("mode", self.instruction);
+                let (sign_pattern, _) = self.layout.get_part("keep sign", self.instruction);
                 let (_, operand_value) = self.layout.get_part("operand", self.instruction);
                 return Instruction::BitShift {
                     bytes: (bytes_pattern as u8).into(),
                     mode: (mode_pattern as u8).into(),
                     direction: (direction_pattern as u8).into(),
+                    sign: (sign_pattern as u8).into(),
                     operand: operand_value as u8,
                 };
             }
@@ -148,7 +169,7 @@ impl<'a> InstructionDecoder<'a> {
                     mode: (mode_pattern as u8).into(),
                     operation: (operation_pattern as u8).into(),
                     sign: (sign_pattern as u8).into(),
-                    operand: operand_value,
+                    operand: (operand_value as u16).to_le_bytes(),
                 };
             }
             0b00110 => {
@@ -162,7 +183,7 @@ impl<'a> InstructionDecoder<'a> {
                     sign: (sign_pattern as u8).into(),
                     mode: (mode_pattern as u8).into(),
                     operation: (operation_pattern as u8).into(),
-                    operand: operand_value as u16,
+                    operand: (operand_value as u16).to_le_bytes(),
                 };
             }
             0b00111 => {
@@ -176,7 +197,7 @@ impl<'a> InstructionDecoder<'a> {
                     sign: (sign_pattern as u8).into(),
                     mode: (mode_pattern as u8).into(),
                     operation: (operation_pattern as u8).into(),
-                    operand: operand_value as u32,
+                    operand: (operand_value as u16).to_le_bytes(),
                 };
             }
             0b01000 => {
@@ -197,7 +218,7 @@ impl<'a> InstructionDecoder<'a> {
             }
             0b01010 => {
                 let (register_pattern, _) = self.layout.get_part("register", self.instruction);
-                return Instruction::PushToRegister {
+                return Instruction::PushFromRegister {
                     control_register: (register_pattern as u8).into(),
                 };
             }
@@ -268,7 +289,7 @@ impl LayoutHelper {
                 .begin_encode("push_imm")
                 .encode("num bytes", bytes.get_bytes() as u32)
                 .encode("lshift", lshift.get_shift_size() as u32)
-                .encode("immediate lsb", *immediate as u32)
+                .encode_bytes("immediate lsb",immediate)
                 .make(),
             Instruction::LoadAddress {
                 bytes,
@@ -294,12 +315,14 @@ impl LayoutHelper {
                 bytes,
                 direction,
                 mode,
+                sign,
                 operand,
             } => self
                 .begin_encode("shift")
                 .encode("num bytes", bytes.get_bytes() as u32)
                 .encode("direction", direction.get_bit_pattern() as u32)
                 .encode("mode", mode.get_bit_pattern() as u32)
+                .encode("keep sign", sign.get_bit_pattern() as u32)
                 .encode("operand", *operand as u32)
                 .make(),
             Instruction::Bitwise {
@@ -314,7 +337,7 @@ impl LayoutHelper {
                 .encode("operation", operation.get_bit_pattern() as u32)
                 .encode("mode", mode.get_bit_pattern() as u32)
                 .encode("sign", sign.get_bit_pattern() as u32)
-                .encode("operand", *operand as u32)
+                .encode_bytes("operand", operand)
                 .make(),
             Instruction::IntegerArithmetic {
                 bytes,
@@ -328,7 +351,7 @@ impl LayoutHelper {
                 .encode("operation", operation.get_bit_pattern() as u32)
                 .encode("sign", sign.get_bit_pattern() as u32)
                 .encode("mode", mode.get_bit_pattern() as u32)
-                .encode("operand", *operand as u32)
+                .encode_bytes("operand", operand)
                 .make(),
             Instruction::IntegerCompare {
                 bytes,
@@ -342,7 +365,7 @@ impl LayoutHelper {
                 .encode("operation", operation.get_bit_pattern() as u32)
                 .encode("sign", sign.get_bit_pattern() as u32)
                 .encode("mode", mode.get_bit_pattern() as u32)
-                .encode("operand", *operand as u32)
+                .encode_bytes("operand", operand)
                 .make(),
             Instruction::FloatArithmetic { bytes, operation } => self
                 .begin_encode("float_binary_op")
@@ -354,7 +377,7 @@ impl LayoutHelper {
                 .encode("num bytes", bytes.get_bytes() as u32)
                 .encode("operation", operation.get_bit_pattern() as u32)
                 .make(),
-            Instruction::PushToRegister { control_register } => self
+            Instruction::PushFromRegister { control_register } => self
                 .begin_encode("push_reg")
                 .encode("register", control_register.get_bit_pattern() as u32)
                 .make(),
@@ -371,6 +394,22 @@ impl LayoutHelper {
                 .encode("source", source.get_bit_pattern() as u32)
                 .encode("offset", *offset)
                 .make(),
+            Instruction::JumpIfZero { source, offset } => self
+                .begin_encode("jz")
+                .encode("source", source.get_bit_pattern() as u32)
+                .encode("offset", *offset)
+                .make(),
+            Instruction::JumpIfNotZero { source, offset } => self
+                .begin_encode("jnz")
+                .encode("source", source.get_bit_pattern() as u32)
+                .encode("offset", *offset)
+                .make(),
+            Instruction::JumpUnconditional { source, offset } => self
+                .begin_encode("jmp")
+                .encode("source", source.get_bit_pattern() as u32)
+                .encode("offset", *offset)
+                .make(),
+            Instruction::Exit => self.begin_encode("exit").make(),
             Instruction::Return => self.begin_encode("return").make(),
         }
     }
@@ -396,6 +435,7 @@ impl LayoutHelper {
 #[cfg(test)]
 mod tests {
 
+
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
@@ -408,7 +448,7 @@ mod tests {
             .begin_encode("push_imm")
             .encode("num bytes", 4)
             .encode("lshift", 16)
-            .encode("immediate lsb", 25)
+            .encode_bytes("immediate lsb", &25u16.to_le_bytes())
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -417,7 +457,7 @@ mod tests {
             Instruction::PushImmediate {
                 bytes: NumberOfBytes::Bytes4,
                 lshift: LeftShift::Shift16,
-                immediate: 25
+                immediate: 25u16.to_le_bytes()
             }
         );
 
@@ -435,7 +475,7 @@ mod tests {
             .begin_encode("push_imm")
             .encode("num bytes", 2)
             .encode("lshift", 0)
-            .encode("immediate lsb", 250)
+            .encode_bytes("immediate lsb", &250u16.to_le_bytes())
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -445,7 +485,7 @@ mod tests {
             Instruction::PushImmediate {
                 bytes: NumberOfBytes::Bytes2,
                 lshift: LeftShift::None,
-                immediate: 250
+                immediate: 250u16.to_le_bytes()
             }
         );
 
@@ -686,6 +726,7 @@ mod tests {
             .encode("num bytes", 4)
             .encode("direction", 0)
             .encode("mode", 0)
+            .encode("keep sign", 0)
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -696,6 +737,7 @@ mod tests {
                 bytes: NumberOfBytes::Bytes4,
                 direction: ShiftDirection::Left,
                 mode: OperationMode::PureStack,
+                sign: SignFlag::Unsigned,
                 operand: 0
             }
         );
@@ -716,6 +758,7 @@ mod tests {
             .encode("direction", 1)
             .encode("mode", 1)
             .encode("operand", 12)
+            .encode("keep sign", 1)
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -726,6 +769,7 @@ mod tests {
                 bytes: NumberOfBytes::Bytes8,
                 direction: ShiftDirection::Right,
                 mode: OperationMode::StackAndImmediate,
+                sign: SignFlag::Signed,
                 operand: 12
             }
         );
@@ -746,7 +790,7 @@ mod tests {
             .encode("operation", 0b00)
             .encode("mode", 0)
             .encode("sign", 0)
-            .encode("operand", 0)
+            .encode_bytes("operand", &[0, 0])
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -758,7 +802,7 @@ mod tests {
                 operation: BitwiseOperation::And,
                 mode: OperationMode::PureStack,
                 sign: SignFlag::Unsigned,
-                operand: 0
+                operand: [0, 0]
             }
         );
 
@@ -778,7 +822,7 @@ mod tests {
             .encode("operation", 0b00)
             .encode("mode", 0)
             .encode("sign", 1)
-            .encode("operand", 0)
+            .encode_bytes("operand", &[0, 0])
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -790,7 +834,7 @@ mod tests {
                 operation: BitwiseOperation::And,
                 mode: OperationMode::PureStack,
                 sign: SignFlag::Signed,
-                operand: 0
+                operand: [0, 0]
             }
         );
 
@@ -810,7 +854,7 @@ mod tests {
             .encode("operation", 0b01)
             .encode("sign", 0)
             .encode("mode", 1)
-            .encode("operand", 123)
+            .encode_bytes("operand", &123u16.to_le_bytes())
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -822,7 +866,7 @@ mod tests {
                 operation: BitwiseOperation::Or,
                 mode: OperationMode::StackAndImmediate,
                 sign: SignFlag::Unsigned,
-                operand: 123
+                operand: 123u16.to_le_bytes()
             }
         );
 
@@ -842,7 +886,7 @@ mod tests {
             .encode("operation", 0b10)
             .encode("sign", 0)
             .encode("mode", 1)
-            .encode("operand", 65535)
+            .encode_bytes("operand", &65535u16.to_le_bytes())
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -854,7 +898,7 @@ mod tests {
                 operation: BitwiseOperation::Xor,
                 mode: OperationMode::StackAndImmediate,
                 sign: SignFlag::Unsigned,
-                operand: 65535
+                operand: 65535u16.to_le_bytes()
             }
         );
 
@@ -885,7 +929,7 @@ mod tests {
                 sign: SignFlag::Signed,
                 operation: ArithmeticOperation::Sum,
                 mode: OperationMode::PureStack,
-                operand: 0
+                operand: 0u16.to_le_bytes()
             }
         );
 
@@ -917,7 +961,7 @@ mod tests {
                 sign: SignFlag::Unsigned,
                 operation: ArithmeticOperation::Multiply,
                 mode: OperationMode::StackAndImmediate,
-                operand: 65535
+                operand: 65535u16.to_le_bytes()
             }
         );
 
@@ -949,7 +993,7 @@ mod tests {
                 sign: SignFlag::Unsigned,
                 operation: ArithmeticOperation::Power,
                 mode: OperationMode::StackAndImmediate,
-                operand: 15
+                operand: 15i16.to_le_bytes()
             }
         );
 
@@ -969,7 +1013,7 @@ mod tests {
             .encode("operation", 0b000)
             .encode("sign", 0)
             .encode("mode", 1)
-            .encode("operand", 15)
+            .encode_bytes("operand", &15u16.to_le_bytes())
             .make();
 
         let decoded = encoder.begin_decode(encoded).decode();
@@ -981,7 +1025,7 @@ mod tests {
                 sign: SignFlag::Unsigned,
                 operation: CompareOperation::Equals,
                 mode: OperationMode::StackAndImmediate,
-                operand: 15
+                operand: 15u16.to_le_bytes()
             }
         );
 
@@ -1012,7 +1056,7 @@ mod tests {
                 sign: SignFlag::Signed,
                 operation: CompareOperation::GreaterThanOrEquals,
                 mode: OperationMode::PureStack,
-                operand: 0
+                operand: [0,0]
             }
         );
 
@@ -1139,7 +1183,7 @@ mod tests {
 
         assert_eq!(
             decoded,
-            Instruction::PushToRegister {
+            Instruction::PushFromRegister {
                 control_register: ControlRegister::BasePointer
             }
         );
@@ -1229,7 +1273,7 @@ mod tests {
         assert_eq!(
             decoded,
             Instruction::Call {
-                source: CallAddressSource::FromOperand,
+                source: AddressJumpAddressSource::FromOperand,
                 offset: 151
             }
         );
@@ -1251,7 +1295,7 @@ mod tests {
         assert_eq!(
             decoded,
             Instruction::Call {
-                source: CallAddressSource::PopFromStack,
+                source: AddressJumpAddressSource::PopFromStack,
                 offset: 0
             }
         );
@@ -1267,7 +1311,6 @@ mod tests {
     fn encode_decode_return() {
         let encoder = LayoutHelper::new();
         let encoded = encoder.begin_encode("return").make();
-
         let decoded = encoder.begin_decode(encoded).decode();
 
         assert_eq!(decoded, Instruction::Return);

@@ -1,31 +1,86 @@
 #![feature(assert_matches)]
 #![feature(let_else)]
+#![feature(generic_const_exprs)]
+#![feature(slice_as_chunks)]
+
+#[macro_use]
+extern crate time_test;
 
 mod ast;
 mod commons;
 mod semantic;
 mod types;
 mod freyr;
+mod compiler;
 
 use std::env;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
 use std::io::Write;
+use std::time::Instant;
 use crate::ast::lexer;
 use crate::ast::parser;
 use crate::freyr::encoder::InstructionEncoder;
 use crate::freyr::encoder::LayoutHelper;
+use crate::freyr::vm::memory::Memory;
 use crate::semantic::mir;
 use crate::semantic::hir;
 use crate::semantic::hir::*;
 use crate::semantic::mir::*;
 use crate::types::type_db::TypeDatabase;
 
+use tracy_client;
+use tracy_client::Client;
+use tracy_client::frame_name;
+
 fn main() {
+
+    let u32num = 0xffff0000u32;
+    let as_bytes = u32num.to_le_bytes();
+    println!("{as_bytes:?}");
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
+        return;
+    }
+
+
+
+    if args[1] == "memtest" {
+        let client = Client::start();
+        client.non_continuous_frame(frame_name!("memtest"));
+
+        let mut mem = Memory::new();
+        mem.make_ready();
+
+        let start = mem.stack_start;
+        let end = mem.stack_start + (128 << 16); //advance 128 pages ahead
+
+        for addr in start..end {
+            mem.write(addr, &[9u8; 1]);
+        }
+        
+        let now = Instant::now();
+
+        let loops = 1000;
+
+        for _ in 0..loops {
+            for addr in start..end {
+                let read = mem.read_single(addr);
+                assert_eq!(read, 9);
+            }
+        }
+
+        let end = Instant::now();
+        let diff = end - now;
+
+        let num_bytes: u64 = loops * 8 * 1024 * 1024;
+
+        let tp = (num_bytes as f64 / ( diff.as_secs_f64())) / (1024 * 1024) as f64;
+
+        println!("Throughput: {tp}MB/s");
         return;
     }
 

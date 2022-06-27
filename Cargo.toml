@@ -11,10 +11,12 @@ rustc_version_runtime = "0.2.0"
 rustyline = "6.3.0"
 smallvec = "1.5.1"
 either = "1.6.1"
+time-test = "0.2.3"
+tracy-client = "0.13.2"
+arrayvec = "0.7.2"
 
 [dev-dependencies]
 pretty_assertions = "1.1.0"
-
 
 [profile.release]
 debug = true

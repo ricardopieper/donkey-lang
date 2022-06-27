@@ -1,6 +1,6 @@
 mod first_assignments;
 mod undeclared_vars;
-mod name_registry;
+pub mod name_registry;
 mod type_inference;
 pub mod hir_printer;
 pub mod mir_printer;

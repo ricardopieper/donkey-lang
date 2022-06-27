@@ -1,7 +1,9 @@
+use core::num;
+
 use crate::freyr::{
     asm::asm::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
     vm::instructions::{
-        ArithmeticOperation, BitwiseOperation, CallAddressSource, CompareOperation,
+        ArithmeticOperation, BitwiseOperation, AddressJumpAddressSource, CompareOperation,
         ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes,
         OperationMode, SignFlag,
     },
@@ -85,7 +87,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
         }
         ["push", "imm", size] => {
             let bytes = size.parse::<u8>().unwrap() / 8;
-            let immediate = splitted[1].parse().unwrap();
+            let immediate: u16 = splitted[1].parse().unwrap();
             let left_shift = splitted.len() > 2 && splitted[2].contains("<<");
 
             let shift_size = if left_shift {
@@ -96,7 +98,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
 
             AssemblyInstruction::PushImmediate {
                 bytes: bytes,
-                immediate: immediate,
+                immediate: immediate.to_le_bytes(),
                 shift_size: shift_size,
             }
         }
@@ -167,36 +169,88 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     (bytes, AsmLoadStoreMode::StackPop)
                 }
-                _ => panic!("Could not parse instruction loadaddr {rest:?} at line {line}"),
+                _ => panic!("Could not parse instruction {asm_line} at line {line}"),
             };
             AssemblyInstruction::LoadAddress {
                 bytes: bytes,
                 mode: lsm,
             }
         }
+        [operation @ ("sums"|"subs"| "divs"| "muls"| "eqs"|"les"|"lts"|"ges"|"gts"|"nes"|
+                             "sumu"|"subu"| "divu"| "mulu"| "equ"|"leu"|"ltu"|"geu"|"gtu"|"neu"), rest @ ..] => {
+            let (immediate, num_bytes) = match rest {
+                ["imm", size] => {
+                    let immediate = &splitted[1].parse::<i32>().unwrap()
+                        .to_le_bytes()[0..2];
+                    let imm_2bytes: [u8; 2] = immediate.try_into().unwrap();
+                    let bytes = size.parse::<u8>().unwrap() / 8;
+                    (Some(imm_2bytes), bytes)
+                },
+                [size] => {
+                    (None, size.parse::<u8>().unwrap() / 8)
+                },
+                _ => panic!("Failed to parse instruction: {mnems_str:?}")
+            };
 
-        ["sums", "32"] => AssemblyInstruction::IntegerArithmeticBinaryOperation {
-            bytes: 4,
-            operation: AsmArithmeticBinaryOp::Sum,
-            sign: AsmSignFlag::Signed,
-            immediate: None,
-        },
-        ["muls", "32"] => AssemblyInstruction::IntegerArithmeticBinaryOperation {
-            bytes: 4,
-            operation: AsmArithmeticBinaryOp::Multiply,
-            sign: AsmSignFlag::Signed,
-            immediate: None,
-        },
-        ["divs", "imm", "32"] => {
-            let immediate = splitted[1].parse().unwrap();
-
-            AssemblyInstruction::IntegerArithmeticBinaryOperation {
-                bytes: 4,
-                operation: AsmArithmeticBinaryOp::Divide,
-                sign: AsmSignFlag::Signed,
-                immediate: Some(immediate),
+            if operation.len() == 4 {
+                //in this case it's an arithmetic op
+                let arith_op = get_arith_op(&operation[0..3]);
+                let sign_flag = get_sign(operation.chars().nth(3).unwrap());
+                AssemblyInstruction::IntegerArithmeticBinaryOperation {
+                    bytes: num_bytes,
+                    operation: arith_op,
+                    sign: sign_flag,
+                    immediate: immediate,
+                }
+            } else if operation.len() == 3 {
+                let arith_op = get_compare_op(&operation[0..2]);
+                let sign_flag = get_sign(operation.chars().nth(2).unwrap());
+                AssemblyInstruction::IntegerCompareBinaryOperation {
+                    bytes: num_bytes,
+                    operation: arith_op,
+                    sign: sign_flag,
+                    immediate: immediate,
+                }
+            } else {
+                panic!("unknown op: {operation:?}")
             }
-        }
+            
+        },
+        [operation @ ("and"|"or"|"xor"|"andk"|"ork"|"xork"), rest @ ..] => {
+            let (immediate, num_bytes) = match rest {
+                ["imm", size] => {
+                    let immediate = &splitted[1].parse::<i32>().unwrap()
+                        .to_le_bytes()[0..2];
+                    let imm_2bytes: [u8; 2] = immediate.try_into().unwrap();
+                    let bytes = size.parse::<u8>().unwrap() / 8;
+                    (Some(imm_2bytes), bytes)
+                },
+                [size] => {
+                    (None, size.parse::<u8>().unwrap() / 8)
+                },
+                _ => panic!("Failed to parse instruction: {mnems_str:?}")
+            };
+
+            let arith_op_str = &operation[0.. operation.len() - 1];
+            let arith_op = match arith_op_str {
+                "and" => AsmIntegerBitwiseBinaryOp::And,
+                "or" => AsmIntegerBitwiseBinaryOp::Or,
+                "xor" => AsmIntegerBitwiseBinaryOp::Xor,
+                _ => panic!("Unknown op: {arith_op_str:?}")
+            };
+            let sign_flag = match operation.chars().last().unwrap() {
+                'k' => AsmSignFlag::Signed,
+                _ => AsmSignFlag::Unsigned,
+            };
+                
+           
+            AssemblyInstruction::IntegerBitwiseBinaryOperation {
+                bytes: num_bytes,
+                operation: arith_op,
+                sign: sign_flag,
+                immediate: immediate,
+            }
+        },
         ["pop", "reg"] => {
             let register = match splitted[1].as_str() {
                 "bp" => AsmControlRegister::BasePointer,
@@ -226,13 +280,64 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
             AssemblyInstruction::PopBytes { bytes }
         }
         ["call"] => AssemblyInstruction::UnresolvedCall {
-            label: splitted[1].to_string(),
+            label: Some(splitted[1].to_string()),
         },
+        ["call", "stack"] => AssemblyInstruction::UnresolvedCall { label: None },
+        ["jz"] => AssemblyInstruction::UnresolvedJumpIfZero {
+            label: Some(splitted[1].to_string())
+        },
+        ["jz", "stack"]  => AssemblyInstruction::UnresolvedJumpIfZero {
+            label: None
+        },
+        ["jnz"] => AssemblyInstruction::UnresolvedJumpIfNotZero {
+            label: Some(splitted[1].to_string())
+        },
+        ["jnz", "stack"] => AssemblyInstruction::UnresolvedJumpIfNotZero {
+            label: None
+        },
+        ["jmp"] => AssemblyInstruction::UnresolvedJump {
+            label: Some(splitted[1].to_string())
+        },
+        ["jmp", "stack"] => AssemblyInstruction::UnresolvedJump {
+            label: None
+        },
+        ["exit"] => AssemblyInstruction::Exit,
         ["return"] => AssemblyInstruction::Return,
         _ => {
-            panic!("Freyr assembly instruction not recognized at line {line}: {asm_line}")
+            panic!("Freyr assembly instruction not recognized at line {line}: {mnems_str:?}")
         }
     })
+}
+
+fn get_sign(flag: char) -> AsmSignFlag {
+    match flag {
+        's' => AsmSignFlag::Signed,
+        'u' => AsmSignFlag::Unsigned,
+        _ => panic!("Parse asm arith failed: {flag}")
+    }
+}
+
+fn get_arith_op(operation: &str) -> AsmArithmeticBinaryOp {
+    match operation {
+        "sum" => AsmArithmeticBinaryOp::Sum,
+        "sub" => AsmArithmeticBinaryOp::Subtract,
+        "mul" => AsmArithmeticBinaryOp::Multiply,
+        "div" => AsmArithmeticBinaryOp::Divide,
+        "pow" => AsmArithmeticBinaryOp::Power,
+        _ => panic!("Parse asm arith failed: {operation}")
+    }
+}
+
+fn get_compare_op(operation: &str) -> AsmIntegerCompareBinaryOp {
+    match operation {
+        "eq" => AsmIntegerCompareBinaryOp::Equals,
+        "le" => AsmIntegerCompareBinaryOp::LessThanOrEquals,
+        "lt" => AsmIntegerCompareBinaryOp::LessThan,
+        "gt" => AsmIntegerCompareBinaryOp::GreaterThan,
+        "ge" => AsmIntegerCompareBinaryOp::GreaterThanOrEquals,
+        "ne" => AsmIntegerCompareBinaryOp::NotEquals,
+        _ => panic!("Parse asm compare failed: {operation}")
+    }
 }
 
 pub fn parse_asm(asm: &str) -> Vec<AssemblyInstruction> {
@@ -266,12 +371,45 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
             AssemblyInstruction::Label { .. } => {
                 continue; //ignore labels
             }
-            AssemblyInstruction::UnresolvedCall { label, .. } => {
+            AssemblyInstruction::UnresolvedCall { label: Some(label), .. } => {
                 let offset = label_offsets.get(label);
                 current_instruction_index = current_instruction_index + 1;
                 resolved_instructions.push(AssemblyInstruction::Call {
-                    offset: *offset.unwrap(),
+                    offset: *offset.expect(&format!("Could not find label {label}")),
                 })
+            }
+            AssemblyInstruction::UnresolvedCall { label: None, .. } => {
+                resolved_instructions.push(AssemblyInstruction::CallFromStack)
+            }
+            AssemblyInstruction::UnresolvedJumpIfZero { label: Some(label), .. } => {
+                let offset = label_offsets.get(label);
+                current_instruction_index = current_instruction_index + 1;
+                resolved_instructions.push(AssemblyInstruction::JumpIfZero {
+                    offset: *offset.expect(&format!("Could not find label {label}")),
+                })
+            }
+            AssemblyInstruction::UnresolvedJumpIfNotZero { label: Some(label), .. } => {
+                let offset = label_offsets.get(label);
+                current_instruction_index = current_instruction_index + 1;
+                resolved_instructions.push(AssemblyInstruction::JumpIfNotZero {
+                    offset: *offset.expect(&format!("Could not find label {label}")),
+                })
+            }
+            AssemblyInstruction::UnresolvedJumpIfZero { label: None, .. } => {
+                resolved_instructions.push(AssemblyInstruction::JumpIfZeroFromStack)
+            }
+            AssemblyInstruction::UnresolvedJumpIfNotZero { label: None, .. } => {
+                resolved_instructions.push(AssemblyInstruction::JumpIfNotZeroFromStack)
+            }
+            AssemblyInstruction::UnresolvedJump { label: Some(label) } => {
+                let offset = label_offsets.get(label);
+                current_instruction_index = current_instruction_index + 1;
+                resolved_instructions.push(AssemblyInstruction::Jump {
+                    offset: *offset.expect(&format!("Could not find label {label}")),
+                })
+            }
+            AssemblyInstruction::UnresolvedJump { label: None } => {
+                resolved_instructions.push(AssemblyInstruction::JumpFromStack);
             }
             _ => resolved_instructions.push(instruction.clone()),
         }
@@ -402,8 +540,8 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 immediate,
             } => {
                 let (mode, operand) = match immediate {
-                    Some(operand) => (OperationMode::StackAndImmediate, *operand as u16),
-                    None => (OperationMode::PureStack, 0),
+                    Some(operand) => (OperationMode::StackAndImmediate, operand.clone()),
+                    None => (OperationMode::PureStack, [0, 0]),
                 };
                 Instruction::IntegerArithmetic {
                     bytes: num_bytes(bytes),
@@ -420,8 +558,8 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 immediate,
             } => {
                 let (mode, operand) = match immediate {
-                    Some(operand) => (OperationMode::StackAndImmediate, *operand as u32),
-                    None => (OperationMode::PureStack, 0),
+                    Some(operand) => (OperationMode::StackAndImmediate, *operand),
+                    None => (OperationMode::PureStack, [0, 0]),
                 };
                 Instruction::Bitwise {
                     bytes: num_bytes(bytes),
@@ -431,10 +569,24 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                     operand,
                 }
             }
+            AssemblyInstruction::IntegerCompareBinaryOperation { bytes, operation, sign, immediate } => {
+                let (mode, operand) = match immediate {
+                    Some(operand) => (OperationMode::StackAndImmediate, *operand),
+                    None => (OperationMode::PureStack, [0, 0]),
+                };
+                Instruction::IntegerCompare {
+                    bytes: num_bytes(bytes),
+                    operation: compare_op(operation),
+                    sign: sign_flag(sign),
+                    mode,
+                    operand,
+                }
+            },
+
             AssemblyInstruction::PopRegister { register } => Instruction::PopIntoRegister {
                 control_register: control_register(register),
             },
-            AssemblyInstruction::PushRegister { register } => Instruction::PushToRegister {
+            AssemblyInstruction::PushRegister { register } => Instruction::PushFromRegister {
                 control_register: control_register(register),
             },
             AssemblyInstruction::PopBytes { bytes } => Instruction::Pop {
@@ -444,15 +596,25 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 panic!("Unresolved call reached ASM compiler!")
             }
             AssemblyInstruction::Call { offset } => Instruction::Call {
-                source: CallAddressSource::FromOperand,
+                source: AddressJumpAddressSource::FromOperand,
                 offset: *offset,
             },
             AssemblyInstruction::CallFromStack => Instruction::Call {
-                source: CallAddressSource::PopFromStack,
+                source: AddressJumpAddressSource::PopFromStack,
                 offset: 0,
             },
             AssemblyInstruction::Label { label } => panic!("Label reached ASM compiler"),
             AssemblyInstruction::Return => Instruction::Return,
+            AssemblyInstruction::JumpIfZero { offset } => Instruction::JumpIfZero { source: AddressJumpAddressSource::FromOperand, offset: *offset },
+            AssemblyInstruction::JumpIfNotZero { offset } => Instruction::JumpIfNotZero { source: AddressJumpAddressSource::FromOperand, offset: *offset },
+            AssemblyInstruction::JumpIfZeroFromStack { .. } => Instruction::JumpIfZero { source: AddressJumpAddressSource::PopFromStack, offset: 0 },
+            AssemblyInstruction::JumpIfNotZeroFromStack { .. } => Instruction::JumpIfNotZero { source: AddressJumpAddressSource::PopFromStack, offset: 0 },
+            AssemblyInstruction::Jump { offset } => Instruction::JumpUnconditional { source: AddressJumpAddressSource::FromOperand, offset: *offset },
+            AssemblyInstruction::JumpFromStack => Instruction::JumpUnconditional { source: AddressJumpAddressSource::PopFromStack, offset: 0 },
+            AssemblyInstruction::Exit => Instruction::Exit,
+            AssemblyInstruction::UnresolvedJumpIfZero { label } => panic!("Unresolved jz reached ASM compiler!"),
+            AssemblyInstruction::UnresolvedJumpIfNotZero { label } => panic!("Unresolved jnz reached ASM compiler!"),
+            AssemblyInstruction::UnresolvedJump { label } => panic!("Unresolved jmp reached ASM compiler!"),
         })
         .collect()
 }
@@ -463,15 +625,17 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::freyr::asm::{
+    use crate::freyr::{asm::{
         asm::*,
         assembler::{parse_asm, resolve},
-    };
+    }};
+
 
     #[test]
     fn parse_test() {
         let asm = "
 main:
+    
     stackoffset     16 
     push_imm32      15
     push_imm32      256 <<16
@@ -483,6 +647,7 @@ main:
     sums32
     muls32
     divs_imm32 3
+    andk_imm64 99
     pop_reg bp
     pop_reg sp
     pop_reg ip
@@ -490,6 +655,14 @@ main:
     push_reg sp
     push_reg ip
     call main
+    call_stack
+    jmp_stack
+    jmp main
+    jnz_stack
+    jnz main
+    jz_stack
+    jz main
+    exit
     return
 ";
 
@@ -503,12 +676,12 @@ main:
             AssemblyInstruction::PushImmediate {
                 bytes: 4,
                 shift_size: 0,
-                immediate: 15,
+                immediate: 15u16.to_le_bytes(),
             },
             AssemblyInstruction::PushImmediate {
                 bytes: 4,
                 shift_size: 16,
-                immediate: 256,
+                immediate: 256u16.to_le_bytes(),
             },
             AssemblyInstruction::StoreAddress {
                 bytes: 4,
@@ -542,7 +715,13 @@ main:
                 bytes: 4,
                 sign: AsmSignFlag::Signed,
                 operation: AsmArithmeticBinaryOp::Divide,
-                immediate: Some(3),
+                immediate: Some(3u16.to_le_bytes()),
+            },
+            AssemblyInstruction::IntegerBitwiseBinaryOperation {
+                bytes: 8,
+                sign: AsmSignFlag::Signed,
+                operation: AsmIntegerBitwiseBinaryOp::And,
+                immediate: Some(99u16.to_le_bytes()),
             },
             AssemblyInstruction::PopRegister {
                 register: AsmControlRegister::BasePointer,
@@ -563,8 +742,30 @@ main:
                 register: AsmControlRegister::InstructionPointer,
             },
             AssemblyInstruction::UnresolvedCall {
-                label: "main".to_string(),
+                label: Some("main".to_string()),
             },
+            AssemblyInstruction::UnresolvedCall {
+                label: None,
+            },
+            AssemblyInstruction::UnresolvedJump{
+                label: None,
+            },
+            AssemblyInstruction::UnresolvedJump{
+                label: Some("main".to_string()),
+            },
+            AssemblyInstruction::UnresolvedJumpIfNotZero{
+                label: None,
+            },
+            AssemblyInstruction::UnresolvedJumpIfNotZero{
+                label: Some("main".to_string()),
+            },
+            AssemblyInstruction::UnresolvedJumpIfZero{
+                label: None,
+            },
+            AssemblyInstruction::UnresolvedJumpIfZero{
+                label: Some("main".to_string()),
+            },
+            AssemblyInstruction::Exit,
             AssemblyInstruction::Return,
         ];
 
@@ -579,6 +780,9 @@ main:
     call            other
 other:
     push_imm32      2
+    jmp another
+    jz other
+    jnz main
     call            another
 another:
     call            main
@@ -593,9 +797,12 @@ another:
             AssemblyInstruction::PushImmediate {
                 bytes: 4,
                 shift_size: 0,
-                immediate: 2,
+                immediate: 2u16.to_le_bytes(),
             },
-            AssemblyInstruction::Call { offset: 4 },
+            AssemblyInstruction::Jump { offset: 7 },
+            AssemblyInstruction::JumpIfZero { offset: 2 },
+            AssemblyInstruction::JumpIfNotZero { offset: 0 },
+            AssemblyInstruction::Call { offset: 7 },
             AssemblyInstruction::Call { offset: 0 },
             AssemblyInstruction::Return,
         ];

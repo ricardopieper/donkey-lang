@@ -30,7 +30,7 @@ pub enum AsmIntegerCompareBinaryOp {
     LessThan,
     LessThanOrEquals,
     GreaterThan,
-    GreaterThanOrEquals,
+    GreaterThanOrEquals
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -62,19 +62,25 @@ pub enum AssemblyInstruction {
     PushImmediate {
         bytes: u8,
         shift_size: u8,
-        immediate: u16,
+        immediate: [u8; 2],
     },
     IntegerBitwiseBinaryOperation {
         bytes: u8,
         operation: AsmIntegerBitwiseBinaryOp,
         sign: AsmSignFlag,
-        immediate: Option<u32>,
+        immediate: Option<[u8; 2]>,
     },
     IntegerArithmeticBinaryOperation {
         bytes: u8,
         operation: AsmArithmeticBinaryOp,
         sign: AsmSignFlag,
-        immediate: Option<u32>,
+        immediate: Option<[u8; 2]>,
+    },
+    IntegerCompareBinaryOperation {
+        bytes: u8,
+        operation: AsmIntegerCompareBinaryOp,
+        sign: AsmSignFlag,
+        immediate: Option<[u8; 2]>,
     },
     PopRegister {
         register: AsmControlRegister,
@@ -85,15 +91,37 @@ pub enum AssemblyInstruction {
     PopBytes {
         bytes: u8,
     },
-    UnresolvedCall {
+    Label {
         label: String,
+    },
+    UnresolvedCall {
+        label: Option<String>,
+    },
+    UnresolvedJumpIfZero {
+        label: Option<String> //if none pops from stack
+    },
+    UnresolvedJumpIfNotZero {
+        label: Option<String> //if none pops from stack
+    },
+    UnresolvedJump {
+        label: Option<String> //if none pops from stack
     },
     Call {
         offset: u32,
     },
     CallFromStack,
-    Label {
-        label: String,
+    JumpIfZero {
+        offset: u32
     },
+    JumpIfZeroFromStack,
+    JumpIfNotZero {
+        offset: u32
+    },
+    JumpIfNotZeroFromStack,
+    Jump {
+        offset: u32
+    },
+    JumpFromStack,
+    Exit,
     Return,
 }
