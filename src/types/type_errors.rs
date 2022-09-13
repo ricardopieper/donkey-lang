@@ -1,9 +1,11 @@
 use std::fmt::Display;
 
-use crate::{semantic::{type_checker::FunctionName, hir::HIRType, hir_printer::operator_str}, ast::lexer::Operator};
+use crate::{
+    ast::lexer::Operator,
+    semantic::{hir::HIRType, hir_printer::operator_str, type_checker::FunctionName},
+};
 
 use super::type_db::{TypeDatabase, TypeInstance};
-
 
 pub trait TypeErrorDisplay {
     fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
@@ -51,7 +53,7 @@ pub struct FunctionCallContext {
     pub argument_position: usize,
 }
 
-impl<'a> TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
+impl TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
     fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let passed_name = self.actual.as_string(type_db);
         let expected_name = self.expected.as_string(type_db);
@@ -63,16 +65,17 @@ impl<'a> TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
                     position = self.context.argument_position
                 )
             }
-            FunctionName::IndexAccess =>  {
+            FunctionName::IndexAccess => {
                 write!(f,  "Function argument type mismatch: In function {on_function}, on index operator, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
                     on_function = self.on_function,
                     position = self.context.argument_position
                 )
-            },
-            FunctionName::Method { function_name, type_name } => todo!("method calls not fully implemented"),
+            }
+            FunctionName::Method {
+                function_name: _,
+                type_name: _,
+            } => todo!("method calls not fully implemented"),
         }
-
-        
     }
 }
 
@@ -83,9 +86,12 @@ pub struct FunctionCallArgumentCountMismatch {
     pub passed_count: usize,
 }
 
-impl<'a> TypeErrorDisplay for FunctionCallArgumentCountMismatch {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-
+impl TypeErrorDisplay for FunctionCallArgumentCountMismatch {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeDatabase,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match &self.called_function_name {
             FunctionName::Function(call_name) => {
                 write!(f,  "Argument count mismatch: In function {on_function}, call to function {function_called} expects {expected_args} arguments, but {passed_args} were passed",
@@ -94,18 +100,19 @@ impl<'a> TypeErrorDisplay for FunctionCallArgumentCountMismatch {
                     expected_args = self.expected_count,
                     passed_args = self.passed_count,
                 )
-            },
+            }
             FunctionName::IndexAccess => {
                 write!(f,  "Argument count mismatch: In function {on_function}, index operator expects {expected_args} arguments, but {passed_args} were passed",
                     on_function = self.on_function,
                     expected_args = self.expected_count,
                     passed_args = self.passed_count,
-                )  
-            },
-            FunctionName::Method { function_name, type_name } => todo!("method calls not fully implemented"),
+                )
+            }
+            FunctionName::Method {
+                function_name: _,
+                type_name: _,
+            } => todo!("method calls not fully implemented"),
         }
-
-       
     }
 }
 
@@ -127,26 +134,28 @@ impl TypeErrorDisplay for CallToNonCallableType {
 
 pub struct TypeNotFound {
     pub on_function: String,
-    pub type_name: HIRType
+    pub type_name: HIRType,
 }
 
-
 impl TypeErrorDisplay for TypeNotFound {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeDatabase,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
             "In function {on_function}, type not found: {type_not_found}",
             on_function = self.on_function,
-            type_not_found = self.type_name.to_string(),
+            type_not_found = self.type_name,
         )
     }
 }
 
 pub struct UnexpectedTypeFound {
     pub on_function: String,
-    pub type_def: TypeInstance
+    pub type_def: TypeInstance,
 }
-
 
 impl TypeErrorDisplay for UnexpectedTypeFound {
     fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -163,7 +172,7 @@ pub struct BinaryOperatorNotFound {
     pub on_function: String,
     pub lhs: TypeInstance,
     pub rhs: TypeInstance,
-    pub operator: Operator
+    pub operator: Operator,
 }
 
 impl TypeErrorDisplay for BinaryOperatorNotFound {
@@ -179,11 +188,10 @@ impl TypeErrorDisplay for BinaryOperatorNotFound {
     }
 }
 
-
 pub struct UnaryOperatorNotFound {
     pub on_function: String,
     pub rhs: TypeInstance,
-    pub operator: Operator
+    pub operator: Operator,
 }
 
 impl TypeErrorDisplay for UnaryOperatorNotFound {
@@ -201,7 +209,7 @@ impl TypeErrorDisplay for UnaryOperatorNotFound {
 pub struct FieldOrMethodNotFound {
     pub on_function: String,
     pub object_type: TypeInstance,
-    pub field_or_method: String
+    pub field_or_method: String,
 }
 
 impl TypeErrorDisplay for FieldOrMethodNotFound {
@@ -216,13 +224,16 @@ impl TypeErrorDisplay for FieldOrMethodNotFound {
     }
 }
 
-
 pub struct InsufficientTypeInformationForArray {
-    pub on_function: String
+    pub on_function: String,
 }
 
 impl TypeErrorDisplay for InsufficientTypeInformationForArray {
-    fn fmt_err(&self, type_db: &TypeDatabase, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeDatabase,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
             "In function {on_function}, array expression failed type inference: Array has no items, and/or variable declaration has no type declaration or type hint.",
@@ -233,7 +244,7 @@ impl TypeErrorDisplay for InsufficientTypeInformationForArray {
 
 macro_rules! make_type_errors {
     ($($field:ident : $typename:ty), *) => {
-       
+
         pub struct TypeErrors {
             $(
                 pub $field: $typename,
@@ -242,21 +253,21 @@ macro_rules! make_type_errors {
 
         impl TypeErrors {
             pub fn new() -> TypeErrors {
-                TypeErrors { 
+                TypeErrors {
                     $(
                         $field: vec![],
-                    )* 
+                    )*
                 }
             }
             pub fn count(&self) -> usize {
                 $(
                     self.$field.len() +
-                )* 0  
+                )* 0
             }
         }
 
         impl<'errors, 'callargs, 'type_db> Display for TypeErrorPrinter<'errors, 'type_db> {
-    
+
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 if self.errors.count() == 0 {
                     return Ok(());
@@ -266,8 +277,8 @@ macro_rules! make_type_errors {
                         err.fmt_err(self.type_db,f)?;
                         write!(f, "\n")?;
                     }
-                )* 
-                
+                )*
+
                 return Ok(());
             }
         }
@@ -290,7 +301,6 @@ macro_rules! make_type_errors {
     }
 
 }
-
 
 make_type_errors!(
     assign_mismatches: Vec<TypeMismatch<AssignContext>>,

@@ -1,4 +1,4 @@
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadStoreAddressingMode {
@@ -270,17 +270,17 @@ impl SignFlag {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlRegister {
-    BasePointer = 0b00,
-    StackPointer = 0b01,
-    InstructionPointer = 0b10,
+    Base = 0b00,
+    Stack = 0b01,
+    Instruction = 0b10,
 }
 
 impl ControlRegister {
     pub fn get_bit_pattern(&self) -> u8 {
         match self {
-            ControlRegister::BasePointer => 0b00,
-            ControlRegister::StackPointer => 0b01,
-            ControlRegister::InstructionPointer => 0b10,
+            ControlRegister::Base => 0b00,
+            ControlRegister::Stack => 0b01,
+            ControlRegister::Instruction => 0b10,
         }
     }
 }
@@ -288,9 +288,9 @@ impl ControlRegister {
 impl From<u8> for ControlRegister {
     fn from(u: u8) -> Self {
         match u {
-            0b00 => Self::BasePointer,
-            0b01 => Self::StackPointer,
-            0b10 => Self::InstructionPointer,
+            0b00 => Self::Base,
+            0b01 => Self::Stack,
+            0b10 => Self::Instruction,
             _ => panic!("Cannot convert {u} to ControlRegister"),
         }
     }
@@ -393,15 +393,15 @@ pub enum Instruction {
     },
     JumpIfZero {
         source: AddressJumpAddressSource,
-        offset: u32
+        offset: u32,
     },
     JumpIfNotZero {
         source: AddressJumpAddressSource,
-        offset: u32
+        offset: u32,
     },
     JumpUnconditional {
         source: AddressJumpAddressSource,
-        offset: u32
+        offset: u32,
     },
     Exit,
     Return,
@@ -463,7 +463,7 @@ pub struct BitLayoutPart {
 
 fn validate_instruction_sizes(table: &InstructionTable) {
     for layout in table.table.values() {
-        let sum: u8 = (5 as u8) + layout.layout.iter().map(|x| x.length as u8).sum::<u8>() as u8;
+        let sum: u8 = (5u8) + layout.layout.iter().map(|x| x.length as u8).sum::<u8>() as u8;
         if sum != 32 {
             panic!(
                 "Instruction {ins} has {defined} bits defined instead of required 32!",
@@ -661,7 +661,7 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
             ]
         ),
         binary_op_mode,
-        part!(1 bit, "keep sign", "whether to keep the sign flag", 
+        part!(1 bit, "keep sign", "whether to keep the sign flag",
             bit_pattern![
                 0b0 => "don't keep",
                 0b1 => "keep"
@@ -669,7 +669,6 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
         part!(5 bits, "operand", "size of the shift (max 63)"),
         unused!(17 bits)
     ));
-
 
     let sign = part!(1 bit, "sign", "signed or unsigned",
     bit_pattern![
@@ -822,5 +821,5 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
 
     validate_instruction_sizes(&table);
 
-    return table;
+    table
 }

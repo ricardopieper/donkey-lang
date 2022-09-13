@@ -1,11 +1,9 @@
 use core::panic;
-use std::collections::HashMap;
 
 use super::{
-    asm::asm::AssemblyInstruction,
+    asm::asm_instructions::AssemblyInstruction,
     vm::instructions::{
-        get_all_instruction_layouts, BitLayout, Instruction, InstructionTable,
-        LoadStoreAddressingMode, PartType,
+        get_all_instruction_layouts, BitLayout, Instruction, InstructionTable, PartType,
     },
 };
 
@@ -21,20 +19,18 @@ pub fn encode_stackoffset(offset: u32) -> u32 {
     let bit_pattern: u32 = 0b01101 << 27;
     let bytes: u32 = truncate_to_bits(offset, 27);
 
-    return bit_pattern + bytes;
+    bit_pattern + bytes
 }
 
 pub fn encode_instruction(ins: &AssemblyInstruction) -> u32 {
     match ins {
-        AssemblyInstruction::StackOffset { bytes } => {
-            return encode_stackoffset(*bytes);
-        }
+        AssemblyInstruction::StackOffset { bytes } => encode_stackoffset(*bytes),
         _ => 0,
     }
 }
 
 pub fn encode_asm(code: &[AssemblyInstruction]) -> Vec<u32> {
-    code.iter().map(|x| encode_instruction(x)).collect()
+    code.iter().map(encode_instruction).collect()
 }
 
 pub struct InstructionEncoder<'a> {
@@ -43,19 +39,15 @@ pub struct InstructionEncoder<'a> {
 }
 
 impl<'a> InstructionEncoder<'a> {
-    
     pub fn encode_bytes(&mut self, part: &str, value: &[u8]) -> &mut Self {
         let as_u32 = {
             if value.len() < 4 {
                 let mut vec = vec![];
                 vec.extend(value);
+                vec.resize(4, 0);
 
-                for _ in value.len() .. 4 {
-                    vec.push(0);
-                }
-                
                 u32::from_le_bytes(vec.try_into().unwrap())
-            }else {
+            } else {
                 u32::from_le_bytes(value.try_into().unwrap())
             }
         };
@@ -112,7 +104,8 @@ impl<'a> InstructionDecoder<'a> {
             0 => Instruction::Noop,
             0b00001 => {
                 let (num_bytes_pattern, _) = self.layout.get_part("num bytes", self.instruction);
-                let (shift_pattern, shift_value) = self.layout.get_part("lshift", self.instruction);
+                let (shift_pattern, _shift_value) =
+                    self.layout.get_part("lshift", self.instruction);
                 let immediate_lsb = self.layout.get_part("immediate lsb", self.instruction);
                 return Instruction::PushImmediate {
                     bytes: (num_bytes_pattern as u8).into(),
@@ -262,7 +255,7 @@ impl LayoutHelper {
     pub fn new() -> LayoutHelper {
         let table = get_all_instruction_layouts();
 
-        return LayoutHelper { table };
+        LayoutHelper { table }
     }
 
     pub fn begin_encode(&self, name: &str) -> InstructionEncoder {
@@ -289,7 +282,7 @@ impl LayoutHelper {
                 .begin_encode("push_imm")
                 .encode("num bytes", bytes.get_bytes() as u32)
                 .encode("lshift", lshift.get_shift_size() as u32)
-                .encode_bytes("immediate lsb",immediate)
+                .encode_bytes("immediate lsb", immediate)
                 .make(),
             Instruction::LoadAddress {
                 bytes,
@@ -421,7 +414,7 @@ impl LayoutHelper {
             Some(name) => {
                 let layout = self.table.table.get(name).unwrap();
                 InstructionDecoder {
-                    layout: layout,
+                    layout,
                     instruction,
                 }
             }
@@ -434,7 +427,6 @@ impl LayoutHelper {
 
 #[cfg(test)]
 mod tests {
-
 
     #[cfg(test)]
     use pretty_assertions::assert_eq;
@@ -1056,7 +1048,7 @@ mod tests {
                 sign: SignFlag::Signed,
                 operation: CompareOperation::GreaterThanOrEquals,
                 mode: OperationMode::PureStack,
-                operand: [0,0]
+                operand: [0, 0]
             }
         );
 
@@ -1184,7 +1176,7 @@ mod tests {
         assert_eq!(
             decoded,
             Instruction::PushFromRegister {
-                control_register: ControlRegister::BasePointer
+                control_register: ControlRegister::Base
             }
         );
 
@@ -1208,7 +1200,7 @@ mod tests {
         assert_eq!(
             decoded,
             Instruction::PopIntoRegister {
-                control_register: ControlRegister::InstructionPointer
+                control_register: ControlRegister::Instruction
             }
         );
 

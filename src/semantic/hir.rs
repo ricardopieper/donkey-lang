@@ -1,14 +1,10 @@
-use std::borrow::Cow;
-use std::borrow::Cow::Borrowed;
-use std::borrow::Cow::Owned;
+use std::fmt::Display;
+use std::fmt::Write;
 
 use crate::ast::lexer::*;
 use crate::ast::parser::*;
 use crate::commons::float::*;
 use crate::types::type_db::TypeInstance;
-
-
-
 
 /**
  *
@@ -34,17 +30,16 @@ pub enum TrivialHIRExpr {
 
 impl TrivialHIRExpr {
     pub fn pending_type(&self) -> TypedTrivialHIRExpr {
-        return TypedTrivialHIRExpr(self.clone(), HIRTypeDef::PendingInference);
+        TypedTrivialHIRExpr(self.clone(), HIRTypeDef::PendingInference)
     }
 }
 
-
 /**
  * The HIR is great to work with. It simplifies a ton of stuff, reduces the tree depth, reduces recursion,
- * it's overall a good thing IMO. However, it loses some data. Actually, more data is created, more 
- * intermediate steps and more structure is added. What happens is that, during type checking, 
+ * it's overall a good thing IMO. However, it loses some data. Actually, more data is created, more
+ * intermediate steps and more structure is added. What happens is that, during type checking,
  * some checks can fail on compiler-generated data, like intermediates. The error message is thus entirely unusable.
- * 
+ *
  * Therefore, we will add some metadata to the HIR nodes referring to the raw AST and expr nodes. They will carry the context in which
  * the compiler was operating that is closer to the user, and if anything on that context fails, then that is used in the error messages.
  */
@@ -63,9 +58,15 @@ pub enum HIRExpr {
         Operator,
         TypedTrivialHIRExpr,
         HIRTypeDef,
-        HIRExprMetadata
+        HIRExprMetadata,
     ),
-    FunctionCall(TypedTrivialHIRExpr, Vec<TypedTrivialHIRExpr>, HIRTypeDef, HIRExprMetadata),
+    //func_expr, args:type, return type, metadata
+    FunctionCall(
+        TypedTrivialHIRExpr,
+        Vec<TypedTrivialHIRExpr>,
+        HIRTypeDef,
+        HIRExprMetadata,
+    ),
     UnaryExpression(Operator, TypedTrivialHIRExpr, HIRTypeDef, HIRExprMetadata),
     //obj, field, result_type, metadata
     MemberAccess(TypedTrivialHIRExpr, String, HIRTypeDef, HIRExprMetadata),
@@ -83,44 +84,39 @@ pub enum HIRType {
     Function(Vec<HIRType>, Box<HIRType>),
 }
 
-impl HIRType {
+impl Display for HIRType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let _str = String::new();
 
-    fn to_string_internal(result: &mut String, hir_type: &HIRType) {
-        match hir_type {
-            HIRType::Simple(s) => result.push_str(s),
+        match self {
+            HIRType::Simple(s) => f.write_str(s),
             HIRType::Generic(s, generics) => {
                 let comma_sep = generics
                     .iter()
-                    .map(|x| x.to_string())
+                    .map(HIRType::to_string)
                     .collect::<Vec<String>>()
                     .join(", ");
 
-                result.push_str(s);
-                result.push_str("<");
-                result.push_str(&comma_sep);
-                result.push_str(">");
-            },
+                f.write_str(s).unwrap();
+                f.write_char('<').unwrap();
+                f.write_str(&comma_sep).unwrap();
+                f.write_char('>')
+            }
             HIRType::Function(arg_types, return_type) => {
                 let comma_sep_args = arg_types
                     .iter()
-                    .map(|x| x.to_string())
+                    .map(HIRType::to_string)
                     .collect::<Vec<String>>()
                     .join(", ");
 
                 let return_type = return_type.to_string();
 
-                result.push_str("fn(");
-                result.push_str(&comma_sep_args);
-                result.push_str(") -> ");
-                result.push_str(&return_type);
-            },
+                f.write_str("fn(").unwrap();
+                f.write_str(&comma_sep_args).unwrap();
+                f.write_str(") -> ").unwrap();
+                f.write_str(&return_type)
+            }
         }
-    }
-
-    pub fn to_string(&self) -> String {
-        let mut str = String::new();
-        Self::to_string_internal(&mut str, &self);
-        return str;
     }
 }
 
@@ -135,7 +131,7 @@ impl HIRExpr {
     pub fn get_expr_type(&self) -> &HIRTypeDef {
         match self {
             HIRExpr::Trivial(t, ..) => &t.1,
-            HIRExpr::Cast(_, t,..) => t,
+            HIRExpr::Cast(_, t, ..) => t,
             HIRExpr::BinaryOperation(.., t, _) => t,
             HIRExpr::FunctionCall(.., t, _) => t,
             HIRExpr::UnaryExpression(.., t, _) => t,
@@ -190,11 +186,8 @@ impl HIRType {
         match typ {
             ASTType::Simple(name) => Self::Simple(name.clone()),
             ASTType::Generic(name, generics) => {
-                let hir_generics = generics
-                    .iter()
-                    .map(|x| Self::from_ast(x))
-                    .collect::<Vec<_>>();
-                return HIRType::Generic(name.clone(), hir_generics);
+                let hir_generics = generics.iter().map(Self::from_ast).collect::<Vec<_>>();
+                HIRType::Generic(name.clone(), hir_generics)
             }
         }
     }
@@ -219,31 +212,31 @@ pub enum HIR {
         path: Vec<String>,
         expression: HIRExpr,
         meta_ast: HIRAstMetadata,
-        meta_expr: HIRExprMetadata
+        meta_expr: HIRExprMetadata,
     },
     Declare {
         var: String,
         typedef: HIRTypeDef,
         expression: HIRExpr,
         meta_ast: HIRAstMetadata,
-        meta_expr: HIRExprMetadata
+        meta_expr: HIRExprMetadata,
     },
     DeclareFunction {
         function_name: String,
         parameters: Vec<HIRTypedBoundName>,
         body: Vec<HIR>,
         return_type: HIRTypeDef,
-        meta: HIRAstMetadata
+        meta: HIRAstMetadata,
     },
     StructDeclaration {
         struct_name: String,
         body: Vec<HIRTypedBoundName>,
-        meta: HIRAstMetadata
+        meta: HIRAstMetadata,
     },
     FunctionCall {
         function: TypedTrivialHIRExpr,
         args: Vec<TypedTrivialHIRExpr>,
-        meta: HIRAstMetadata
+        meta: HIRAstMetadata,
     },
     //condition, true branch, false branch
     //this transforms elifs into else: \n\t if ..
@@ -253,7 +246,7 @@ pub enum HIR {
 }
 
 fn make_intermediary(intermediary: i32) -> String {
-    return format!("${}", intermediary);
+    format!("${}", intermediary)
 }
 
 //an expression is trivial when it needs basically no effort to
@@ -299,30 +292,30 @@ fn check_if_reducible(expr: &Expr) -> bool {
             for node in args_expr {
                 return_true_if_non_trivial!(node);
             }
-            return false;
+            false
         }
         Expr::BinaryOperation(left, _op, right) => {
             return_true_if_non_trivial!(left);
             return_true_if_non_trivial!(right);
-            return false;
+            false
         }
         Expr::Array(exprs) => {
             for e in exprs {
                 return_true_if_non_trivial!(e);
             }
-            return false;
+            false
         }
         Expr::IndexAccess(_, _) => {
             //return true so that it can be lowered to a __index__ call
-            return true;
+            true
         }
         Expr::MemberAccess(path_expr, _member) => {
             return_true_if_non_trivial!(path_expr);
-            return false;
+            false
         }
         Expr::UnaryExpression(_operator, expr) => {
             return_true_if_non_trivial!(expr);
-            return false;
+            false
         }
         _ => true,
     }
@@ -339,7 +332,7 @@ fn reduce_expr_to_hir_declarations<'a>(
     mut intermediary: i32,
     accum: &mut Vec<HIR>,
     force_declare_intermediate_on_nonroot_exprs: bool,
-    metadata: &'a Expr
+    metadata: &'a Expr,
 ) -> (HIRExpr, i32) {
     let trivial_expr = get_trivial_hir_expr(expr);
     match trivial_expr {
@@ -358,16 +351,26 @@ fn reduce_expr_to_hir_declarations<'a>(
                 Otherwise (if it's a binary op for instance) then a new variable must be created
                 */
 
-                let (lhs_expr, num_interm) =
-                    reduce_expr_to_hir_declarations(function_expr, intermediary, accum, true, function_expr);
+                let (lhs_expr, num_interm) = reduce_expr_to_hir_declarations(
+                    function_expr,
+                    intermediary,
+                    accum,
+                    true,
+                    function_expr,
+                );
 
                 intermediary += num_interm;
 
                 let mut args_exprs = vec![];
                 let mut args_interm_used = 0;
                 for node in args {
-                    let (arg_expr, arg_num_interm) =
-                        reduce_expr_to_hir_declarations(node, intermediary, accum, true, function_expr);
+                    let (arg_expr, arg_num_interm) = reduce_expr_to_hir_declarations(
+                        node,
+                        intermediary,
+                        accum,
+                        true,
+                        function_expr,
+                    );
                     intermediary += arg_num_interm;
                     args_interm_used += arg_num_interm;
 
@@ -385,7 +388,12 @@ fn reduce_expr_to_hir_declarations<'a>(
                     panic!("Function call expression: should be bound to a name!")
                 };
 
-                HIRExpr::FunctionCall(call_expr, args_exprs, HIRTypeDef::PendingInference, Some(metadata.clone()))
+                HIRExpr::FunctionCall(
+                    call_expr,
+                    args_exprs,
+                    HIRTypeDef::PendingInference,
+                    Some(metadata.clone()),
+                )
             } else {
                 let args = args
                     .iter()
@@ -395,7 +403,7 @@ fn reduce_expr_to_hir_declarations<'a>(
                     get_trivial_hir_expr(function_expr).unwrap().pending_type(),
                     args,
                     HIRTypeDef::PendingInference,
-                    Some(full_function_call.clone())
+                    Some(full_function_call.clone()),
                 )
             };
 
@@ -403,21 +411,21 @@ fn reduce_expr_to_hir_declarations<'a>(
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
                     typedef: HIRTypeDef::PendingInference,
-                    expression: fcall.clone(),
+                    expression: fcall,
                     meta_ast: None,
-                    meta_expr: Some(full_function_call.clone())
+                    meta_expr: Some(full_function_call.clone()),
                 };
                 total_used_interm += 1;
                 accum.push(declare);
-                return (
+                (
                     HIRExpr::Trivial(
                         TrivialHIRExpr::Variable(make_intermediary(intermediary)).pending_type(),
-                        Some(full_function_call.clone())
+                        Some(full_function_call.clone()),
                     ),
                     total_used_interm,
-                );
+                )
             } else {
-                return (fcall, total_used_interm);
+                (fcall, total_used_interm)
             }
         }
         full_binop @ Expr::BinaryOperation(lhs, op, rhs) => {
@@ -434,11 +442,11 @@ fn reduce_expr_to_hir_declarations<'a>(
                 total_used_interm = lhs_num_intern + rhs_num_intern;
 
                 HIRExpr::BinaryOperation(
-                    lhs_intermediary.expect_trivial().clone(),
+                    lhs_intermediary.expect_trivial(),
                     *op,
-                    rhs_intermediary.expect_trivial().clone(),
+                    rhs_intermediary.expect_trivial(),
                     HIRTypeDef::PendingInference,
-                    Some(metadata.clone())
+                    Some(metadata.clone()),
                 )
             } else {
                 HIRExpr::BinaryOperation(
@@ -446,7 +454,7 @@ fn reduce_expr_to_hir_declarations<'a>(
                     *op,
                     get_trivial_hir_expr(rhs).unwrap().pending_type(),
                     HIRTypeDef::PendingInference,
-                    Some(metadata.clone())
+                    Some(metadata.clone()),
                 )
             };
 
@@ -454,30 +462,31 @@ fn reduce_expr_to_hir_declarations<'a>(
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
                     typedef: HIRTypeDef::PendingInference,
-                    expression: binop.clone(),
+                    expression: binop,
                     meta_ast: None,
-                    meta_expr: Some(full_binop.clone())
+                    meta_expr: Some(full_binop.clone()),
                 };
                 total_used_interm += 1;
                 accum.push(declare);
 
-                return (
+                (
                     HIRExpr::Trivial(
                         TrivialHIRExpr::Variable(make_intermediary(intermediary)).pending_type(),
-                        Some(full_binop.clone())
+                        Some(full_binop.clone()),
                     ),
                     total_used_interm,
-                );
+                )
             } else {
-                return (binop, total_used_interm);
+                (binop, total_used_interm)
             }
         }
-        Expr::Variable(var) => {
-            return (
-                HIRExpr::Trivial(TrivialHIRExpr::Variable(var.clone()).pending_type(), Some(expr.clone())),
-                0,
-            );
-        }
+        Expr::Variable(var) => (
+            HIRExpr::Trivial(
+                TrivialHIRExpr::Variable(var.clone()).pending_type(),
+                Some(expr.clone()),
+            ),
+            0,
+        ),
         full_array_exp @ Expr::Array(arr_exprs) => {
             let mut total_used_interm = 0;
 
@@ -498,34 +507,42 @@ fn reduce_expr_to_hir_declarations<'a>(
                     };
                 }
 
-                HIRExpr::Array(item_exprs, HIRTypeDef::PendingInference, Some(full_array_exp.clone()))
+                HIRExpr::Array(
+                    item_exprs,
+                    HIRTypeDef::PendingInference,
+                    Some(full_array_exp.clone()),
+                )
             } else {
                 let args = arr_exprs
                     .iter()
                     .map(|x| get_trivial_hir_expr(x).unwrap().pending_type())
                     .collect::<Vec<_>>();
-                HIRExpr::Array(args, HIRTypeDef::PendingInference, Some(full_array_exp.clone()))
+                HIRExpr::Array(
+                    args,
+                    HIRTypeDef::PendingInference,
+                    Some(full_array_exp.clone()),
+                )
             };
 
             if force_declare_intermediate_on_nonroot_exprs {
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
                     typedef: HIRTypeDef::PendingInference,
-                    expression: array.clone(),
+                    expression: array,
                     meta_ast: None,
-                    meta_expr: Some(full_array_exp.clone())
+                    meta_expr: Some(full_array_exp.clone()),
                 };
                 total_used_interm += 1;
                 accum.push(declare);
-                return (
+                (
                     HIRExpr::Trivial(
                         TrivialHIRExpr::Variable(make_intermediary(intermediary)).pending_type(),
-                        Some(full_array_exp.clone())
+                        Some(full_array_exp.clone()),
                     ),
                     total_used_interm,
-                );
+                )
             } else {
-                return (array, total_used_interm);
+                (array, total_used_interm)
             }
         }
         //transforms an index access into a method call on obj
@@ -539,35 +556,40 @@ fn reduce_expr_to_hir_declarations<'a>(
                 vec![*owned],
             );
 
-            return reduce_expr_to_hir_declarations(
+            reduce_expr_to_hir_declarations(
                 &as_fcall,
                 intermediary,
                 accum,
                 force_declare_intermediate_on_nonroot_exprs,
-                &index_access
-            );
+                index_access,
+            )
         }
         unary_expression @ Expr::UnaryExpression(op, expr) => {
             let mut total_used_interm = 0;
             let unaryop = if check_if_reducible(unary_expression) {
-                let (expr_intermediary, num_intern) =
-                    reduce_expr_to_hir_declarations(expr, intermediary, accum, true, unary_expression);
+                let (expr_intermediary, num_intern) = reduce_expr_to_hir_declarations(
+                    expr,
+                    intermediary,
+                    accum,
+                    true,
+                    unary_expression,
+                );
                 intermediary += num_intern;
 
                 total_used_interm = num_intern;
 
                 HIRExpr::UnaryExpression(
                     *op,
-                    expr_intermediary.expect_trivial().clone(),
+                    expr_intermediary.expect_trivial(),
                     HIRTypeDef::PendingInference,
-                    Some(unary_expression.clone())
+                    Some(unary_expression.clone()),
                 )
             } else {
                 HIRExpr::UnaryExpression(
                     *op,
                     get_trivial_hir_expr(expr).unwrap().pending_type(),
                     HIRTypeDef::PendingInference,
-                    Some(unary_expression.clone())
+                    Some(unary_expression.clone()),
                 )
             };
 
@@ -575,22 +597,22 @@ fn reduce_expr_to_hir_declarations<'a>(
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
                     typedef: HIRTypeDef::PendingInference,
-                    expression: unaryop.clone(),
+                    expression: unaryop,
                     meta_ast: None,
-                    meta_expr: Some(unary_expression.clone())
+                    meta_expr: Some(unary_expression.clone()),
                 };
                 total_used_interm += 1;
                 accum.push(declare);
 
-                return (
+                (
                     HIRExpr::Trivial(
                         TrivialHIRExpr::Variable(make_intermediary(intermediary)).pending_type(),
-                        Some(unary_expression.clone())
+                        Some(unary_expression.clone()),
                     ),
                     total_used_interm,
-                );
+                )
             } else {
-                return (unaryop, total_used_interm);
+                (unaryop, total_used_interm)
             }
         }
         Expr::MemberAccess(obj_expr, name) => {
@@ -603,17 +625,17 @@ fn reduce_expr_to_hir_declarations<'a>(
                 total_used_interm = num_intern;
 
                 HIRExpr::MemberAccess(
-                    expr_intermediary.expect_trivial().clone(),
+                    expr_intermediary.expect_trivial(),
                     name.clone(),
                     HIRTypeDef::PendingInference,
-                    Some(expr.clone())
+                    Some(expr.clone()),
                 )
             } else {
                 HIRExpr::MemberAccess(
                     get_trivial_hir_expr(obj_expr).unwrap().pending_type(),
                     name.clone(),
                     HIRTypeDef::PendingInference,
-                    Some(expr.clone())
+                    Some(expr.clone()),
                 )
             };
 
@@ -621,22 +643,22 @@ fn reduce_expr_to_hir_declarations<'a>(
                 let declare = HIR::Declare {
                     var: make_intermediary(intermediary),
                     typedef: HIRTypeDef::PendingInference,
-                    expression: member_access.clone(),
+                    expression: member_access,
                     meta_ast: None,
-                    meta_expr: Some(expr.clone())
+                    meta_expr: Some(expr.clone()),
                 };
                 total_used_interm += 1;
                 accum.push(declare);
 
-                return (
+                (
                     HIRExpr::Trivial(
                         TrivialHIRExpr::Variable(make_intermediary(intermediary)).pending_type(),
-                        Some(expr.clone())
+                        Some(expr.clone()),
                     ),
                     total_used_interm,
-                );
+                )
             } else {
-                return (member_access, total_used_interm);
+                (member_access, total_used_interm)
             }
         }
         exprnode => panic!("Expr to HIR not implemented for {:?}", exprnode),
@@ -655,18 +677,18 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
             //for the decomposition.
             let (result_expr, num_intermediaries) =
                 reduce_expr_to_hir_declarations(expression, intermediary, accum, false, expression);
-           
+
             let decl_hir = HIR::Declare {
                 var: var.name.clone(),
                 typedef: HIRTypeDef::Unresolved(HIRType::from_ast(&var.name_type)),
                 expression: result_expr,
                 meta_expr: Some(expression.clone()),
-                meta_ast: Some(ast.clone())
+                meta_ast: Some(ast.clone()),
             };
 
             accum.push(decl_hir);
 
-            return num_intermediaries;
+            num_intermediaries
         }
         AST::Assign { path, expression } => {
             let (result_expr, num_intermediaries) =
@@ -676,11 +698,11 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 path: path.clone(),
                 expression: result_expr,
                 meta_ast: Some(ast.clone()),
-                meta_expr: Some(expression.clone())
+                meta_expr: Some(expression.clone()),
             };
 
             accum.push(decl_hir);
-            return num_intermediaries;
+            num_intermediaries
         }
         AST::DeclareFunction {
             function_name,
@@ -701,10 +723,10 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                     .iter()
                     .map(|param| {
                         let name = param.name.clone();
-                        return HIRTypedBoundName {
+                        HIRTypedBoundName {
                             name,
                             typename: HIRTypeDef::Unresolved(HIRType::from_ast(&param.name_type)),
-                        };
+                        }
                     })
                     .collect(),
                 body: function_body,
@@ -712,12 +734,12 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                     Some(x) => HIRTypeDef::Unresolved(HIRType::from_ast(x)),
                     None => HIRTypeDef::Unresolved(HIRType::Simple("Void".into())),
                 },
-                meta: Some(ast.clone())
+                meta: Some(ast.clone()),
             };
 
             accum.push(decl_hir);
-            return 0; //yes, each function declaration created the intermediares for their body to work, but they don't
-                      //escape the scope of the function!
+            0 //yes, each function declaration created the intermediares for their body to work, but they don't
+              //escape the scope of the function!
         }
         AST::Root(ast_nodes) => {
             let mut sum_intermediaries = 0;
@@ -726,33 +748,35 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 sum_intermediaries += created_intermediaries;
                 intermediary += created_intermediaries;
             }
-            return sum_intermediaries;
+            sum_intermediaries
         }
         AST::Return(expr) => match expr {
             None => {
                 accum.push(HIR::EmptyReturn);
-                return 0;
+                0
             }
             Some(e) => {
                 let (result_expr, num_intermediaries) =
                     reduce_expr_to_hir_declarations(e, intermediary, accum, false, e);
-                accum.push(HIR::Return(result_expr, HIRTypeDef::PendingInference, Some(ast.clone())));
-                return num_intermediaries;
+                accum.push(HIR::Return(
+                    result_expr,
+                    HIRTypeDef::PendingInference,
+                    Some(ast.clone()),
+                ));
+                num_intermediaries
             }
         },
         AST::StructDeclaration { struct_name, body } => {
-            let fields = body.iter().map(|field| {
-                return HIRTypedBoundName {
-                    name: field.name.clone(),
-                    typename: HIRTypeDef::Unresolved(HIRType::from_ast(&field.name_type)),
-                };
+            let fields = body.iter().map(|field| HIRTypedBoundName {
+                name: field.name.clone(),
+                typename: HIRTypeDef::Unresolved(HIRType::from_ast(&field.name_type)),
             });
             accum.push(HIR::StructDeclaration {
                 struct_name: struct_name.clone(),
                 body: fields.collect(),
-                meta: Some(ast.clone())
+                meta: Some(ast.clone()),
             });
-            return 0;
+            0
         }
         AST::StandaloneExpr(expr) => {
             let Expr::FunctionCall(_, _) = expr else {
@@ -765,22 +789,27 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 panic!("Lowering of function call returned invalid result: {:?}", result_expr);
             };
 
-            let typed_args = args.iter().map(|x| x.clone()).collect::<Vec<_>>();
+            let typed_args = args.to_vec();
 
             accum.push(HIR::FunctionCall {
                 function: function.clone(),
-                args: typed_args.clone(),
-                meta: Some(ast.clone())
+                args: typed_args,
+                meta: Some(ast.clone()),
             });
-            return num_intermediaries;
+            num_intermediaries
         }
         AST::IfStatement {
             true_branch,
             elifs,
             final_else,
         } => {
-            let (true_branch_result_expr, num_intermediaries) =
-                reduce_expr_to_hir_declarations(&true_branch.expression, intermediary, accum, true, &true_branch.expression);
+            let (true_branch_result_expr, num_intermediaries) = reduce_expr_to_hir_declarations(
+                &true_branch.expression,
+                intermediary,
+                accum,
+                true,
+                &true_branch.expression,
+            );
             intermediary += num_intermediaries;
             let HIRExpr::Trivial(trivial_true_branch_expr, _) = &true_branch_result_expr else {
                 panic!("Lowering of true branch expr returned invalid result: {:?}", true_branch_result_expr);
@@ -802,7 +831,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
               First we have to handle some base cases, i.e. no more elifs ou elses, no more elifs but there is an else, etc.
             */
 
-            if elifs.len() == 0 && final_else.is_none() {
+            if elifs.is_empty() && final_else.is_none() {
                 /* Just like function declarations, the intermediaries created here don't escape the context.
                    This is different than python, where all variables declared are scoped to the entire function;
                 */
@@ -811,11 +840,11 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                     trivial_true_branch_expr.clone(),
                     true_body_hir,
                     vec![],
-                    Some(ast.clone())
+                    Some(ast.clone()),
                 ));
 
-                return 0;
-            } else if elifs.len() == 0 && final_else.is_some() {
+                0
+            } else if elifs.is_empty() && final_else.is_some() {
                 //in this case we have a final else, just generate a false branch
                 let mut false_body_hir = vec![];
 
@@ -824,7 +853,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                     Some(nodes) => {
                         for node in nodes.iter() {
                             let created_intermediaries =
-                                ast_to_hir(&node, intermediary, &mut false_body_hir);
+                                ast_to_hir(node, intermediary, &mut false_body_hir);
                             intermediary += created_intermediaries;
                         }
 
@@ -832,11 +861,11 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                             trivial_true_branch_expr.clone(),
                             true_body_hir,
                             false_body_hir,
-                            Some(ast.clone())
+                            Some(ast.clone()),
                         ));
                     }
                 }
-                return 0;
+                0
             } else {
                 //in this case we have elifs, so we build the "tree"
                 //and we don't actually need to store the false body because we'll connect everything later.
@@ -848,13 +877,13 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 struct IfTreeNode {
                     condition: TypedTrivialHIRExpr,
                     true_body: Vec<HIR>,
-                    body_meta: AST
+                    body_meta: AST,
                 }
 
                 let root_node = IfTreeNode {
                     condition: trivial_true_branch_expr.clone(),
                     true_body: true_body_hir,
-                    body_meta: AST::Root(true_branch.statements.clone())
+                    body_meta: AST::Root(true_branch.statements.clone()),
                 };
 
                 nodes.push(root_node);
@@ -866,7 +895,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                             intermediary,
                             accum,
                             true,
-                            &item.expression
+                            &item.expression,
                         );
                     intermediary += num_intermediaries;
 
@@ -876,7 +905,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                     let mut if_node = IfTreeNode {
                         condition: elif_trivial_true_branch_result_expr.clone(),
                         true_body: vec![],
-                        body_meta: AST::Root(item.statements.clone())
+                        body_meta: AST::Root(item.statements.clone()),
                     };
 
                     for node in item.statements.iter() {
@@ -898,13 +927,13 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 //trivialexpr, vec<hir>, vec<hir>
                 let mut final_if_chain = None;
 
-                if final_else_body.len() > 0 {
+                if !final_else_body.is_empty() {
                     let first_node = nodes.pop().unwrap(); //there MUST be a node here
                     final_if_chain = Some(HIR::If(
                         first_node.condition,
                         first_node.true_body,
                         final_else_body,
-                        Some(ast.clone())
+                        Some(ast.clone()),
                     ));
                 }
 
@@ -912,16 +941,21 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 //we navigate through the nodes in reverse and build the final HIR tree
                 for node in nodes {
                     let new_node = match final_if_chain {
-                        None => HIR::If(node.condition, node.true_body, vec![], Some(node.body_meta)),
-                        Some(current_chain) => {
-                            HIR::If(node.condition, node.true_body, vec![current_chain], Some(node.body_meta))
+                        None => {
+                            HIR::If(node.condition, node.true_body, vec![], Some(node.body_meta))
                         }
+                        Some(current_chain) => HIR::If(
+                            node.condition,
+                            node.true_body,
+                            vec![current_chain],
+                            Some(node.body_meta),
+                        ),
                     };
                     final_if_chain = Some(new_node);
                 }
                 accum.push(final_if_chain.unwrap());
 
-                return 0;
+                0
             }
         }
         ast => panic!("Not implemented HIR for {:?}", ast),
@@ -932,8 +966,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
 mod tests {
 
     use super::*;
-    use crate::ast::lexer::*;
-    use crate::ast::parser::*;
+
     use crate::semantic::hir_printer::print_hir;
     use crate::semantic::*;
     use crate::types::type_db::TypeDatabase;
@@ -947,7 +980,7 @@ mod tests {
         let root = crate::ast::parser::AST::Root(ast);
         let mut result = vec![];
         hir::ast_to_hir(&root, 0, &mut result);
-        return result;
+        result
     }
 
     #[test]

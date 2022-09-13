@@ -1,15 +1,13 @@
-use core::num;
-
 use crate::freyr::{
-    asm::asm::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
+    asm::asm_instructions::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
     vm::instructions::{
-        ArithmeticOperation, BitwiseOperation, AddressJumpAddressSource, CompareOperation,
+        AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation,
         ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes,
         OperationMode, SignFlag,
     },
 };
 
-use super::asm::{
+use super::asm_instructions::{
     AsmArithmeticBinaryOp, AsmControlRegister, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction,
 };
 
@@ -31,7 +29,7 @@ fn split_in_whitespace_tab_etc_ignore_comment(asm_line: &str) -> Vec<String> {
         let current_buffer = all_parts.last_mut().unwrap();
         current_buffer.push(c);
     }
-    return all_parts;
+    all_parts
 }
 
 fn split_instruction_mnemonic(mnemonic: &str) -> Vec<String> {
@@ -43,7 +41,7 @@ fn split_instruction_mnemonic(mnemonic: &str) -> Vec<String> {
     let mut current = CurrentPart::String;
     let mut all_parts: Vec<String> = vec![String::new()];
     for c in mnemonic.chars() {
-        if c.is_digit(10) {
+        if c.is_ascii_digit() {
             if current != CurrentPart::Number {
                 current = CurrentPart::Number;
                 all_parts.push(String::new());
@@ -51,27 +49,25 @@ fn split_instruction_mnemonic(mnemonic: &str) -> Vec<String> {
         } else if c == '_' {
             all_parts.push(String::new());
             continue;
-        } else {
-            if current != CurrentPart::String {
-                current = CurrentPart::String;
-                all_parts.push(String::new());
-            }
+        } else if current != CurrentPart::String {
+            current = CurrentPart::String;
+            all_parts.push(String::new());
         }
         let current_buffer = all_parts.last_mut().unwrap();
         current_buffer.push(c);
     }
-    return all_parts;
+    all_parts
 }
 
 fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
     let splitted = split_in_whitespace_tab_etc_ignore_comment(asm_line);
-    if splitted.len() == 1 && splitted[0] == "" {
+    if splitted.len() == 1 && splitted[0].is_empty() {
         return None;
     }
 
-    if splitted[0].ends_with(":") {
+    if splitted[0].ends_with(':') {
         return Some(AssemblyInstruction::Label {
-            label: splitted[0].replace(":", ""),
+            label: splitted[0].replace(':', ""),
         });
     }
 
@@ -97,9 +93,9 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
             };
 
             AssemblyInstruction::PushImmediate {
-                bytes: bytes,
+                bytes,
                 immediate: immediate.to_le_bytes(),
-                shift_size: shift_size,
+                shift_size,
             }
         }
         ["storeaddr", rest @ ..] => {
@@ -109,12 +105,12 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     if !splitted[1].contains("bp") {
                         panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
                     }
-                    if !splitted[1].contains("+") && !splitted[1].contains("-") {
+                    if !splitted[1].contains('+') && !splitted[1].contains('-') {
                         panic!("Please say whether the offset in storeaddr is positive or negative at line {line}");
                     }
                     let remove_bp = splitted[1].replace("bp", "");
                     let offset = remove_bp.parse().unwrap();
-                    (bytes, AsmLoadStoreMode::Relative { offset: offset })
+                    (bytes, AsmLoadStoreMode::Relative { offset })
                 }
                 ["imm", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
@@ -129,15 +125,11 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                 }
                 [size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
-
                     (bytes, AsmLoadStoreMode::StackPop)
                 }
                 _ => panic!("Could not parse instruction storeaddr {rest:?} at line {line}"),
             };
-            AssemblyInstruction::StoreAddress {
-                bytes: bytes,
-                mode: lsm,
-            }
+            AssemblyInstruction::StoreAddress { bytes, mode: lsm }
         }
 
         ["loadaddr", rest @ ..] => {
@@ -147,12 +139,12 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     if !splitted[1].contains("bp") {
                         panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
                     }
-                    if !splitted[1].contains("+") && !splitted[1].contains("-") {
+                    if !splitted[1].contains('+') && !splitted[1].contains('-') {
                         panic!("Please say whether the offset in storeaddr is positive or negative at line {line}");
                     }
                     let remove_bp = splitted[1].replace("bp", "");
                     let offset = remove_bp.parse().unwrap();
-                    (bytes, AsmLoadStoreMode::Relative { offset: offset })
+                    (bytes, AsmLoadStoreMode::Relative { offset })
                 }
                 ["imm", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
@@ -171,25 +163,20 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                 }
                 _ => panic!("Could not parse instruction {asm_line} at line {line}"),
             };
-            AssemblyInstruction::LoadAddress {
-                bytes: bytes,
-                mode: lsm,
-            }
+            AssemblyInstruction::LoadAddress { bytes, mode: lsm }
         }
-        [operation @ ("sums"|"subs"| "divs"| "muls"| "eqs"|"les"|"lts"|"ges"|"gts"|"nes"|
-                             "sumu"|"subu"| "divu"| "mulu"| "equ"|"leu"|"ltu"|"geu"|"gtu"|"neu"), rest @ ..] => {
+        [operation @ ("sums" | "subs" | "divs" | "muls" | "eqs" | "les" | "lts" | "ges" | "gts"
+        | "nes" | "sumu" | "subu" | "divu" | "mulu" | "equ" | "leu" | "ltu"
+        | "geu" | "gtu" | "neu"), rest @ ..] => {
             let (immediate, num_bytes) = match rest {
                 ["imm", size] => {
-                    let immediate = &splitted[1].parse::<i32>().unwrap()
-                        .to_le_bytes()[0..2];
+                    let immediate = &splitted[1].parse::<i32>().unwrap().to_le_bytes()[0..2];
                     let imm_2bytes: [u8; 2] = immediate.try_into().unwrap();
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     (Some(imm_2bytes), bytes)
-                },
-                [size] => {
-                    (None, size.parse::<u8>().unwrap() / 8)
-                },
-                _ => panic!("Failed to parse instruction: {mnems_str:?}")
+                }
+                [size] => (None, size.parse::<u8>().unwrap() / 8),
+                _ => panic!("Failed to parse instruction: {mnems_str:?}"),
             };
 
             if operation.len() == 4 {
@@ -200,7 +187,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     bytes: num_bytes,
                     operation: arith_op,
                     sign: sign_flag,
-                    immediate: immediate,
+                    immediate,
                 }
             } else if operation.len() == 3 {
                 let arith_op = get_compare_op(&operation[0..2]);
@@ -209,71 +196,66 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     bytes: num_bytes,
                     operation: arith_op,
                     sign: sign_flag,
-                    immediate: immediate,
+                    immediate,
                 }
             } else {
                 panic!("unknown op: {operation:?}")
             }
-            
-        },
-        [operation @ ("and"|"or"|"xor"|"andk"|"ork"|"xork"), rest @ ..] => {
+        }
+        [operation @ ("and" | "or" | "xor" | "andk" | "ork" | "xork"), rest @ ..] => {
             let (immediate, num_bytes) = match rest {
                 ["imm", size] => {
-                    let immediate = &splitted[1].parse::<i32>().unwrap()
-                        .to_le_bytes()[0..2];
+                    let immediate = &splitted[1].parse::<i32>().unwrap().to_le_bytes()[0..2];
                     let imm_2bytes: [u8; 2] = immediate.try_into().unwrap();
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     (Some(imm_2bytes), bytes)
-                },
-                [size] => {
-                    (None, size.parse::<u8>().unwrap() / 8)
-                },
-                _ => panic!("Failed to parse instruction: {mnems_str:?}")
+                }
+                [size] => (None, size.parse::<u8>().unwrap() / 8),
+                _ => panic!("Failed to parse instruction: {mnems_str:?}"),
             };
 
-            let arith_op_str = &operation[0.. operation.len() - 1];
+            let arith_op_str = &operation[0..operation.len() - 1];
             let arith_op = match arith_op_str {
                 "and" => AsmIntegerBitwiseBinaryOp::And,
                 "or" => AsmIntegerBitwiseBinaryOp::Or,
                 "xor" => AsmIntegerBitwiseBinaryOp::Xor,
-                _ => panic!("Unknown op: {arith_op_str:?}")
+                _ => panic!("Unknown op: {arith_op_str:?}"),
             };
             let sign_flag = match operation.chars().last().unwrap() {
                 'k' => AsmSignFlag::Signed,
                 _ => AsmSignFlag::Unsigned,
             };
-                
-           
+
             AssemblyInstruction::IntegerBitwiseBinaryOperation {
                 bytes: num_bytes,
                 operation: arith_op,
                 sign: sign_flag,
-                immediate: immediate,
+                immediate,
             }
-        },
+        }
         ["pop", "reg"] => {
             let register = match splitted[1].as_str() {
-                "bp" => AsmControlRegister::BasePointer,
-                "ip" => AsmControlRegister::InstructionPointer,
-                "sp" => AsmControlRegister::StackPointer,
+                "bp" => AsmControlRegister::Base,
+                "ip" => AsmControlRegister::Instruction,
+                "sp" => AsmControlRegister::Stack,
                 _ => panic!(
                     "control register not found, invalid instruction: {splitted:?} at line {line}"
                 ),
             };
 
-            AssemblyInstruction::PopRegister { register: register }
+            AssemblyInstruction::PopRegister { register }
         }
         ["push", "reg"] => {
             let register = match splitted[1].as_str() {
-                "bp" => AsmControlRegister::BasePointer,
-                "ip" => AsmControlRegister::InstructionPointer,
-                "sp" => AsmControlRegister::StackPointer,
+                "bp" => AsmControlRegister::Base,
+                "ip" => AsmControlRegister::Instruction,
+                "sp" => AsmControlRegister::Stack,
                 _ => panic!(
                     "control register not found, invalid instruction: {splitted:?} at line {line}"
                 ),
             };
 
-            AssemblyInstruction::PushRegister { register: register }
+            AssemblyInstruction::PushRegister { register }
         }
         ["pop", size] => {
             let bytes = size.parse::<u8>().unwrap() / 8;
@@ -284,23 +266,17 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
         },
         ["call", "stack"] => AssemblyInstruction::UnresolvedCall { label: None },
         ["jz"] => AssemblyInstruction::UnresolvedJumpIfZero {
-            label: Some(splitted[1].to_string())
+            label: Some(splitted[1].to_string()),
         },
-        ["jz", "stack"]  => AssemblyInstruction::UnresolvedJumpIfZero {
-            label: None
-        },
+        ["jz", "stack"] => AssemblyInstruction::UnresolvedJumpIfZero { label: None },
         ["jnz"] => AssemblyInstruction::UnresolvedJumpIfNotZero {
-            label: Some(splitted[1].to_string())
+            label: Some(splitted[1].to_string()),
         },
-        ["jnz", "stack"] => AssemblyInstruction::UnresolvedJumpIfNotZero {
-            label: None
-        },
+        ["jnz", "stack"] => AssemblyInstruction::UnresolvedJumpIfNotZero { label: None },
         ["jmp"] => AssemblyInstruction::UnresolvedJump {
-            label: Some(splitted[1].to_string())
+            label: Some(splitted[1].to_string()),
         },
-        ["jmp", "stack"] => AssemblyInstruction::UnresolvedJump {
-            label: None
-        },
+        ["jmp", "stack"] => AssemblyInstruction::UnresolvedJump { label: None },
         ["exit"] => AssemblyInstruction::Exit,
         ["return"] => AssemblyInstruction::Return,
         _ => {
@@ -313,7 +289,7 @@ fn get_sign(flag: char) -> AsmSignFlag {
     match flag {
         's' => AsmSignFlag::Signed,
         'u' => AsmSignFlag::Unsigned,
-        _ => panic!("Parse asm arith failed: {flag}")
+        _ => panic!("Parse asm arith failed: {flag}"),
     }
 }
 
@@ -324,7 +300,7 @@ fn get_arith_op(operation: &str) -> AsmArithmeticBinaryOp {
         "mul" => AsmArithmeticBinaryOp::Multiply,
         "div" => AsmArithmeticBinaryOp::Divide,
         "pow" => AsmArithmeticBinaryOp::Power,
-        _ => panic!("Parse asm arith failed: {operation}")
+        _ => panic!("Parse asm arith failed: {operation}"),
     }
 }
 
@@ -336,7 +312,7 @@ fn get_compare_op(operation: &str) -> AsmIntegerCompareBinaryOp {
         "gt" => AsmIntegerCompareBinaryOp::GreaterThan,
         "ge" => AsmIntegerCompareBinaryOp::GreaterThanOrEquals,
         "ne" => AsmIntegerCompareBinaryOp::NotEquals,
-        _ => panic!("Parse asm compare failed: {operation}")
+        _ => panic!("Parse asm compare failed: {operation}"),
     }
 }
 
@@ -347,7 +323,7 @@ pub fn parse_asm(asm: &str) -> Vec<AssemblyInstruction> {
         .enumerate()
         .map(|(i, x)| parse_asm_line(i as u32 + 1, x));
 
-    return parsed.filter(|x| x.is_some()).map(|x| x.unwrap()).collect();
+    parsed.flatten().collect()
 }
 
 pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction> {
@@ -361,7 +337,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
                 label_offsets.insert(label.clone(), current_instruction_index);
             }
             _ => {
-                current_instruction_index = current_instruction_index + 1;
+                current_instruction_index += 1;
             }
         }
     }
@@ -371,28 +347,34 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
             AssemblyInstruction::Label { .. } => {
                 continue; //ignore labels
             }
-            AssemblyInstruction::UnresolvedCall { label: Some(label), .. } => {
+            AssemblyInstruction::UnresolvedCall {
+                label: Some(label), ..
+            } => {
                 let offset = label_offsets.get(label);
-                current_instruction_index = current_instruction_index + 1;
+                current_instruction_index += 1;
                 resolved_instructions.push(AssemblyInstruction::Call {
-                    offset: *offset.expect(&format!("Could not find label {label}")),
+                    offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
                 })
             }
             AssemblyInstruction::UnresolvedCall { label: None, .. } => {
                 resolved_instructions.push(AssemblyInstruction::CallFromStack)
             }
-            AssemblyInstruction::UnresolvedJumpIfZero { label: Some(label), .. } => {
+            AssemblyInstruction::UnresolvedJumpIfZero {
+                label: Some(label), ..
+            } => {
                 let offset = label_offsets.get(label);
-                current_instruction_index = current_instruction_index + 1;
+                current_instruction_index += 1;
                 resolved_instructions.push(AssemblyInstruction::JumpIfZero {
-                    offset: *offset.expect(&format!("Could not find label {label}")),
+                    offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
                 })
             }
-            AssemblyInstruction::UnresolvedJumpIfNotZero { label: Some(label), .. } => {
+            AssemblyInstruction::UnresolvedJumpIfNotZero {
+                label: Some(label), ..
+            } => {
                 let offset = label_offsets.get(label);
-                current_instruction_index = current_instruction_index + 1;
+                current_instruction_index += 1;
                 resolved_instructions.push(AssemblyInstruction::JumpIfNotZero {
-                    offset: *offset.expect(&format!("Could not find label {label}")),
+                    offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
                 })
             }
             AssemblyInstruction::UnresolvedJumpIfZero { label: None, .. } => {
@@ -403,9 +385,9 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
             }
             AssemblyInstruction::UnresolvedJump { label: Some(label) } => {
                 let offset = label_offsets.get(label);
-                current_instruction_index = current_instruction_index + 1;
+                current_instruction_index += 1;
                 resolved_instructions.push(AssemblyInstruction::Jump {
-                    offset: *offset.expect(&format!("Could not find label {label}")),
+                    offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
                 })
             }
             AssemblyInstruction::UnresolvedJump { label: None } => {
@@ -415,7 +397,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
         }
     }
 
-    return resolved_instructions;
+    resolved_instructions
 }
 
 pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instruction> {
@@ -428,7 +410,7 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 } else {
                     (
                         LoadStoreAddressingMode::RelativeBackward,
-                        offset.abs() as u32,
+                        offset.unsigned_abs(),
                     )
                 }
             }
@@ -496,9 +478,9 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
 
     fn control_register(sign: &AsmControlRegister) -> ControlRegister {
         match sign {
-            AsmControlRegister::BasePointer => ControlRegister::BasePointer,
-            AsmControlRegister::StackPointer => ControlRegister::StackPointer,
-            AsmControlRegister::InstructionPointer => ControlRegister::InstructionPointer,
+            AsmControlRegister::Base => ControlRegister::Base,
+            AsmControlRegister::Stack => ControlRegister::Stack,
+            AsmControlRegister::Instruction => ControlRegister::Instruction,
         }
     }
 
@@ -513,7 +495,7 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 Instruction::LoadAddress {
                     bytes: num_bytes(bytes),
                     mode: addressing_mode,
-                    operand: operand,
+                    operand,
                 }
             }
             AssemblyInstruction::StoreAddress { bytes, mode } => {
@@ -521,7 +503,7 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 Instruction::StoreAddress {
                     bytes: num_bytes(bytes),
                     mode: addressing_mode,
-                    operand: operand,
+                    operand,
                 }
             }
             AssemblyInstruction::PushImmediate {
@@ -540,7 +522,7 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 immediate,
             } => {
                 let (mode, operand) = match immediate {
-                    Some(operand) => (OperationMode::StackAndImmediate, operand.clone()),
+                    Some(operand) => (OperationMode::StackAndImmediate, *operand),
                     None => (OperationMode::PureStack, [0, 0]),
                 };
                 Instruction::IntegerArithmetic {
@@ -569,7 +551,12 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                     operand,
                 }
             }
-            AssemblyInstruction::IntegerCompareBinaryOperation { bytes, operation, sign, immediate } => {
+            AssemblyInstruction::IntegerCompareBinaryOperation {
+                bytes,
+                operation,
+                sign,
+                immediate,
+            } => {
                 let (mode, operand) = match immediate {
                     Some(operand) => (OperationMode::StackAndImmediate, *operand),
                     None => (OperationMode::PureStack, [0, 0]),
@@ -581,7 +568,7 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                     mode,
                     operand,
                 }
-            },
+            }
 
             AssemblyInstruction::PopRegister { register } => Instruction::PopIntoRegister {
                 control_register: control_register(register),
@@ -592,7 +579,7 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
             AssemblyInstruction::PopBytes { bytes } => Instruction::Pop {
                 bytes: num_bytes(bytes),
             },
-            AssemblyInstruction::UnresolvedCall { label } => {
+            AssemblyInstruction::UnresolvedCall { label: _ } => {
                 panic!("Unresolved call reached ASM compiler!")
             }
             AssemblyInstruction::Call { offset } => Instruction::Call {
@@ -603,18 +590,42 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 source: AddressJumpAddressSource::PopFromStack,
                 offset: 0,
             },
-            AssemblyInstruction::Label { label } => panic!("Label reached ASM compiler"),
+            AssemblyInstruction::Label { label: _ } => panic!("Label reached ASM compiler"),
             AssemblyInstruction::Return => Instruction::Return,
-            AssemblyInstruction::JumpIfZero { offset } => Instruction::JumpIfZero { source: AddressJumpAddressSource::FromOperand, offset: *offset },
-            AssemblyInstruction::JumpIfNotZero { offset } => Instruction::JumpIfNotZero { source: AddressJumpAddressSource::FromOperand, offset: *offset },
-            AssemblyInstruction::JumpIfZeroFromStack { .. } => Instruction::JumpIfZero { source: AddressJumpAddressSource::PopFromStack, offset: 0 },
-            AssemblyInstruction::JumpIfNotZeroFromStack { .. } => Instruction::JumpIfNotZero { source: AddressJumpAddressSource::PopFromStack, offset: 0 },
-            AssemblyInstruction::Jump { offset } => Instruction::JumpUnconditional { source: AddressJumpAddressSource::FromOperand, offset: *offset },
-            AssemblyInstruction::JumpFromStack => Instruction::JumpUnconditional { source: AddressJumpAddressSource::PopFromStack, offset: 0 },
+            AssemblyInstruction::JumpIfZero { offset } => Instruction::JumpIfZero {
+                source: AddressJumpAddressSource::FromOperand,
+                offset: *offset,
+            },
+            AssemblyInstruction::JumpIfNotZero { offset } => Instruction::JumpIfNotZero {
+                source: AddressJumpAddressSource::FromOperand,
+                offset: *offset,
+            },
+            AssemblyInstruction::JumpIfZeroFromStack { .. } => Instruction::JumpIfZero {
+                source: AddressJumpAddressSource::PopFromStack,
+                offset: 0,
+            },
+            AssemblyInstruction::JumpIfNotZeroFromStack { .. } => Instruction::JumpIfNotZero {
+                source: AddressJumpAddressSource::PopFromStack,
+                offset: 0,
+            },
+            AssemblyInstruction::Jump { offset } => Instruction::JumpUnconditional {
+                source: AddressJumpAddressSource::FromOperand,
+                offset: *offset,
+            },
+            AssemblyInstruction::JumpFromStack => Instruction::JumpUnconditional {
+                source: AddressJumpAddressSource::PopFromStack,
+                offset: 0,
+            },
             AssemblyInstruction::Exit => Instruction::Exit,
-            AssemblyInstruction::UnresolvedJumpIfZero { label } => panic!("Unresolved jz reached ASM compiler!"),
-            AssemblyInstruction::UnresolvedJumpIfNotZero { label } => panic!("Unresolved jnz reached ASM compiler!"),
-            AssemblyInstruction::UnresolvedJump { label } => panic!("Unresolved jmp reached ASM compiler!"),
+            AssemblyInstruction::UnresolvedJumpIfZero { label: _ } => {
+                panic!("Unresolved jz reached ASM compiler!")
+            }
+            AssemblyInstruction::UnresolvedJumpIfNotZero { label: _ } => {
+                panic!("Unresolved jnz reached ASM compiler!")
+            }
+            AssemblyInstruction::UnresolvedJump { label: _ } => {
+                panic!("Unresolved jmp reached ASM compiler!")
+            }
         })
         .collect()
 }
@@ -625,11 +636,10 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::freyr::{asm::{
-        asm::*,
+    use crate::freyr::asm::{
+        asm_instructions::*,
         assembler::{parse_asm, resolve},
-    }};
-
+    };
 
     #[test]
     fn parse_test() {
@@ -724,45 +734,37 @@ main:
                 immediate: Some(99u16.to_le_bytes()),
             },
             AssemblyInstruction::PopRegister {
-                register: AsmControlRegister::BasePointer,
+                register: AsmControlRegister::Base,
             },
             AssemblyInstruction::PopRegister {
-                register: AsmControlRegister::StackPointer,
+                register: AsmControlRegister::Stack,
             },
             AssemblyInstruction::PopRegister {
-                register: AsmControlRegister::InstructionPointer,
+                register: AsmControlRegister::Instruction,
             },
             AssemblyInstruction::PushRegister {
-                register: AsmControlRegister::BasePointer,
+                register: AsmControlRegister::Base,
             },
             AssemblyInstruction::PushRegister {
-                register: AsmControlRegister::StackPointer,
+                register: AsmControlRegister::Stack,
             },
             AssemblyInstruction::PushRegister {
-                register: AsmControlRegister::InstructionPointer,
+                register: AsmControlRegister::Instruction,
             },
             AssemblyInstruction::UnresolvedCall {
                 label: Some("main".to_string()),
             },
-            AssemblyInstruction::UnresolvedCall {
-                label: None,
-            },
-            AssemblyInstruction::UnresolvedJump{
-                label: None,
-            },
-            AssemblyInstruction::UnresolvedJump{
+            AssemblyInstruction::UnresolvedCall { label: None },
+            AssemblyInstruction::UnresolvedJump { label: None },
+            AssemblyInstruction::UnresolvedJump {
                 label: Some("main".to_string()),
             },
-            AssemblyInstruction::UnresolvedJumpIfNotZero{
-                label: None,
-            },
-            AssemblyInstruction::UnresolvedJumpIfNotZero{
+            AssemblyInstruction::UnresolvedJumpIfNotZero { label: None },
+            AssemblyInstruction::UnresolvedJumpIfNotZero {
                 label: Some("main".to_string()),
             },
-            AssemblyInstruction::UnresolvedJumpIfZero{
-                label: None,
-            },
-            AssemblyInstruction::UnresolvedJumpIfZero{
+            AssemblyInstruction::UnresolvedJumpIfZero { label: None },
+            AssemblyInstruction::UnresolvedJumpIfZero {
                 label: Some("main".to_string()),
             },
             AssemblyInstruction::Exit,

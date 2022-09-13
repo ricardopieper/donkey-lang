@@ -1,4 +1,3 @@
-use crate::ast::lexer;
 use crate::semantic::hir_printer::*;
 use crate::types::type_db::TypeDatabase;
 
@@ -7,7 +6,7 @@ use super::mir::MIRBlockNode;
 use super::mir::MIRScope;
 use super::mir::MIRTopLevelNode;
 
-fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
+fn print_mir_block(block: &MIRBlock, _type_db: &TypeDatabase) -> String {
     let mut buffer = String::new();
 
     buffer.push_str(&format!("    defblock {}:\n", block.index));
@@ -21,13 +20,13 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
                 buffer.push_str(&format!(
                     "        {} = {}\n",
                     path.join("."),
-                    expr_str(&expression)
+                    expr_str(expression)
                 ));
             }
             MIRBlockNode::FunctionCall { function, args, .. } => {
                 let args_str = args
                     .iter()
-                    .map(|x| trivial_expr_str(&x))
+                    .map(trivial_expr_str)
                     .collect::<Vec<_>>()
                     .join(", ");
                 buffer.push_str(&format!("        {}({})\n", function, args_str));
@@ -43,8 +42,8 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
         else:
             gotoblock {}
 ",
-                trivial_expr_str(&condition), //if condition:
-                true_branch.0,                //gotoblock 0
+                trivial_expr_str(condition), //if condition:
+                true_branch.0,               //gotoblock 0
                 false_branch.0
             )); //gotoblock 1
         }
@@ -52,14 +51,14 @@ fn print_mir_block(block: &MIRBlock, type_db: &TypeDatabase) -> String {
             buffer.push_str(&format!("        gotoblock {}\n", block.0));
         }
         super::mir::MIRBlockFinal::Return(expr, ..) => {
-            buffer.push_str(&format!("        return {}\n", expr_str(&expr)));
+            buffer.push_str(&format!("        return {}\n", expr_str(expr)));
         }
         super::mir::MIRBlockFinal::EmptyReturn => {
-            buffer.push_str(&format!("        return\n"));
+            buffer.push_str("        return\n");
         }
     }
 
-    return buffer;
+    buffer
 }
 
 fn print_mir_scope(scope: &MIRScope, type_db: &TypeDatabase) -> String {
@@ -76,7 +75,7 @@ fn print_mir_scope(scope: &MIRScope, type_db: &TypeDatabase) -> String {
         ));
     }
 
-    return buffer;
+    buffer
 }
 
 fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeDatabase) -> String {
@@ -90,9 +89,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeDatabase) -> String {
         } => {
             let parameters = parameters
                 .iter()
-                .map(|param| {
-                    return format!("{}: {}", param.name, param.typename.as_string(type_db));
-                })
+                .map(|param| format!("{}: {}", param.name, param.typename.as_string(type_db)))
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut function = format!(
@@ -110,9 +107,12 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeDatabase) -> String {
                 function.push_str(&print_mir_block(n, type_db));
             }
 
-            return function;
+            function
         }
-        MIRTopLevelNode::StructDeclaration { struct_name, body } => {
+        MIRTopLevelNode::StructDeclaration {
+            struct_name: _,
+            body: _,
+        } => {
             todo!("Not implemented yet")
         }
     }
@@ -121,7 +121,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeDatabase) -> String {
 pub fn print_mir(mir: &[MIRTopLevelNode], type_db: &TypeDatabase) -> String {
     let mut buffer = String::new();
     for node in mir {
-        buffer.push_str(&print_mir_str(&node, type_db));
+        buffer.push_str(&print_mir_str(node, type_db));
     }
-    return buffer;
+    buffer
 }

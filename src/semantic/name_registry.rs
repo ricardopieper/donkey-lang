@@ -1,18 +1,20 @@
-use crate::{semantic::hir::*, types::type_db::{TypeDatabase, TypeInstance}};
+use crate::{
+    semantic::hir::*,
+    types::type_db::{TypeDatabase, TypeInstance},
+};
 
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct PartiallyResolvedFunctionSignature {
     pub args: Vec<HIRTypeDef>,
-    pub return_type: HIRTypeDef
+    pub return_type: HIRTypeDef,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct NameRegistry {
     names: HashMap<String, HIRTypeDef>,
-    partially_resolved_function_sigs: HashMap<String, PartiallyResolvedFunctionSignature>
+    partially_resolved_function_sigs: HashMap<String, PartiallyResolvedFunctionSignature>,
 }
 
 impl NameRegistry {
@@ -23,11 +25,18 @@ impl NameRegistry {
         }
     }
 
-    pub fn insert_partially_resolved_signature(&mut self, name: String, sig: PartiallyResolvedFunctionSignature) {
+    pub fn insert_partially_resolved_signature(
+        &mut self,
+        name: String,
+        sig: PartiallyResolvedFunctionSignature,
+    ) {
         self.partially_resolved_function_sigs.insert(name, sig);
     }
 
-    pub fn find_partially_resolved_sig(&mut self, name: &str) ->  Option<&PartiallyResolvedFunctionSignature> {
+    pub fn find_partially_resolved_sig(
+        &mut self,
+        name: &str,
+    ) -> Option<&PartiallyResolvedFunctionSignature> {
         self.partially_resolved_function_sigs.get(name)
     }
 
@@ -45,7 +54,7 @@ impl NameRegistry {
         return self
             .names
             .get(name)
-            .expect(&format!("Could not find a name for {}", name))
+            .unwrap_or_else(|| panic!("Could not find a name for {}", name))
             .clone();
     }
 
@@ -53,7 +62,7 @@ impl NameRegistry {
         return self
             .names
             .get(name)
-            .expect(&format!("Could not find a name for {}", name));
+            .unwrap_or_else(|| panic!("Could not find a name for {}", name));
     }
 
     pub fn get_names(&self) -> impl Iterator<Item = &String> {
@@ -103,7 +112,7 @@ fn register_builtins(type_db: &TypeDatabase, registry: &mut NameRegistry) {
     registry.insert(
         "print".to_string(),
         HIRTypeDef::Resolved(TypeInstance::Function(
-            vec![string.clone()],
+            vec![string],
             Box::new(type_db.special_types.void.clone()),
         )),
     );
@@ -112,7 +121,7 @@ fn register_builtins(type_db: &TypeDatabase, registry: &mut NameRegistry) {
         "pow".to_string(),
         HIRTypeDef::Resolved(TypeInstance::Function(
             vec![float64.clone(), float64.clone()],
-            Box::new(float64.clone()),
+            Box::new(float64),
         )),
     );
 
@@ -120,7 +129,7 @@ fn register_builtins(type_db: &TypeDatabase, registry: &mut NameRegistry) {
         "pow_f32".to_string(),
         HIRTypeDef::Resolved(TypeInstance::Function(
             vec![float32.clone(), float32.clone()],
-            Box::new(float32.clone()),
+            Box::new(float32),
         )),
     );
 
@@ -128,7 +137,7 @@ fn register_builtins(type_db: &TypeDatabase, registry: &mut NameRegistry) {
         "pow_i64".to_string(),
         HIRTypeDef::Resolved(TypeInstance::Function(
             vec![int64.clone(), int64.clone()],
-            Box::new(int64.clone()),
+            Box::new(int64),
         )),
     );
 
@@ -136,7 +145,7 @@ fn register_builtins(type_db: &TypeDatabase, registry: &mut NameRegistry) {
         "pow_i32".to_string(),
         HIRTypeDef::Resolved(TypeInstance::Function(
             vec![int32.clone(), int32.clone()],
-            Box::new(int32.clone()),
+            Box::new(int32),
         )),
     );
 }
@@ -168,5 +177,5 @@ pub fn build_name_registry(type_db: &TypeDatabase, mir: &[HIR]) -> NameRegistry 
             _ => {}
         };
     }
-    return registry;
+    registry
 }

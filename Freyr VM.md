@@ -200,8 +200,8 @@ main: <function stack: [], {ip = 0, bp = 0, sp = 0}>,
 36      push_imm32      5       ; pushes 5 in preparation for binary op +, sp = 20
 40      push_imm32      0       ; reserve space for return argument, sp = 24
 44      loadaddr_rel32  bp+8    ; loads argument z, sp = 28
-48      loadaddr rel32  bp+0    ; loads argument x, sp = 32
-52      push_reg        bp      ; save our argument to recover bp later, sp = 36
+48      loadaddr_rel32  bp+0    ; loads argument x, sp = 32
+52      push_reg        bp      ; save our bp to recover later, sp = 36
 56      call <some_function>    ; moves ip to some_function, sets bp = sp + 4 (40), pushes a return instruction pointer (60)
 ;;stack before entering: [x, y, z, result, 5, return space, z, x, bp(0), ip(60) ] {ip = 96, bp = 40}
 ;;stack after call: [x, y, z, result, 5, return space, z, x, bp(0)] {ip = 60, bp = 40, sp = 36}

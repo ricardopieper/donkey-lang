@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use super::hir::*;
 use crate::ast::parser::AST;
 use crate::types::type_db::TypeDatabase;
@@ -43,17 +41,17 @@ fn expect_find_variable<'block, 'scope>(
 ) -> &'scope TypeInstance {
     let variable = find_variable(name, current_block, scopes, names);
     match variable {
-        Some(x) => return x,
+        Some(x) => x,
         None => panic!("Variable not found: {name}"),
     }
 }
 
-fn check_function_arguments<'callargs>(
+fn check_function_arguments(
     on_function: &str,
     function_called: &FunctionName,
     function_parameters: &[TypeInstance],
     arguments_passed: &[TypeInstance],
-    type_db: &TypeDatabase,
+    _type_db: &TypeDatabase,
     type_errors: &mut TypeErrors,
 ) {
     if function_parameters.len() != arguments_passed.len() {
@@ -95,7 +93,7 @@ fn all_paths_return_values_of_correct_type(
     for body_node in body {
         if let MIRBlockFinal::Return(return_expr, ..) = &body_node.finish {
             let expr_type = return_expr.get_expr_type().expect_resolved();
-            if !return_type.is_compatible(&return_expr.get_expr_type().expect_resolved(), type_db) {
+            if !return_type.is_compatible(return_expr.get_expr_type().expect_resolved(), type_db) {
                 errors.return_type_mismatches.push(TypeMismatch {
                     context: ReturnTypeContext(),
                     on_function: function_name.to_string(),
@@ -122,7 +120,7 @@ fn all_assignments_correct_type(
     body: &[MIRBlock],
     scopes: &[MIRScope],
     names: &NameRegistry,
-    type_db: &TypeDatabase,
+    _type_db: &TypeDatabase,
     type_errors: &mut TypeErrors,
 ) {
     for body_node in body {
@@ -184,7 +182,7 @@ fn get_actual_function_name_with_details(
 
     let expr = match meta_ast.as_ref() {
         Some(AST::StandaloneExpr(expr)) => expr,
-        _ => &meta_expr.as_ref().unwrap(),
+        _ => meta_expr.as_ref().unwrap(),
     };
 
     println!("function metadata ast: {:?}", expr);
@@ -205,7 +203,7 @@ fn get_actual_function_name_with_details(
         _ => {}
     };
 
-    return FunctionName::Function(function_name.to_string());
+    FunctionName::Function(function_name.to_string())
 }
 
 fn function_calls_are_actually_callable_and_parameters_are_correct_type(
@@ -224,7 +222,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     path,
                     expression,
                     meta_ast,
-                    meta_expr,
+                    meta_expr: _,
                 } => {
                     if path.len() > 1 {
                         panic!("Assign to path len > 2 not supported in type checker yet!");
@@ -251,7 +249,6 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         panic!("Return type of function is {func_return_type:#?} but expression return type is {return_type:#?}. This should not happen. This is a type inference bug, and something is inconsistent!");
                     }
 
-
                     let passed_types = args
                         .iter()
                         .map(|x| x.1.expect_resolved().clone())
@@ -262,9 +259,9 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         expr_metadata,
                     );
                     check_function_arguments(
-                        &function_name,
+                        function_name,
                         &actual_function_name,
-                        &func_args_types,
+                        func_args_types,
                         &passed_types,
                         type_db,
                         type_errors,
@@ -285,9 +282,9 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                             let actual_function_name =
                                 get_actual_function_name_with_details(function, meta_ast, &None);
                             check_function_arguments(
-                                &function_name,
+                                function_name,
                                 &actual_function_name,
-                                &argument_types,
+                                argument_types,
                                 &passed,
                                 type_db,
                                 type_errors,
@@ -315,7 +312,6 @@ fn type_check_function(
     type_db: &TypeDatabase,
     type_errors: &mut TypeErrors,
 ) {
-    
     all_paths_return_values_of_correct_type(function_name, body, return_type, type_db, type_errors);
     all_assignments_correct_type(function_name, body, scopes, globals, type_db, type_errors);
     function_calls_are_actually_callable_and_parameters_are_correct_type(
@@ -326,10 +322,6 @@ fn type_check_function(
         type_db,
         type_errors,
     );
-
-
-
-
 }
 
 pub fn check_type(
@@ -363,7 +355,7 @@ pub fn check_type(
             }
         }
     }
-    return type_errors;
+    type_errors
 }
 
 #[cfg(test)]
@@ -394,12 +386,12 @@ mod tests {
 
         println!("{:#?}", &mir);
         println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
-        
-        return TestContext {
-            mir: mir,
+
+        TestContext {
+            mir,
             database: analysis_result.type_db,
             globals: analysis_result.globals,
-        };
+        }
     }
 
     //Parses a single expression
@@ -410,7 +402,7 @@ mod tests {
         } else {
             println!("No errors found!");
         }
-        return (errors, &ctx.database);
+        (errors, &ctx.database)
     }
 
     #[test]
@@ -580,7 +572,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&ctx);
+        let (err, _db) = run_test(&ctx);
 
         assert_eq!(0, err.count());
     }
@@ -596,7 +588,7 @@ def main():
     test(1, 1.0)
 ",
         );
-        let (err, db) = run_test(&ctx);
+        let (err, _db) = run_test(&ctx);
         assert_eq!(0, err.count());
     }
 
@@ -614,7 +606,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&ctx);
+        let (err, _db) = run_test(&ctx);
 
         assert_eq!(0, err.count());
     }
@@ -692,7 +684,7 @@ def main():
 ",
         );
         let (err, db) = run_test(&ctx);
-        let printer = TypeErrorPrinter::new(&err, &db);
+        let printer = TypeErrorPrinter::new(&err, db);
         let error_msg = format!("{}", printer);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
@@ -708,7 +700,7 @@ def main():
 ",
         );
         let (err, db) = run_test(&ctx);
-        let printer = TypeErrorPrinter::new(&err, &db);
+        let printer = TypeErrorPrinter::new(&err, db);
         let error_msg = format!("{}", printer);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
@@ -723,7 +715,7 @@ def main(args: array<str>):
 ",
         );
         let (err, db) = run_test(&ctx);
-        let printer = TypeErrorPrinter::new(&err, &db);
+        let printer = TypeErrorPrinter::new(&err, db);
         let error_msg = format!("{}", printer);
         let expected = "Function argument type mismatch: In function main, on index operator, parameter on position 0 has incorrect type: Expected u32 but passed str\n";
         assert_eq!(error_msg, expected);

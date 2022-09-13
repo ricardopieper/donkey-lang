@@ -1,10 +1,10 @@
-mod first_assignments;
-mod undeclared_vars;
-pub mod name_registry;
-mod type_inference;
-pub mod hir_printer;
-pub mod mir_printer;
-pub mod hir;
 pub mod analysis;
+pub mod first_assignments;
+pub mod hir;
+pub mod hir_printer;
 pub mod mir;
+pub mod mir_printer;
+pub mod name_registry;
 pub mod type_checker;
+pub mod type_inference;
+pub mod undeclared_vars;

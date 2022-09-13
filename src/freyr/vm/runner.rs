@@ -1,5 +1,5 @@
-use core::{num, panic};
-use std::{mem, fmt::Display};
+use core::panic;
+use std::fmt::Display;
 
 use crate::freyr::vm::instructions::AddressJumpAddressSource;
 
@@ -130,7 +130,7 @@ pub fn stacked_binop_compare<T>(
     let rhs = memory.native_read::<T>(reg.sp);
     reg.sp -= std::mem::size_of::<T>() as u32;
     let lhs = memory.native_read::<T>(reg.sp);
-   
+
     let result = match operation {
         CompareOperation::Equals => lhs == rhs,
         CompareOperation::NotEquals => lhs != rhs,
@@ -139,8 +139,11 @@ pub fn stacked_binop_compare<T>(
         CompareOperation::GreaterThan => lhs > rhs,
         CompareOperation::GreaterThanOrEquals => lhs >= rhs,
     };
-    println!("Freyr: Comparing {lhs} and {rhs} result == {result} storing at {sp}", sp = reg.sp);
-    memory.write(reg.sp, if result { &[1 as u8] } else { &[0 as u8] });
+    println!(
+        "Freyr: Comparing {lhs} and {rhs} result == {result} storing at {sp}",
+        sp = reg.sp
+    );
+    memory.write(reg.sp, if result { &[1u8] } else { &[0u8] });
     reg.sp += std::mem::size_of::<u8>() as u32;
 }
 
@@ -165,12 +168,12 @@ pub fn immediate_integer_compare<T>(
         CompareOperation::GreaterThan => lhs > rhs,
         CompareOperation::GreaterThanOrEquals => lhs >= rhs,
     };
-    memory.write(reg.sp, if result { &[1 as u8] } else { &[0 as u8] });
+    memory.write(reg.sp, if result { &[1u8] } else { &[0u8] });
     reg.sp += std::mem::size_of::<u8>() as u32;
 }
 
 pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegisterValues) -> bool {
-    const IP_OFFSET: usize = 1 as usize;
+    const IP_OFFSET: usize = 1_usize;
     match inst {
         Instruction::Noop => {
             reg.ip += IP_OFFSET;
@@ -348,11 +351,11 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
         }
 
         Instruction::Bitwise {
-            bytes,
-            operation,
-            sign,
-            mode,
-            operand,
+            bytes: _,
+            operation: _,
+            sign: _,
+            mode: _,
+            operand: _,
         } => {
             todo!("Bitwise ops not implemented in the VM")
         }
@@ -514,13 +517,13 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
         }
         Instruction::PushFromRegister { control_register } => {
             match control_register {
-                super::instructions::ControlRegister::BasePointer => {
+                super::instructions::ControlRegister::Base => {
                     memory.write(reg.sp, &(reg.bp as u32).to_le_bytes());
                 }
-                super::instructions::ControlRegister::StackPointer => {
+                super::instructions::ControlRegister::Stack => {
                     memory.write(reg.sp, &(reg.sp as u32).to_le_bytes());
                 }
-                super::instructions::ControlRegister::InstructionPointer => {
+                super::instructions::ControlRegister::Instruction => {
                     memory.write(reg.sp, &(reg.ip as u32).to_le_bytes());
                 }
             };
@@ -532,44 +535,42 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             let popped = memory.native_read::<u32>(reg.sp);
 
             match control_register {
-                super::instructions::ControlRegister::BasePointer => {
+                super::instructions::ControlRegister::Base => {
                     reg.bp = popped;
                     reg.ip += IP_OFFSET;
                 }
-                super::instructions::ControlRegister::StackPointer => {
+                super::instructions::ControlRegister::Stack => {
                     reg.sp = popped;
                     reg.ip += IP_OFFSET;
                 }
-                super::instructions::ControlRegister::InstructionPointer => {
+                super::instructions::ControlRegister::Instruction => {
                     reg.ip = popped as usize;
                 }
             };
         }
         Instruction::Pop { bytes } => {
-            let num = bytes.get_bytes() as u32;
+            let _num = bytes.get_bytes() as u32;
             reg.sp -= bytes.get_bytes() as u32;
             reg.ip += IP_OFFSET;
         }
-        Instruction::Call { source, offset } => {
-            match source {
-                super::instructions::AddressJumpAddressSource::FromOperand => {
-                    let return_ip = (reg.ip + IP_OFFSET) as u32;
-                    reg.ip = *offset as usize;
-                    memory.write(reg.sp, &return_ip.to_le_bytes());
-                    reg.sp += std::mem::size_of::<u32>() as u32;
-                    reg.bp = reg.sp;
-                }
-                super::instructions::AddressJumpAddressSource::PopFromStack => {
-                    reg.sp -= std::mem::size_of::<u32>() as u32;
-                    let popped = memory.native_read::<u32>(reg.sp);
-                    let return_ip = (reg.ip + IP_OFFSET) as u32;
-                    reg.ip = popped as usize;
-                    memory.write(reg.sp, &return_ip.to_le_bytes());
-                    reg.sp += std::mem::size_of::<u32>() as u32;
-                    reg.bp = reg.sp;
-                }
+        Instruction::Call { source, offset } => match source {
+            super::instructions::AddressJumpAddressSource::FromOperand => {
+                let return_ip = (reg.ip + IP_OFFSET) as u32;
+                reg.ip = *offset as usize;
+                memory.write(reg.sp, &return_ip.to_le_bytes());
+                reg.sp += std::mem::size_of::<u32>() as u32;
+                reg.bp = reg.sp;
             }
-        }
+            super::instructions::AddressJumpAddressSource::PopFromStack => {
+                reg.sp -= std::mem::size_of::<u32>() as u32;
+                let popped = memory.native_read::<u32>(reg.sp);
+                let return_ip = (reg.ip + IP_OFFSET) as u32;
+                reg.ip = popped as usize;
+                memory.write(reg.sp, &return_ip.to_le_bytes());
+                reg.sp += std::mem::size_of::<u32>() as u32;
+                reg.bp = reg.sp;
+            }
+        },
         Instruction::Return => {
             reg.sp -= std::mem::size_of::<u32>() as u32;
             let popped = memory.native_read::<u32>(reg.sp);
@@ -646,7 +647,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             panic!("Tried to execute unknown instruction {:?}", inst);
         }*/
     }
-    return false;
+    false
 }
 
 pub fn print_stack(memory: &mut Memory) {
@@ -666,15 +667,14 @@ pub fn prepare_vm() -> (Memory, ControlRegisterValues) {
     mem.make_ready();
     mem.write(mem.stack_start, &0u32.to_le_bytes());
     mem.write(mem.stack_start + 4, &u32::MAX.to_le_bytes());
-    
+
     let registers = ControlRegisterValues {
         ip: 0,
         sp: mem.stack_start + 8,
         bp: mem.stack_start + 8,
     };
-    return (mem, registers);
+    (mem, registers)
 }
-
 
 pub fn run(code: &[Instruction], memory: &mut Memory, registers: &mut ControlRegisterValues) {
     loop {
@@ -705,10 +705,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::freyr::{
-        asm::{
-            asm::*,
-            assembler::{as_freyr_instructions, parse_asm, resolve},
-        },
+        asm::assembler::{as_freyr_instructions, parse_asm, resolve},
         vm::{instructions::Instruction, memory::Memory, runner::execute},
     };
 
@@ -728,7 +725,7 @@ mod tests {
             sp: mem.stack_start,
             bp: mem.stack_start,
         };
-        return (mem, registers);
+        (mem, registers)
     }
 
     fn run_code(code: &str) -> (Memory, ControlRegisterValues) {
@@ -923,7 +920,7 @@ mod tests {
         exit
 ";
         let (mem, reg) = run_code(code);
-        let x: u32 = mem.native_read(reg.bp + 0);
+        let x: u32 = mem.native_read(reg.bp);
         assert_eq!(x, 10); //even pushes and pops result in not moving the stack ptr
         assert_eq!(reg.ip, 8);
     }

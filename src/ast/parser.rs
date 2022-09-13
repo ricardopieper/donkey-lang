@@ -15,7 +15,7 @@ pub enum Expr {
     Parenthesized(Box<Expr>),
     UnaryExpression(Operator, Box<Expr>),
     MemberAccess(Box<Expr>, String),
-    Array(Vec<Expr>), 
+    Array(Vec<Expr>),
     //maybe there could be a syntax to specify the type of the array
     //ex: instead of just x = [1,2,3] it could be x = [1, 2, 3] array<i32>
     //or like sum = array<i32>[].sum() would return 0
@@ -31,16 +31,14 @@ pub struct ASTIfStatement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ASTType {
     Simple(String),
-    Generic(String, Vec<ASTType>)
+    Generic(String, Vec<ASTType>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeBoundName {
     pub name: String,
-    pub name_type: ASTType
+    pub name_type: ASTType,
 }
-
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AST {
@@ -75,12 +73,12 @@ pub enum AST {
         function_name: String,
         parameters: Vec<TypeBoundName>,
         body: Vec<AST>,
-        return_type: Option<ASTType>
+        return_type: Option<ASTType>,
     },
     Break,
     Return(Option<Expr>),
     Raise(Expr),
-    Root(Vec<AST>)
+    Root(Vec<AST>),
 }
 
 impl Expr {
@@ -100,7 +98,7 @@ impl From<f64> for Box<Expr> {
 
 impl From<i128> for Box<Expr> {
     fn from(w: i128) -> Self {
-        Expr::new_int(w.into())
+        Expr::new_int(w)
     }
 }
 
@@ -140,8 +138,8 @@ struct ParsingState {
 #[derive(Debug, Clone)]
 pub enum ParsingError {
     ExprError(String),
-    TypeBoundMissingTypeSpecifier,
-    TypeBoundExpectedColonAfterFieldName
+    //TypeBoundMissingTypeSpecifier,
+    TypeBoundExpectedColonAfterFieldName,
 }
 
 impl Parser {
@@ -153,7 +151,7 @@ impl Parser {
                 operand_stack: vec![],
                 current_indent: 0,
             }],
-            tokens: tokens,
+            tokens,
         }
     }
 
@@ -235,11 +233,7 @@ impl Parser {
     }
 
     fn cur_is_newline(&self) -> bool {
-        if let Token::NewLine = self.cur() {
-            return true;
-        } else {
-            return false;
-        }
+        matches!(self.cur(), Token::NewLine)
     }
 
     fn push_operand(&mut self, token: Expr) {
@@ -294,7 +288,7 @@ impl Parser {
             self.next();
             let expr = self.parse_expr().expect("Expected expression after assign");
             Some(AST::Assign {
-                path: path,
+                path,
                 expression: expr.resulting_expr,
             })
         } else {
@@ -302,32 +296,28 @@ impl Parser {
         }
     }
 
-
     pub fn parse_assign_typed(&mut self) -> Option<AST> {
-        
         let decl = self.parse_type_bound_name();
 
         if let Ok(Some(typed_var_decl)) = decl {
             //no need to do .next here, parse_type_bound_name already does a .next()
             self.next();
             let cur = self.cur();
-           // println!("{:?}", cur);
+            // println!("{:?}", cur);
             if let Token::Assign = cur {
                 self.next();
                 let expr = self.parse_expr().expect("Expected expression after assign");
-                return Some(AST::Declare {
+                Some(AST::Declare {
                     var: typed_var_decl,
                     expression: expr.resulting_expr,
-                });
+                })
             } else {
-                return None;
+                None
             }
-        
         } else {
-            return None;
+            None
         }
     }
-
 
     pub fn parse_if_statement(&mut self) -> Option<AST> {
         if let Token::IfKeyword = self.cur().clone() {
@@ -401,44 +391,44 @@ impl Parser {
                 } else {
                     self.pop_stack();
                 }
-                return Some(if_statement);
+                Some(if_statement)
             }
         } else {
             None
         }
     }
 
-/*
-    pub fn parse_typed_var_decl(&mut self) -> Result<Option<AST>, ParsingError> {
-        if let Token::Identifier(field_name) = self.cur().clone() {
-            self.next();
-            if !self.can_go() {
-                return Ok(None);
-            }
-            if let Token::Colon = self.cur() {
+    /*
+        pub fn parse_typed_var_decl(&mut self) -> Result<Option<AST>, ParsingError> {
+            if let Token::Identifier(field_name) = self.cur().clone() {
                 self.next();
-                if let Token::Identifier(type_name) = self.cur().clone() {
-                    return Ok(Some(AST::FieldDeclaration {
-                        field_name: field_name,
-                        type_name: type_name
-                    }));
+                if !self.can_go() {
+                    return Ok(None);
+                }
+                if let Token::Colon = self.cur() {
+                    self.next();
+                    if let Token::Identifier(type_name) = self.cur().clone() {
+                        return Ok(Some(AST::FieldDeclaration {
+                            field_name: field_name,
+                            type_name: type_name
+                        }));
+                    } else {
+                        return Err(ParsingError::FieldDeclMissingTypeSpecifier);
+                    }
                 } else {
-                    return Err(ParsingError::FieldDeclMissingTypeSpecifier);
+                    return Err(ParsingError::ExpectedColumnAfterFieldName);
                 }
             } else {
-                return Err(ParsingError::ExpectedColumnAfterFieldName);
+                return Ok(None);
             }
-        } else {
-            return Ok(None);
         }
-    }
-*/
+    */
     pub fn parse_structdef(&mut self) -> Option<AST> {
         if let Token::StructDef = self.cur().clone() {
             self.next();
             if !self.can_go() {
                 return None;
-            } 
+            }
             if let Token::Identifier(name) = self.cur().clone() {
                 self.next();
                 if let Token::Colon = self.cur() {
@@ -452,7 +442,7 @@ impl Parser {
                     panic!("Expected newline after colon");
                 }
                 self.increment_expected_indent();
-               
+
                 let mut fields = vec![];
 
                 loop {
@@ -463,15 +453,17 @@ impl Parser {
                     if let Token::Identifier(_) = self.cur() {
                         let parsed = self.parse_type_bound_name().unwrap().unwrap();
                         fields.push(parsed);
-                        
+
                         if !self.can_go() {
-                            break; 
+                            break;
                         }
 
                         self.next();
                         if let Token::NewLine = self.cur() {
                             self.next();
-                            if !self.can_go() { break; }
+                            if !self.can_go() {
+                                break;
+                            }
                             if let Token::NewLine = self.cur() {
                                 break;
                             }
@@ -480,22 +472,21 @@ impl Parser {
                             break;
                         }
                     } else {
-                        break
+                        break;
                     }
                 }
 
                 let def_classdecl = AST::StructDeclaration {
-                    struct_name: name.clone(),
+                    struct_name: name,
                     body: fields,
                 };
-                
+
                 self.decrement_expected_indent();
 
-                return Some(def_classdecl);
+                Some(def_classdecl)
             } else {
                 panic!("Unexpected token: expected identifier, got something else")
             }
-            
         } else {
             None
         }
@@ -528,7 +519,7 @@ impl Parser {
                 };
                 self.decrement_expected_indent();
 
-                return Some(while_statement);
+                Some(while_statement)
             }
         } else {
             None
@@ -581,7 +572,7 @@ impl Parser {
                 };
                 self.decrement_expected_indent();
 
-                return Some(for_statement);
+                Some(for_statement)
             }
         } else {
             None
@@ -589,34 +580,35 @@ impl Parser {
     }
 
     pub fn parse_type_name(&mut self) -> Option<ASTType> {
-
-        let Token::Identifier(type_name) = self.cur().clone() else { 
+        let Token::Identifier(type_name) = self.cur().clone() else {
             return None;
         };
-        
+
         if !self.can_go() {
-            return Some(ASTType::Simple(type_name.clone()));
+            return Some(ASTType::Simple(type_name));
         }
 
         let peek_next = self.cur_offset(1).clone();
-    
+
         let Token::Operator(Operator::Less) = peek_next else {
-            return Some(ASTType::Simple(type_name.clone()));
+            return Some(ASTType::Simple(type_name));
         };
         self.next(); //commits the peek_next
         self.next();
 
-        let Token::Identifier(generic_name) = self.cur().clone() else { 
+        let Token::Identifier(generic_name) = self.cur().clone() else {
             panic!("For now we dont have proper error handling for mistakes in generic types, cur = {:?}", self.cur())
          };
         self.next();
 
-        if let Token::Operator(Operator::Greater) = self.cur().clone() { 
-            return Some(ASTType::Generic(type_name.clone(), 
-                vec![ ASTType::Simple(generic_name.clone())]));
+        if let Token::Operator(Operator::Greater) = self.cur().clone() {
+            Some(ASTType::Generic(
+                type_name,
+                vec![ASTType::Simple(generic_name)],
+            ))
         } else {
             panic!("For now we don't suport more than 1 generic argument (i'm lazy).")
-        };
+        }
     }
 
     //Tries to parse a bound name with its type, for instance var: i32
@@ -628,8 +620,8 @@ impl Parser {
         if !self.can_go() {
             return Ok(None);
         }
-        
-        let Token::Colon = self.cur().clone() else { 
+
+        let Token::Colon = self.cur().clone() else {
             return Err(ParsingError::TypeBoundExpectedColonAfterFieldName);
         };
         self.next();
@@ -637,9 +629,9 @@ impl Parser {
         let typename = self.parse_type_name();
 
         match typename {
-            Some(x) => Ok(Some(TypeBoundName { name: name, name_type: x})),
+            Some(x) => Ok(Some(TypeBoundName { name, name_type: x })),
             None => Ok(None),
-        }        
+        }
     }
 
     pub fn parse_def_statement(&mut self) -> Option<AST> {
@@ -664,9 +656,8 @@ impl Parser {
                 let mut params: Vec<TypeBoundName> = vec![];
 
                 while let Token::Identifier(_) = self.cur() {
-
                     let param = self.parse_type_bound_name().unwrap().unwrap();
-                  
+
                     params.push(param);
                     self.next();
                     if let Token::Comma = self.cur() {
@@ -681,12 +672,12 @@ impl Parser {
                 } else {
                     panic!("Expected close paren after parameters in function declaration")
                 }
-                
+
                 let mut return_type: Option<ASTType> = None;
 
                 if let Token::ArrowRight = self.cur() {
                     self.next();
-                    
+
                     return_type = self.parse_type_name();
                     if return_type.is_none() {
                         panic!("Expected type name after arrow right on function declaration")
@@ -704,14 +695,14 @@ impl Parser {
                 let ast = self.parse_ast().unwrap();
 
                 let for_statement = AST::DeclareFunction {
-                    function_name: function_name,
+                    function_name,
                     parameters: params,
                     body: ast,
-                    return_type: return_type
+                    return_type,
                 };
                 self.decrement_expected_indent();
 
-                return Some(for_statement);
+                Some(for_statement)
             }
         } else {
             None
@@ -727,14 +718,14 @@ impl Parser {
                 Token::NewLine => {
                     identation_level = 0;
                 }
-                Token::Indentation => identation_level = identation_level + 1,
+                Token::Indentation => identation_level += 1,
                 _ => {
                     break;
                 }
-            } 
+            }
             self.next();
         }
-        return identation_level;
+        identation_level
     }
 
     pub fn parse_ast(&mut self) -> Result<Vec<AST>, ParsingError> {
@@ -769,8 +760,9 @@ impl Parser {
                     //correct indentation found: commit
                     self.set_cur(&popped);
                     assert!(
-                       !self.is_not_end() || self.cur_is_newline(),
-                       "Newline or EOF expected after struct, got {:?}", self.cur()
+                        !self.is_not_end() || self.cur_is_newline(),
+                        "Newline or EOF expected after struct, got {:?}",
+                        self.cur()
                     );
                 } else {
                     self.pop_stack();
@@ -1015,7 +1007,7 @@ impl Parser {
             }
         }
 
-        return Ok(results);
+        Ok(results)
     }
     /**
     *
@@ -1049,11 +1041,11 @@ impl Parser {
 
                     self.set_cur(&popped);
 
-                    return Ok(fcall);
+                    Ok(fcall)
                 }
                 Err(e) => {
                     eprintln!("Failed parsing exprssion: {:?}", e);
-                    return Err(e);
+                    Err(e)
                 }
             }
         }
@@ -1061,7 +1053,7 @@ impl Parser {
 
     fn function_call_helper(&mut self, expr_callable: &Expr) -> Result<Expr, ParsingError> {
         if let Token::CloseParen = self.cur() {
-            return Ok(Expr::FunctionCall(Box::new(expr_callable.clone()), vec![]));
+            Ok(Expr::FunctionCall(Box::new(expr_callable.clone()), vec![]))
         } else {
             self.new_stack();
             let list_of_exprs = self.parse_comma_sep_list_expr();
@@ -1078,11 +1070,11 @@ impl Parser {
 
                     self.set_cur(&popped);
 
-                    return Ok(fcall);
+                    Ok(fcall)
                 }
                 Err(e) => {
                     eprintln!("Failed parsing exprssion: {:?}", e);
-                    return Err(e);
+                    Err(e)
                 }
             }
         }
@@ -1099,7 +1091,7 @@ impl Parser {
             //and parse the sub-expression recursively
             {
                 let tok: Token = self.cur().clone();
-                let prev_token = self.prev_token().map(|x| x.clone());
+                let prev_token = self.prev_token().cloned();
                 match tok {
                     Token::OpenParen => {
                         //move to the first token, out of the OpenParen
@@ -1118,10 +1110,10 @@ impl Parser {
                         if let Some(Token::Operator(_)) = prev_token {
                             could_be_fcall = false;
                         }
-                        if let None = prev_token {
+                        if prev_token.is_none() {
                             could_be_fcall = false;
                         }
-                        if self.operand_stack().len() == 0 {
+                        if self.operand_stack().is_empty() {
                             could_be_fcall = false
                         }
                         if could_be_fcall {
@@ -1194,11 +1186,11 @@ impl Parser {
                             //in this case, it could be operators being applied to 2 lists, like a concat
                             could_be_indexing = false;
                         }
-                        if let None = prev_token {
+                        if prev_token.is_none() {
                             //most certainly will be a new list
                             could_be_indexing = false;
                         }
-                        if self.operand_stack().len() == 0 {
+                        if self.operand_stack().is_empty() {
                             //no expression to access array onto
                             could_be_indexing = false
                         }
@@ -1318,10 +1310,8 @@ impl Parser {
                 break;
             } else {
                 self.next();
-                if self.can_go() {
-                    if Token::MemberAccessor == self.cur().clone() {
-                        continue;
-                    }
+                if self.can_go() && Token::MemberAccessor == self.cur().clone() {
+                    continue;
                 }
             }
 
@@ -1330,12 +1320,15 @@ impl Parser {
             //try parse it first!
 
             if self.can_go() {
-                if let Token::OpenArrayBracket = self.cur() { continue; }
-                if let Token::OpenParen = self.cur() { continue; }
+                if let Token::OpenArrayBracket = self.cur() {
+                    continue;
+                }
+                if let Token::OpenParen = self.cur() {
+                    continue;
+                }
             }
 
             if was_operand {
-
                 //base case: there is only an operator and an operand, like "-1"
                 if self.operand_stack().len() == 1 && self.operator_stack().len() == 1 {
                     let last_operand = self.operand_stack_mut().pop().unwrap();
@@ -1403,7 +1396,7 @@ impl Parser {
 
         //consume the remaining operators
         if self.operand_stack().len() == 1 {
-            while self.operator_stack().len() > 0 {
+            while !self.operator_stack().is_empty() {
                 let expr = self.operand_stack_mut().pop().unwrap();
                 let operator = self.operator_stack_mut().pop().unwrap();
                 self.push_operand(Expr::UnaryExpression(operator, Box::new(expr)));
@@ -1433,9 +1426,7 @@ impl Parser {
         //let remaining_tokens = Vec::from(token_queue);
         let resulting_expr = clean_parens(self.operand_stack_mut().pop().unwrap());
 
-        Ok(ParseExpressionResult {
-            resulting_expr: resulting_expr,
-        })
+        Ok(ParseExpressionResult { resulting_expr })
     }
 
     //expr, expr, ..., expr
@@ -1488,7 +1479,7 @@ pub struct ParseExpressionResult {
 
 pub fn parse_ast(tokens: Vec<Token>) -> Vec<AST> {
     let mut parser = Parser::new(tokens);
-    return parser.parse_ast().unwrap();
+    parser.parse_ast().unwrap()
 }
 
 #[cfg(test)]
@@ -1497,25 +1488,28 @@ mod tests {
     impl TypeBoundName {
         //do not delete, used by tests!
         pub fn simple(name: &str, name_type: &str) -> Self {
-            Self{
+            Self {
                 name: name.to_string(),
-                name_type: ASTType::Simple(name_type.to_string())
+                name_type: ASTType::Simple(name_type.to_string()),
             }
         }
         pub fn generic_1(name: &str, name_type: &str, generic: &str) -> Self {
-            Self{
+            Self {
                 name: name.to_string(),
-                name_type: ASTType::Generic(name_type.to_string(), vec![ASTType::Simple(generic.to_string())])
+                name_type: ASTType::Generic(
+                    name_type.to_string(),
+                    vec![ASTType::Simple(generic.to_string())],
+                ),
             }
         }
     }
-    
+
     use super::*;
 
     //Parses a single expression
     fn parse(tokens: Vec<Token>) -> Expr {
         let mut parser = Parser::new(tokens);
-        return parser.parse_expr().unwrap().resulting_expr;
+        parser.parse_expr().unwrap().resulting_expr
     }
 
     #[test]
@@ -2908,7 +2902,7 @@ print(y)",
             Expr::IntegerValue(1),
             Expr::StringValue("two".to_string()),
             Expr::BooleanValue(true),
-            Expr::FloatValue(Float(4.565)),
+            Expr::FloatValue(4.565.into()),
         ]);
 
         assert_eq!(expected, result);
@@ -2955,19 +2949,17 @@ print(y)",
         let tokens = tokenize("self.current >= self.max").unwrap();
         println!("{:?}", tokens);
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(
-            Expr::BinaryOperation(
-                Box::new(Expr::MemberAccess(
-                    Box::new(Expr::Variable("self".into())),
-                    "current".into(),
-                )),
-                Operator::GreaterEquals,
-                Box::new(Expr::MemberAccess(
-                    Box::new(Expr::Variable("self".into())),
-                    "max".into(),
-                ))
-            )    
-        )];
+        let expected = vec![AST::StandaloneExpr(Expr::BinaryOperation(
+            Box::new(Expr::MemberAccess(
+                Box::new(Expr::Variable("self".into())),
+                "current".into(),
+            )),
+            Operator::GreaterEquals,
+            Box::new(Expr::MemberAccess(
+                Box::new(Expr::Variable("self".into())),
+                "max".into(),
+            )),
+        ))];
         assert_eq!(expected, result);
     }
 
@@ -3009,7 +3001,7 @@ def function(x: i32):
                 Box::new(Expr::Variable("print".into())),
                 vec![Expr::Variable("x".into())],
             ))],
-            return_type: None
+            return_type: None,
         }];
         assert_eq!(expected, result);
     }
@@ -3031,7 +3023,7 @@ def function():
                 Box::new(Expr::Variable("print".into())),
                 vec![Expr::Variable("x".into())],
             ))],
-            return_type: None
+            return_type: None,
         }];
         assert_eq!(expected, result);
     }
@@ -3051,12 +3043,13 @@ def function(x: i32,y: u32,z: MyType):
             parameters: vec![
                 TypeBoundName::simple("x", "i32"),
                 TypeBoundName::simple("y", "u32"),
-                TypeBoundName::simple("z", "MyType")],
+                TypeBoundName::simple("z", "MyType"),
+            ],
             body: vec![AST::StandaloneExpr(Expr::FunctionCall(
                 Box::new(Expr::Variable("print".into())),
                 vec![Expr::Variable("x".into())],
             ))],
-            return_type: None
+            return_type: None,
         }];
         assert_eq!(expected, result);
     }
@@ -3075,7 +3068,7 @@ def function(x: i32):
             function_name: "function".into(),
             parameters: vec![TypeBoundName::simple("x", "i32")],
             body: vec![AST::Return(None)],
-            return_type: None
+            return_type: None,
         }];
         assert_eq!(expected, result);
     }
@@ -3098,7 +3091,7 @@ def function(x: i32) -> i32:
                 Operator::Plus,
                 Box::new(Expr::IntegerValue(1)),
             )))],
-            return_type: Some(ASTType::Simple("i32".into()))
+            return_type: Some(ASTType::Simple("i32".into())),
         }];
         assert_eq!(expected, result);
     }
@@ -3113,13 +3106,13 @@ some_var : List<i32> = [1, 2]
         .unwrap();
         let result = parse_ast(tokens);
 
-        assert_eq!(result, vec![
-            AST::Declare {
+        assert_eq!(
+            result,
+            vec![AST::Declare {
                 var: TypeBoundName::generic_1("some_var", "List", "i32"),
                 expression: Expr::Array(vec![Expr::IntegerValue(1), Expr::IntegerValue(2)])
-            }
-        ]);
-
+            }]
+        );
     }
 
     #[test]
@@ -3136,43 +3129,41 @@ def my_function(arg1: i32, arg2: i32) -> i32:
         )
         .unwrap();
         let result = parse_ast(tokens);
-       
-        assert_eq!(result, vec![
-            AST::StructDeclaration { 
-                struct_name: "Struct1".into(), 
-                body: vec![
-                    TypeBoundName::simple("field1", "i32"),
-                    TypeBoundName::simple("field2", "i64")
-                ]
-            }, 
-            AST::DeclareFunction { 
-                function_name: "my_function".into(), 
-                parameters: vec![
-                    TypeBoundName::simple("arg1", "i32"),
-                    TypeBoundName::simple("arg2", "i32")
-                ], 
-                body: vec![
-                    AST::Return(Some(
-                        Expr::BinaryOperation(
-                            Box::new(Expr::BinaryOperation(
-                                Box::new(Expr::Variable("arg1".into())), 
-                                Operator::Multiply, 
-                                Box::new(Expr::Variable("arg2".into()))
-                            )), 
-                            Operator::Divide, 
-                            Box::new(Expr::BinaryOperation(
-                                Box::new(Expr::Variable("arg2".into())), 
-                                Operator::Minus, 
-                                Box::new(Expr::Variable("arg1".into()))
-                            ))
-                        )
-                    )
-                )], 
-                return_type: Some(ASTType::Simple("i32".into()))
-            }
-        ]);
-    }
 
+        assert_eq!(
+            result,
+            vec![
+                AST::StructDeclaration {
+                    struct_name: "Struct1".into(),
+                    body: vec![
+                        TypeBoundName::simple("field1", "i32"),
+                        TypeBoundName::simple("field2", "i64")
+                    ]
+                },
+                AST::DeclareFunction {
+                    function_name: "my_function".into(),
+                    parameters: vec![
+                        TypeBoundName::simple("arg1", "i32"),
+                        TypeBoundName::simple("arg2", "i32")
+                    ],
+                    body: vec![AST::Return(Some(Expr::BinaryOperation(
+                        Box::new(Expr::BinaryOperation(
+                            Box::new(Expr::Variable("arg1".into())),
+                            Operator::Multiply,
+                            Box::new(Expr::Variable("arg2".into()))
+                        )),
+                        Operator::Divide,
+                        Box::new(Expr::BinaryOperation(
+                            Box::new(Expr::Variable("arg2".into())),
+                            Operator::Minus,
+                            Box::new(Expr::Variable("arg1".into()))
+                        ))
+                    )))],
+                    return_type: Some(ASTType::Simple("i32".into()))
+                }
+            ]
+        );
+    }
 
     #[test]
     fn struct_definition() {
@@ -3189,8 +3180,8 @@ struct SomeStruct:
             struct_name: "SomeStruct".into(),
             body: vec![
                 TypeBoundName::simple("field", "i32"),
-                TypeBoundName::simple("otherfield", "str")
-            ]
+                TypeBoundName::simple("otherfield", "str"),
+            ],
         }];
         assert_eq!(expected, result);
     }
@@ -3247,15 +3238,13 @@ struct SomeStruct:
     fn function_argument_is_indexed() {
         let tokens = tokenize("some_call(var[1])").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(
-            Expr::FunctionCall(
-                Box::new(Expr::Variable("some_call".into())),
-                vec![Expr::IndexAccess(
-                    Box::new(Expr::Variable("var".into())),
-                    Box::new(Expr::IntegerValue(1))
-                )],
-            )
-        )];
+        let expected = vec![AST::StandaloneExpr(Expr::FunctionCall(
+            Box::new(Expr::Variable("some_call".into())),
+            vec![Expr::IndexAccess(
+                Box::new(Expr::Variable("var".into())),
+                Box::new(Expr::IntegerValue(1)),
+            )],
+        ))];
         assert_eq!(expected, result);
     }
 
@@ -3299,5 +3288,4 @@ struct SomeStruct:
         ))];
         assert_eq!(expected, result);
     }
-   
 }

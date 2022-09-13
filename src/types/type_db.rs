@@ -1,12 +1,6 @@
 use crate::ast::lexer::Operator;
-use crate::semantic::hir::*;
+
 use either::*;
-
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-};
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*Represents a fully resolved type, with generics already substituted */
@@ -31,7 +25,7 @@ impl TypeInstance {
             TypeInstance::Generic(id, args) => {
                 let args_str = args
                     .iter()
-                    .map(|x| x.as_string(type_db).clone())
+                    .map(|x| x.as_string(type_db))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let base_str = type_db.get_name(*id);
@@ -40,7 +34,7 @@ impl TypeInstance {
             TypeInstance::Function(args, return_type) => {
                 let args_str = args
                     .iter()
-                    .map(|x| x.as_string(type_db).clone())
+                    .map(|x| x.as_string(type_db))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let return_type_str = return_type.as_string(type_db);
@@ -49,12 +43,11 @@ impl TypeInstance {
         }
     }
 
-    pub fn is_compatible(&self, other: &TypeInstance, type_db: &TypeDatabase) -> bool {
+    pub fn is_compatible(&self, other: &TypeInstance, _type_db: &TypeDatabase) -> bool {
         //for now we just compare by equality
-        return self == other;
+        self == other
     }
 }
-
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct TypeId(pub usize);
@@ -72,7 +65,6 @@ pub enum TypeSign {
     Signed,
     Unsigned,
 }
-
 
 //represents a type on a field declaration, method return type, method args, etc
 //this is type information we store during compilation.
@@ -125,8 +117,8 @@ pub struct TypeRecord {
 
 impl TypeRecord {
     pub fn as_type(&self) -> Type {
-        if self.type_args.len() == 0 {
-            return Type::Simple(Either::Right(self.id));
+        if self.type_args.is_empty() {
+            Type::Simple(Either::Right(self.id))
         } else {
             return Type::Generic(
                 self.id,
@@ -144,18 +136,16 @@ impl TypeRecord {
 
     pub fn is_integer(&self, type_db: &TypeDatabase) -> bool {
         let as_instance = self.to_instance();
-        return as_instance == type_db.special_types.i32 ||
-            as_instance == type_db.special_types.i64 ||
-            as_instance == type_db.special_types.u32 ||
-            as_instance == type_db.special_types.u64;
+        as_instance == type_db.special_types.i32
+            || as_instance == type_db.special_types.i64
+            || as_instance == type_db.special_types.u32
+            || as_instance == type_db.special_types.u64
     }
 
     pub fn is_float(&self, type_db: &TypeDatabase) -> bool {
         let as_instance = self.to_instance();
-        return as_instance == type_db.special_types.f32 ||
-            as_instance == type_db.special_types.f64;
+        as_instance == type_db.special_types.f32 || as_instance == type_db.special_types.f64
     }
-
 }
 
 impl Default for TypeRecord {
@@ -191,36 +181,39 @@ pub struct SpecialTypes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDatabase {
     pub types: Vec<TypeRecord>,
-    pub special_types: SpecialTypes
+    pub special_types: SpecialTypes,
 }
 
 impl TypeDatabase {
     pub fn new() -> Self {
-        let mut item = Self { types: vec![], special_types: SpecialTypes { 
-            void: TypeInstance::Simple(TypeId(0)),
-            i32: TypeInstance::Simple(TypeId(0)),
-            i64: TypeInstance::Simple(TypeId(0)),
-            u32: TypeInstance::Simple(TypeId(0)),
-            u64: TypeInstance::Simple(TypeId(0)),
-            bool: TypeInstance::Simple(TypeId(0)),
-            f32: TypeInstance::Simple(TypeId(0)),
-            f64: TypeInstance::Simple(TypeId(0)),
-        }};
+        let mut item = Self {
+            types: vec![],
+            special_types: SpecialTypes {
+                void: TypeInstance::Simple(TypeId(0)),
+                i32: TypeInstance::Simple(TypeId(0)),
+                i64: TypeInstance::Simple(TypeId(0)),
+                u32: TypeInstance::Simple(TypeId(0)),
+                u64: TypeInstance::Simple(TypeId(0)),
+                bool: TypeInstance::Simple(TypeId(0)),
+                f32: TypeInstance::Simple(TypeId(0)),
+                f64: TypeInstance::Simple(TypeId(0)),
+            },
+        };
         item.init_builtin();
-        return item;
+        item
     }
 
     pub fn add(&mut self, kind: TypeKind, sign: TypeSign, name: &str, size: usize) -> TypeId {
         let next_id = TypeId(self.types.len());
         self.types.push(TypeRecord {
             id: next_id,
-            kind: kind,
+            kind,
             name: name.into(),
             size,
-            sign: sign,
+            sign,
             ..TypeRecord::default()
         });
-        return next_id;
+        next_id
     }
 
     pub fn add_binary_operator(
@@ -247,13 +240,13 @@ impl TypeDatabase {
 
         self.types.push(TypeRecord {
             id: next_id,
-            kind: kind,
+            kind,
             name: name.into(),
             size,
             type_args,
             ..TypeRecord::default()
         });
-        return next_id;
+        next_id
     }
 
     pub fn add_unary_operator(
@@ -270,14 +263,14 @@ impl TypeDatabase {
         &self
             .types
             .get(id.0)
-            .expect(&format!("Type ID not found: {}", id.0))
+            .unwrap_or_else(|| panic!("Type ID not found: {}", id.0))
             .name
     }
 
     pub fn find(&self, id: TypeId) -> &TypeRecord {
         self.types
             .get(id.0)
-            .expect(&format!("Type ID not found: {}", id.0))
+            .unwrap_or_else(|| panic!("Type ID not found: {}", id.0))
     }
 
     pub fn find_by_name(&self, name: &str) -> Option<&TypeRecord> {
@@ -285,9 +278,9 @@ impl TypeDatabase {
     }
 
     pub fn expect_find_by_name(&self, name: &str) -> &TypeRecord {
-        match self.types.iter().find(|t| t.name == name){
+        match self.types.iter().find(|t| t.name == name) {
             Some(r) => r,
-            None => panic!("Could not find type by name {}", name)
+            None => panic!("Could not find type by name {}", name),
         }
     }
 
@@ -371,7 +364,7 @@ impl TypeDatabase {
         self.add_unary_operator(type_id, Operator::Plus, TypeInstance::Simple(type_id));
         self.add_unary_operator(type_id, Operator::Minus, TypeInstance::Simple(type_id));
 
-        return type_id;
+        type_id
     }
 
     pub fn add_method(&mut self, type_id: TypeId, signature: FunctionSignature) {
@@ -381,28 +374,63 @@ impl TypeDatabase {
 
     pub fn add_field(&mut self, type_id: TypeId, name: &str, field_type: TypeId) {
         let record = self.types.get_mut(type_id.0).unwrap();
-        record.fields.push(TypeField { name: name.to_string(), field_type: Type::Simple(Either::Right(field_type)) })
+        record.fields.push(TypeField {
+            name: name.to_string(),
+            field_type: Type::Simple(Either::Right(field_type)),
+        })
     }
 
     fn init_builtin(&mut self) {
         use std::mem;
 
-        let void_type = self.add(TypeKind::Primitive, TypeSign::Unsigned, "Void", mem::size_of::<()>());
+        let void_type = self.add(
+            TypeKind::Primitive,
+            TypeSign::Unsigned,
+            "Void",
+            mem::size_of::<()>(),
+        );
         self.special_types.void = TypeInstance::Simple(void_type);
 
-        self.add(TypeKind::Primitive, TypeSign::Unsigned, "None", mem::size_of::<()>());
-        self.special_types.bool = TypeInstance::Simple(self.add(TypeKind::Primitive, TypeSign::Unsigned, "bool", mem::size_of::<bool>()));
+        self.add(
+            TypeKind::Primitive,
+            TypeSign::Unsigned,
+            "None",
+            mem::size_of::<()>(),
+        );
+        self.special_types.bool = TypeInstance::Simple(self.add(
+            TypeKind::Primitive,
+            TypeSign::Unsigned,
+            "bool",
+            mem::size_of::<bool>(),
+        ));
 
-        let i32_type = self.register_primitive_number("i32", mem::size_of::<i32>(), TypeSign::Signed);
-        let u32_type = self.register_primitive_number("u32", mem::size_of::<u32>(), TypeSign::Unsigned);
+        let i32_type =
+            self.register_primitive_number("i32", mem::size_of::<i32>(), TypeSign::Signed);
+        let u32_type =
+            self.register_primitive_number("u32", mem::size_of::<u32>(), TypeSign::Unsigned);
         self.special_types.i32 = TypeInstance::Simple(i32_type);
         self.special_types.u32 = TypeInstance::Simple(u32_type);
 
-
-        self.special_types.i64 = TypeInstance::Simple(self.register_primitive_number("i64", mem::size_of::<i64>(), TypeSign::Signed));
-        self.special_types.u64 = TypeInstance::Simple(self.register_primitive_number("u64", mem::size_of::<u64>(), TypeSign::Unsigned));
-        self.special_types.f32 = TypeInstance::Simple(self.register_primitive_number("f32", mem::size_of::<f32>(), TypeSign::Signed));
-        self.special_types.f64 = TypeInstance::Simple(self.register_primitive_number("f64", mem::size_of::<f64>(), TypeSign::Signed));
+        self.special_types.i64 = TypeInstance::Simple(self.register_primitive_number(
+            "i64",
+            mem::size_of::<i64>(),
+            TypeSign::Signed,
+        ));
+        self.special_types.u64 = TypeInstance::Simple(self.register_primitive_number(
+            "u64",
+            mem::size_of::<u64>(),
+            TypeSign::Unsigned,
+        ));
+        self.special_types.f32 = TypeInstance::Simple(self.register_primitive_number(
+            "f32",
+            mem::size_of::<f32>(),
+            TypeSign::Signed,
+        ));
+        self.special_types.f64 = TypeInstance::Simple(self.register_primitive_number(
+            "f64",
+            mem::size_of::<f64>(),
+            TypeSign::Signed,
+        ));
 
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
         self.add_generic(

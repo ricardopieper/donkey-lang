@@ -71,7 +71,7 @@ enum PartialToken {
 }
 
 impl PartialToken {
-    fn to_token(self) -> Token {
+    fn to_token(&self) -> Token {
         match self {
             Self::UndefinedOrWhitespace => {
                 panic!("Unexpected undefined token. This is a tokenizer bug.")
@@ -94,7 +94,7 @@ impl PartialToken {
                 "while" => Token::WhileKeyword,
                 "break" => Token::BreakKeyword,
                 "struct" => Token::StructDef,
-                _ => Token::Identifier(s),
+                _ => Token::Identifier(s.clone()),
             },
             Self::Comma => Token::Comma,
             Self::Colon => Token::Colon,
@@ -105,7 +105,7 @@ impl PartialToken {
             Self::LiteralFloat(s) => {
                 if s.contains('.') || s.contains('e') {
                     match s.parse::<f64>() {
-                        Ok(f) => Token::LiteralFloat(Float(f)),
+                        Ok(f) => Token::LiteralFloat(f.into()),
                         _ => panic!("Error parsing float value {}. Should have generated a tokenizer error. This is a bug.", s)
                     }
                 } else {
@@ -115,7 +115,7 @@ impl PartialToken {
                     }
                 }
             }
-            Self::String(s) => Token::LiteralString(s),
+            Self::String(s) => Token::LiteralString(s.clone()),
             Self::Operator(s) => match s.as_str() {
                 "+" => Token::Operator(Operator::Plus),
                 "-" => Token::Operator(Operator::Minus),
@@ -169,7 +169,7 @@ impl Tokenizer {
     }
 
     fn advance(&mut self, offset: usize) {
-        self.index = self.index + offset;
+        self.index += offset;
     }
 
     fn cur(&self) -> char {
@@ -263,7 +263,7 @@ impl Tokenizer {
             self.eater_buf.push(cur);
             self.next();
         }
-        return finished;
+        finished
     }
 
     fn commit_current_token(&mut self) {
@@ -285,14 +285,13 @@ impl Tokenizer {
 
     fn match_partial(&mut self, query: &str) -> (bool, usize) {
         let mut matched_chars = 0;
-        let chars: Vec<char> = query.chars().collect();
-        for i in 0..query.len() {
-            if self.cur_offset(i as isize) != chars[i] {
+        for (i, item) in query.chars().enumerate() {
+            if self.cur_offset(i as isize) != item {
                 return (false, 0);
             }
-            matched_chars = matched_chars + 1
+            matched_chars += 1
         }
-        return (true, matched_chars);
+        (true, matched_chars)
     }
 
     fn match_first_and_advance<'a>(&mut self, query: &'a [&'a str]) -> Option<&'a str> {
@@ -303,13 +302,13 @@ impl Tokenizer {
                 return Some(q);
             }
         }
-        return None;
+        None
     }
 
     pub fn tokenize(mut self) -> Result<Vec<Token>, String> {
         let operators = &[
-            "+",  "->", "-", "*", "%", "/", "<<", ">>", "<=", ">=", ">", "<", "!=", "==", "=", "^", "(",
-            ")",
+            "+", "->", "-", "*", "%", "/", "<<", ">>", "<=", ">=", ">", "<", "!=", "==", "=", "^",
+            "(", ")",
         ];
         while self.can_go() {
             self.commit_current_token();
@@ -350,7 +349,7 @@ impl Tokenizer {
             } else if self.index > 0 && self.cur_offset(-1) == '\n' && self.cur() == ' ' {
                 let mut current_spaces = 0;
                 while self.can_go() && self.cur() == ' ' {
-                    current_spaces = current_spaces + 1;
+                    current_spaces += 1;
                     self.next();
                 }
                 if current_spaces % 4 != 0 {
@@ -407,14 +406,14 @@ mod tests {
     #[test]
     fn tokenizer_decimal_number() -> Result<(), String> {
         let result = tokenize("22.321")?;
-        assert_eq!(result, [Token::LiteralFloat(Float(22.321))]);
+        assert_eq!(result, [Token::LiteralFloat(22.321.into())]);
         Ok(())
     }
 
     #[test]
     fn tokenizer_decimal_exponent_number() -> Result<(), String> {
         let result = tokenize("22.22e2")?;
-        assert_eq!(result, [Token::LiteralFloat(Float(22.22e2))]);
+        assert_eq!(result, [Token::LiteralFloat(22.22e2.into())]);
         Ok(())
     }
     #[test]
@@ -465,10 +464,10 @@ mod tests {
     #[test]
     fn tokenizer_unrecognized_token() -> Result<(), &'static str> {
         let result = tokenize("10 # 12");
-        return match result {
+        match result {
             Ok(_) => Err("Operator # doesnt exist and shouldn't be tokenized"),
             Err(_) => Ok(()),
-        };
+        }
     }
 
     #[test]
@@ -515,7 +514,7 @@ mod tests {
             [
                 Token::LiteralInteger(6),
                 Token::Operator(Operator::Plus),
-                Token::LiteralFloat(Float(6.2312e99)),
+                Token::LiteralFloat(6.2312e99.into()),
             ]
         );
         Ok(())
@@ -543,7 +542,7 @@ mod tests {
             [
                 Token::LiteralInteger(6),
                 Token::Operator(Operator::Plus),
-                Token::LiteralFloat(Float(6.2312e99)),
+                Token::LiteralFloat(6.2312e99.into()),
             ]
         );
         Ok(())
@@ -566,13 +565,7 @@ mod tests {
     #[test]
     fn tokenier_opencloseparen() -> Result<(), String> {
         let result = tokenize("()")?;
-        assert_eq!(
-            result,
-            [
-                Token::OpenParen,
-                Token::CloseParen
-            ]
-        );
+        assert_eq!(result, [Token::OpenParen, Token::CloseParen]);
         Ok(())
     }
 
@@ -795,12 +788,7 @@ mod tests {
     #[test]
     fn return_keyword() -> Result<(), String> {
         let result = tokenize("return")?;
-        assert_eq!(
-            result,
-            [
-                Token::ReturnKeyword
-            ]
-        );
+        assert_eq!(result, [Token::ReturnKeyword]);
         Ok(())
     }
 
@@ -809,10 +797,7 @@ mod tests {
         let result = tokenize("raise SomeError")?;
         assert_eq!(
             result,
-            [
-                Token::RaiseKeyword,
-                Token::Identifier("SomeError".into())
-            ]
+            [Token::RaiseKeyword, Token::Identifier("SomeError".into())]
         );
         Ok(())
     }
@@ -832,7 +817,6 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn class_def() -> Result<(), String> {
         let result = tokenize("struct Test:")?;
@@ -851,11 +835,7 @@ mod tests {
     fn cannot_declare_intermediate() -> Result<(), String> {
         let result = tokenize("$0 = 1");
 
-        assert_eq!(
-            result.unwrap_err(),
-            "Unrecognized token $"
-        );
+        assert_eq!(result.unwrap_err(), "Unrecognized token $");
         Ok(())
     }
-
 }

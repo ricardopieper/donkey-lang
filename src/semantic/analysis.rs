@@ -1,11 +1,9 @@
-use crate::semantic::hir_printer::print_hir;
-use crate::{ast::parser::*, types::type_errors::TypeErrors};
 use crate::semantic::hir::*;
 use crate::semantic::*;
 use crate::types::type_db::TypeDatabase;
+use crate::{ast::parser::*, types::type_errors::TypeErrors};
 
-use super::{name_registry::NameRegistry};
-
+use super::name_registry::NameRegistry;
 
 pub struct AnalysisResult {
     pub initial_mir: Vec<HIR>,
@@ -13,7 +11,7 @@ pub struct AnalysisResult {
     pub final_mir: Vec<HIR>,
     pub type_db: TypeDatabase,
     pub globals: NameRegistry,
-    pub type_errors: TypeErrors
+    pub type_errors: TypeErrors,
 }
 
 pub fn do_analysis(ast: &AST) -> AnalysisResult {
@@ -35,25 +33,23 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
 
     hir = type_inference::infer_types(&mut globals, &type_db, hir, &mut errors);
 
-    return AnalysisResult {
+    AnalysisResult {
         initial_mir,
         after_make_declarations_mir,
         final_mir: hir,
         type_db,
         globals,
-        type_errors: errors
-    };
+        type_errors: errors,
+    }
 }
 
 #[cfg(test)]
 mod tests {
 
-    use std::any::Any;
-
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::{types::type_db::TypeInstance, ast::lexer::Operator};
+    use crate::ast::lexer::Operator;
 
     use super::*;
 
@@ -92,15 +88,15 @@ def my_function() -> i32:
 
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", result);
-//1 + 2 / 3.2 + func(1, 5);
-/*
-$0 : i32 = 1 + 2
-$1 : i32 = func(1, 5)
-$2 : f32 = 3.2 + $1
-$3 : <erro> = $0 + $2
+        //1 + 2 / 3.2 + func(1, 5);
+        /*
+        $0 : i32 = 1 + 2
+        $1 : i32 = func(1, 5)
+        $2 : f32 = 3.2 + $1
+        $3 : <erro> = $0 + $2
 
 
-*/
+        */
         let expected = "
 def my_function() -> i32:
     x : f64 = 1.0
@@ -527,14 +523,25 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.binary_op_not_found.len(), 1);
 
-        assert_eq!(analyzed.type_errors.binary_op_not_found[0].lhs.as_string(&analyzed.type_db), "i32");
-            
-        assert_eq!(analyzed.type_errors.binary_op_not_found[0].rhs.as_string(&analyzed.type_db), "str");
+        assert_eq!(
+            analyzed.type_errors.binary_op_not_found[0]
+                .lhs
+                .as_string(&analyzed.type_db),
+            "i32"
+        );
 
-        assert_eq!(analyzed.type_errors.binary_op_not_found[0].operator, 
-            Operator::Plus);
+        assert_eq!(
+            analyzed.type_errors.binary_op_not_found[0]
+                .rhs
+                .as_string(&analyzed.type_db),
+            "str"
+        );
+
+        assert_eq!(
+            analyzed.type_errors.binary_op_not_found[0].operator,
+            Operator::Plus
+        );
     }
-
 
     #[test]
     fn field_ddoes_not_exist() {
@@ -548,10 +555,20 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
-        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].field_or_method, "sizee");
-        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].object_type.as_string(&analyzed.type_db), "array<i32>");
-        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].on_function, "my_function");
-         
+        assert_eq!(
+            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            "sizee"
+        );
+        assert_eq!(
+            analyzed.type_errors.field_or_method_not_found[0]
+                .object_type
+                .as_string(&analyzed.type_db),
+            "array<i32>"
+        );
+        assert_eq!(
+            analyzed.type_errors.field_or_method_not_found[0].on_function,
+            "my_function"
+        );
     }
 
     #[test]
@@ -566,10 +583,20 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
-        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].field_or_method, "reevert");
-        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].object_type.as_string(&analyzed.type_db), "array<i32>");
-        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].on_function, "my_function");
-            
+        assert_eq!(
+            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            "reevert"
+        );
+        assert_eq!(
+            analyzed.type_errors.field_or_method_not_found[0]
+                .object_type
+                .as_string(&analyzed.type_db),
+            "array<i32>"
+        );
+        assert_eq!(
+            analyzed.type_errors.field_or_method_not_found[0].on_function,
+            "my_function"
+        );
     }
 
     #[test]
@@ -583,12 +610,15 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.type_not_found.len(), 1);
 
-        assert_eq!(analyzed.type_errors.type_not_found[0].type_name.to_string(), "i65");
-        assert_eq!(analyzed.type_errors.type_not_found[0].on_function, "my_function");
-            
+        assert_eq!(
+            analyzed.type_errors.type_not_found[0].type_name.to_string(),
+            "i65"
+        );
+        assert_eq!(
+            analyzed.type_errors.type_not_found[0].on_function,
+            "my_function"
+        );
     }
-
-   
 
     #[test]
     fn unexpected_type_found_in_binary_expression_lhs() {
@@ -602,11 +632,17 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.unexpected_types.len(), 1);
 
-        assert_eq!(analyzed.type_errors.unexpected_types[0].type_def.as_string(&analyzed.type_db), "fn (str) -> i32");
-        assert_eq!(analyzed.type_errors.unexpected_types[0].on_function, "my_function");
-            
+        assert_eq!(
+            analyzed.type_errors.unexpected_types[0]
+                .type_def
+                .as_string(&analyzed.type_db),
+            "fn (str) -> i32"
+        );
+        assert_eq!(
+            analyzed.type_errors.unexpected_types[0].on_function,
+            "my_function"
+        );
     }
-
 
     #[test]
     fn unexpected_type_found_in_binary_expression_rhs() {
@@ -620,9 +656,16 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.unexpected_types.len(), 1);
 
-        assert_eq!(analyzed.type_errors.unexpected_types[0].type_def.as_string(&analyzed.type_db), "fn (str) -> i32");
-        assert_eq!(analyzed.type_errors.unexpected_types[0].on_function, "my_function");
-            
+        assert_eq!(
+            analyzed.type_errors.unexpected_types[0]
+                .type_def
+                .as_string(&analyzed.type_db),
+            "fn (str) -> i32"
+        );
+        assert_eq!(
+            analyzed.type_errors.unexpected_types[0].on_function,
+            "my_function"
+        );
     }
 
     #[test]
@@ -637,10 +680,20 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.unary_op_not_found.len(), 1);
 
-        assert_eq!(analyzed.type_errors.unary_op_not_found[0].rhs.as_string(&analyzed.type_db), "str");
-        assert_eq!(analyzed.type_errors.unary_op_not_found[0].operator, Operator::Plus);
-        assert_eq!(analyzed.type_errors.unary_op_not_found[0].on_function, "my_function");
-            
+        assert_eq!(
+            analyzed.type_errors.unary_op_not_found[0]
+                .rhs
+                .as_string(&analyzed.type_db),
+            "str"
+        );
+        assert_eq!(
+            analyzed.type_errors.unary_op_not_found[0].operator,
+            Operator::Plus
+        );
+        assert_eq!(
+            analyzed.type_errors.unary_op_not_found[0].on_function,
+            "my_function"
+        );
     }
 
     #[test]
@@ -653,9 +706,11 @@ def my_function():
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.insufficient_array_type_info.len(), 1);
-        assert_eq!(analyzed.type_errors.insufficient_array_type_info[0].on_function, "my_function");
+        assert_eq!(
+            analyzed.type_errors.insufficient_array_type_info[0].on_function,
+            "my_function"
+        );
     }
-
 
     #[test]
     fn call_to_non_callable() {
@@ -668,9 +723,16 @@ def my_function():
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.call_non_callable.len(), 1);
-        println!("{:?}", analyzed.type_errors.call_non_callable[0].actual_type);
+        println!(
+            "{:?}",
+            analyzed.type_errors.call_non_callable[0].actual_type
+        );
 
-        assert_eq!(analyzed.type_errors.call_non_callable[0].actual_type.as_string(&analyzed.type_db), "array<i32>");
+        assert_eq!(
+            analyzed.type_errors.call_non_callable[0]
+                .actual_type
+                .as_string(&analyzed.type_db),
+            "array<i32>"
+        );
     }
-
 }

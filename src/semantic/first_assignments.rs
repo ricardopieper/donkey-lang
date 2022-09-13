@@ -13,7 +13,12 @@ fn make_first_assignments_in_body(
                 declarations_found.insert(var.clone());
                 decl.clone()
             }
-            assign @ HIR::Assign { path, expression, meta_ast, meta_expr } if path.len() == 1 => {
+            assign @ HIR::Assign {
+                path,
+                expression,
+                meta_ast,
+                meta_expr,
+            } if path.len() == 1 => {
                 let var = &path[0];
                 if declarations_found.contains(var) {
                     assign.clone()
@@ -24,7 +29,7 @@ fn make_first_assignments_in_body(
                         typedef: HIRTypeDef::PendingInference,
                         expression: expression.clone(),
                         meta_ast: meta_ast.clone(),
-                        meta_expr: meta_expr.clone()
+                        meta_expr: meta_expr.clone(),
                     }
                 }
             }
@@ -33,24 +38,29 @@ fn make_first_assignments_in_body(
                 let mut true_branch_scope = declarations_found.clone();
                 let mut false_branch_scope = declarations_found.clone();
                 let true_branch_decls =
-                    make_first_assignments_in_body(&true_branch, &mut true_branch_scope);
+                    make_first_assignments_in_body(true_branch, &mut true_branch_scope);
                 let false_branch_decls =
-                    make_first_assignments_in_body(&false_branch, &mut false_branch_scope);
-                HIR::If(condition.clone(), true_branch_decls, false_branch_decls, meta.clone())
+                    make_first_assignments_in_body(false_branch, &mut false_branch_scope);
+                HIR::If(
+                    condition.clone(),
+                    true_branch_decls,
+                    false_branch_decls,
+                    meta.clone(),
+                )
             }
             other => other.clone(),
         };
         new_mir.push(mir_node);
     }
 
-    return new_mir;
+    new_mir
 }
 
 fn make_assignments_into_declarations_in_function(
-    function_name: &str,
+    _function_name: &str,
     parameters: &[HIRTypedBoundName],
     body: &[HIR],
-    return_type: &HIRTypeDef,
+    _return_type: &HIRTypeDef,
 ) -> Vec<HIR> {
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
@@ -66,7 +76,7 @@ fn make_assignments_into_declarations_in_function(
     for p in parameters {
         declarations_found.insert(p.name.clone());
     }
-    return make_first_assignments_in_body(body, &mut declarations_found);
+    make_first_assignments_in_body(body, &mut declarations_found)
 }
 
 pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {
@@ -78,8 +88,8 @@ pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {
                 function_name,
                 parameters,
                 body,
-                return_type, 
-                meta
+                return_type,
+                meta,
             } => {
                 let new_body = make_assignments_into_declarations_in_function(
                     function_name,
@@ -92,7 +102,7 @@ pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {
                     parameters: parameters.clone(),
                     body: new_body,
                     return_type: return_type.clone(),
-                    meta: meta.clone()
+                    meta: meta.clone(),
                 }
             }
             other => other.clone(),
@@ -100,5 +110,5 @@ pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {
         new_mir.push(result);
     }
 
-    return new_mir;
+    new_mir
 }

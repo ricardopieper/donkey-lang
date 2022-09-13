@@ -1,5 +1,3 @@
-use core::panic;
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AsmLoadStoreMode {
     StackPop,
@@ -30,7 +28,7 @@ pub enum AsmIntegerCompareBinaryOp {
     LessThan,
     LessThanOrEquals,
     GreaterThan,
-    GreaterThanOrEquals
+    GreaterThanOrEquals,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -41,9 +39,9 @@ pub enum AsmSignFlag {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AsmControlRegister {
-    BasePointer,
-    StackPointer,
-    InstructionPointer,
+    Base,
+    Stack,
+    Instruction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,28 +96,28 @@ pub enum AssemblyInstruction {
         label: Option<String>,
     },
     UnresolvedJumpIfZero {
-        label: Option<String> //if none pops from stack
+        label: Option<String>, //if none pops from stack
     },
     UnresolvedJumpIfNotZero {
-        label: Option<String> //if none pops from stack
+        label: Option<String>, //if none pops from stack
     },
     UnresolvedJump {
-        label: Option<String> //if none pops from stack
+        label: Option<String>, //if none pops from stack
     },
     Call {
         offset: u32,
     },
     CallFromStack,
     JumpIfZero {
-        offset: u32
+        offset: u32,
     },
     JumpIfZeroFromStack,
     JumpIfNotZero {
-        offset: u32
+        offset: u32,
     },
     JumpIfNotZeroFromStack,
     Jump {
-        offset: u32
+        offset: u32,
     },
     JumpFromStack,
     Exit,

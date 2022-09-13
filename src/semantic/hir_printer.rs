@@ -1,11 +1,9 @@
 use crate::ast::lexer;
-use crate::ast::parser;
-use crate::semantic::hir;
+
 use crate::semantic::hir::*;
 use crate::types::type_db::TypeDatabase;
 use lexer::Operator;
-use std::env;
-use std::fs;
+
 pub fn operator_str(op: lexer::Operator) -> String {
     match op {
         Operator::Plus => "+".into(),
@@ -28,8 +26,8 @@ pub fn trivial_expr_str(expr: &TypedTrivialHIRExpr) -> String {
         TrivialHIRExpr::FloatValue(f) => format!("{:?}", f.0),
         TrivialHIRExpr::IntegerValue(i) => format!("{}", i),
         TrivialHIRExpr::StringValue(s) => format!("\"{}\"", s),
-        TrivialHIRExpr::BooleanValue(true) => format!("{}", "True"),
-        TrivialHIRExpr::BooleanValue(false) => format!("{}", "False"),
+        TrivialHIRExpr::BooleanValue(true) => "True".to_string(),
+        TrivialHIRExpr::BooleanValue(false) => "False".to_string(),
         TrivialHIRExpr::None => "None".into(),
     }
 }
@@ -40,7 +38,7 @@ pub fn expr_str(expr: &HIRExpr) -> String {
         HIRExpr::FunctionCall(f, params, ..) => {
             let args_str = params
                 .iter()
-                .map(|x| trivial_expr_str(x))
+                .map(trivial_expr_str)
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{}({})", trivial_expr_str(f), args_str)
@@ -55,7 +53,7 @@ pub fn expr_str(expr: &HIRExpr) -> String {
         HIRExpr::Array(items, ..) => {
             let args_str = items
                 .iter()
-                .map(|x| trivial_expr_str(x))
+                .map(trivial_expr_str)
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{}]", args_str)
@@ -99,36 +97,38 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
         HIR::Assign {
             path, expression, ..
         } => {
-            format!("{}{} = {}\n", indent, path.join("."), expr_str(&expression))
+            format!("{}{} = {}\n", indent, path.join("."), expr_str(expression))
         }
         HIR::Declare {
             var,
             typedef: typename,
-            expression, ..
+            expression,
+            ..
         } => {
             format!(
                 "{}{} : {} = {}\n",
                 indent,
                 var,
                 hir_type_str(typename, type_db),
-                expr_str(&expression)
+                expr_str(expression)
             )
         }
         HIR::DeclareFunction {
             function_name,
             parameters,
             body,
-            return_type, ..
+            return_type,
+            ..
         } => {
             let parameters = parameters
                 .iter()
                 .map(|param| {
-                    return format!(
+                    format!(
                         "{}{}: {}",
                         indent,
                         param.name,
                         hir_type_str(&param.typename, type_db)
-                    );
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -144,7 +144,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
             for n in body {
                 function.push_str(&print_hir_str(n, &indent_block, type_db));
             }
-            return function;
+            function
         }
         HIR::Return(expr, ..) => {
             format!("{}return {}\n", indent, expr_str(expr))
@@ -152,7 +152,9 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
         HIR::EmptyReturn => {
             format!("{}return\n", indent)
         }
-        HIR::StructDeclaration { struct_name, body, .. } => {
+        HIR::StructDeclaration {
+            struct_name, body, ..
+        } => {
             let mut structdecl = format!("{}struct {}:\n", indent, struct_name);
 
             for field in body {
@@ -169,7 +171,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
         HIR::FunctionCall { function, args, .. } => {
             let args_str = args
                 .iter()
-                .map(|x| trivial_expr_str(x))
+                .map(trivial_expr_str)
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -189,20 +191,18 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
                 ifdecl.push_str(&statement_str);
             }
 
-            if false_body.len() == 0 {
+            if false_body.is_empty() {
                 ifdecl.push_str(&format!("{}pass\n", indent_block));
             }
-            return ifdecl;
+            ifdecl
         }
-        
-        e => panic!("Code format not implemented for node {:?}", e),
     }
 }
 
 pub fn print_hir(mir: &[HIR], type_db: &TypeDatabase) -> String {
     let mut buffer = String::new();
     for node in mir {
-        buffer.push_str(&print_hir_str(&node, "".into(), type_db));
+        buffer.push_str(&print_hir_str(node, "", type_db));
     }
-    return buffer;
+    buffer
 }
