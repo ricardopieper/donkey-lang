@@ -801,7 +801,7 @@ mod tests {
         let (mem, reg) = run_code(code);
         let stack_pop = mem.native_read::<i32>(reg.bp + 8);
         assert_eq!(stack_pop, 7);
-        assert_eq!(reg.sp, reg.bp + 8)
+        assert_eq!(reg.sp, reg.bp + 8);
     }
 
     #[test]
@@ -864,7 +864,7 @@ mod tests {
         let (mem, reg) = run_code(code);
         let stack_pop = mem.native_read::<i32>(reg.bp + 12);
         assert_eq!(stack_pop, 440);
-        assert_eq!(reg.sp, reg.bp + 16)
+        assert_eq!(reg.sp, reg.bp + 16);
     }
 
     #[test]

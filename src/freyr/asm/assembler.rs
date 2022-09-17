@@ -634,6 +634,7 @@ mod tests {
     };
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn parse_test() {
         let asm = "
 main:

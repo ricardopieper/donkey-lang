@@ -424,6 +424,7 @@ impl LayoutHelper {
 }
 
 #[cfg(test)]
+#[allow(clippy::similar_names)]
 mod tests {
 
     #[cfg(test)]
@@ -1299,16 +1300,16 @@ mod tests {
 
     #[test]
     fn encode_decode_return() {
-        let encoder = LayoutHelper::new();
-        let encoded = encoder.begin_encode("return").make();
-        let decoded = encoder.begin_decode(encoded).decode();
+        let layout_helper = LayoutHelper::new();
+        let encoded = layout_helper.begin_encode("return").make();
+        let decoded = layout_helper.begin_decode(encoded).decode();
 
         assert_eq!(decoded, Instruction::Return);
 
-        let reencoded = encoder.encode_instruction(&decoded);
+        let reencoded = layout_helper.encode_instruction(&decoded);
         assert_eq!(reencoded, encoded);
 
-        let redecoded = encoder.begin_decode(reencoded).decode();
+        let redecoded = layout_helper.begin_decode(reencoded).decode();
         assert_eq!(redecoded, decoded);
     }
 }

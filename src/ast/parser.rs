@@ -296,7 +296,6 @@ impl Parser {
     }
 
     fn is_not_end(&self) -> bool {
-        //!`self.is_last`()
         self.parsing_state.last().unwrap().index < self.tokens.len()
     }
 
@@ -442,7 +441,7 @@ impl Parser {
         } else {
             self.pop_stack();
         }
-        return Some(if_statement);
+        Some(if_statement)
     }
 
     pub fn parse_structdef(&mut self) -> Option<AST> {
@@ -498,13 +497,13 @@ impl Parser {
         
         expect_colon_newline!(self);
 
-        return Some(indented!(self, {
+        Some(indented!(self, {
             let ast = self.parse_ast().unwrap();
             AST::WhileStatement {
                 expression: expr,
                 body: ast,
             }
-        }));
+        }))
     }
 
     pub fn parse_for_statement(&mut self) -> Option<AST> {
@@ -519,7 +518,7 @@ impl Parser {
         
         expect_colon_newline!(self);
         
-        return Some(indented!(self, {
+        Some(indented!(self, {
             let ast = self.parse_ast().unwrap();
 
             AST::ForStatement {
@@ -527,7 +526,7 @@ impl Parser {
                 list_expression: expr,
                 body: ast,
             }
-        }));
+        }))
     }
 
     pub fn parse_type_name(&mut self) -> Option<ASTType> {
@@ -626,7 +625,7 @@ impl Parser {
 
         expect_token!(self, Token::Colon, "Expected colon paren after parameters and return type in function declaration, got {}");
 
-        return Some(indented!(self, {
+        Some(indented!(self, {
             let ast = self.parse_ast().unwrap();
 
             AST::DeclareFunction {
@@ -635,7 +634,7 @@ impl Parser {
                 body: ast,
                 return_type,
             }
-        }));
+        }))
     }
 
     pub fn parse_break(&mut self) -> Option<AST> {
@@ -645,7 +644,7 @@ impl Parser {
             return Some(AST::Break);
         }
 
-        return None;
+        None
     }
 
     pub fn parse_return(&mut self) -> Option<AST> {
@@ -658,7 +657,7 @@ impl Parser {
             }
             return Some(AST::Return(None));
         }
-        return None;
+        None
     }
 
     pub fn parse_raise(&mut self) -> Option<AST> {
@@ -671,12 +670,13 @@ impl Parser {
             }
             panic!("Must inform expression with raise keyword")
         }
-        return None;
+        None
     }
 
     pub fn parse_standalone_expr(&mut self) -> Option<AST> {
-        let expr = self.parse_expr().ok().unwrap();
-        return Some(AST::StandaloneExpr(expr.resulting_expr));
+        self.parse_expr()
+            .ok()
+            .map(|expr| AST::StandaloneExpr(expr.resulting_expr))
     }
 
     //returns the identation level until the first non-whitespace token
@@ -757,20 +757,16 @@ impl Parser {
             try_parse!("standalone expression", parse_standalone_expr);
 
             assert!(parsed_successfully, "Could not parse code");
-
-            if self.is_not_end() {
-                if !self.cur_is_newline() {
-                    panic!(
-                        "is not end but is also not newline, cur = {:?}, parsed = {:?}",
-                        self.cur(),
-                        results
-                    )
-                } else {
-                    continue;
-                }
-            } else {
-                break;
-            }
+            
+            let is_end = !self.is_not_end();
+            if is_end { break; };
+           
+            if self.cur_is_newline() { continue; };
+            panic!(
+                "is not end but is also not newline, cur = {:?}, parsed = {:?}",
+                self.cur(),
+                results
+            );   
         }
 
         Ok(results)
@@ -1615,7 +1611,7 @@ print(y)",
         let result = parse(vec![Token::LiteralInteger(1)]);
 
         let expected = Expr::IntegerValue(1);
-        assert_eq!(result, expected)
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -1624,7 +1620,7 @@ print(y)",
         let result = parse(vec![Token::Identifier(String::from("x"))]);
 
         let expected = Expr::Variable(String::from("x"));
-        assert_eq!(result, expected)
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -1637,7 +1633,7 @@ print(y)",
         ]);
 
         let expected = Expr::BinaryOperation(1.into(), Operator::Plus, 1.into());
-        assert_eq!(result, expected)
+        assert_eq!(result, expected);
     }
 
     #[test]

@@ -514,6 +514,7 @@ pub fn hir_to_mir(hir_nodes: &[HIR], type_db: &TypeDatabase) -> Vec<MIRTopLevelN
 }
 
 #[cfg(test)]
+#[allow(clippy::too_many_lines)]
 mod tests {
     use crate::{semantic::mir_printer, ast::parser::Parser};
     #[cfg(test)]
