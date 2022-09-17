@@ -14,6 +14,7 @@ pub struct PartiallyResolvedFunctionSignature {
 #[derive(Debug, Clone)]
 pub struct NameRegistry {
     names: HashMap<String, HIRTypeDef>,
+    //This could help still provide some type inference when just enough information is available
     partially_resolved_function_sigs: HashMap<String, PartiallyResolvedFunctionSignature>,
 }
 
@@ -33,7 +34,7 @@ impl NameRegistry {
         self.partially_resolved_function_sigs.insert(name, sig);
     }
 
-    pub fn find_partially_resolved_sig(
+    #[allow(dead_code)] pub fn find_partially_resolved_sig(
         &mut self,
         name: &str,
     ) -> Option<&PartiallyResolvedFunctionSignature> {
@@ -46,7 +47,7 @@ impl NameRegistry {
 
     pub fn include(&mut self, outer: &NameRegistry) {
         for (k, v) in &outer.names {
-            self.insert(k.clone(), v.clone())
+            self.insert(k.clone(), v.clone());
         }
     }
 
@@ -156,25 +157,22 @@ pub fn build_name_registry(type_db: &TypeDatabase, mir: &[HIR]) -> NameRegistry 
 
     //first collect all globals by navigating through all functions and assigns
     for node in mir.iter() {
-        match node {
-            HIR::DeclareFunction {
-                function_name,
-                parameters,
-                return_type,
-                ..
-            } => {
-                let param_types = parameters
-                    .iter()
-                    .map(|x| x.typename.clone())
-                    //at this point we expect the type to be unresolved, always
-                    .map(|type_def| type_def.expect_unresolved())
-                    .collect::<Vec<_>>();
-                //build a function type
-                let function_type =
-                    HIRType::Function(param_types, Box::new(return_type.expect_unresolved()));
-                registry.insert(function_name.clone(), HIRTypeDef::Unresolved(function_type));
-            }
-            _ => {}
+        if let HIR::DeclareFunction {
+            function_name,
+            parameters,
+            return_type,
+            ..
+        } = node {
+            let param_types = parameters
+                .iter()
+                .map(|x| x.typename.clone())
+                //at this point we expect the type to be unresolved, always
+                .map(|type_def| type_def.expect_unresolved())
+                .collect::<Vec<_>>();
+            //build a function type
+            let function_type =
+                HIRType::Function(param_types, Box::new(return_type.expect_unresolved()));
+            registry.insert(function_name.clone(), HIRTypeDef::Unresolved(function_type));
         };
     }
     registry

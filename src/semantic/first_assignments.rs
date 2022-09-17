@@ -79,10 +79,10 @@ fn make_assignments_into_declarations_in_function(
     make_first_assignments_in_body(body, &mut declarations_found)
 }
 
-pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {
+pub fn transform_first_assignment_into_declaration(mir: &[HIR]) -> Vec<HIR> {
     let mut new_mir = vec![];
 
-    for node in &mir {
+    for node in mir {
         let result = match node {
             HIR::DeclareFunction {
                 function_name,

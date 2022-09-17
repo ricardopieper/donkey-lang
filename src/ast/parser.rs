@@ -1,10 +1,10 @@
 use crate::ast::lexer::{Operator, Token};
-use crate::commons::float::Float;
+use crate::commons::float::FloatLiteral;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     IntegerValue(i128),
-    FloatValue(Float),
+    FloatValue(FloatLiteral),
     StringValue(String),
     BooleanValue(bool),
     None,
@@ -85,7 +85,7 @@ impl Expr {
     fn new_int(i: i128) -> Box<Self> {
         Box::new(Self::IntegerValue(i))
     }
-    fn new_float(f: Float) -> Box<Self> {
+    fn new_float(f: FloatLiteral) -> Box<Self> {
         Box::new(Self::FloatValue(f))
     }
 }
@@ -399,7 +399,7 @@ impl Parser {
         expect_colon_newline!(self);
 
         let mut if_statement = indented!(self, {
-            let ast = self.parse_ast().unwrap();
+            let ast = self.parse_ast();
             AST::IfStatement {
                 true_branch: ASTIfStatement {
                     expression: expr,
@@ -426,7 +426,7 @@ impl Parser {
             expect_colon_newline!(self);
 
             if_statement = indented!(self, {
-                let ast = self.parse_ast().unwrap();
+                let ast = self.parse_ast();
                 match if_statement {
                     AST::IfStatement {
                         true_branch, elifs, ..
@@ -498,7 +498,7 @@ impl Parser {
         expect_colon_newline!(self);
 
         Some(indented!(self, {
-            let ast = self.parse_ast().unwrap();
+            let ast = self.parse_ast();
             AST::WhileStatement {
                 expression: expr,
                 body: ast,
@@ -519,7 +519,7 @@ impl Parser {
         expect_colon_newline!(self);
         
         Some(indented!(self, {
-            let ast = self.parse_ast().unwrap();
+            let ast = self.parse_ast();
 
             AST::ForStatement {
                 item_name: variable_name,
@@ -626,7 +626,7 @@ impl Parser {
         expect_token!(self, Token::Colon, "Expected colon paren after parameters and return type in function declaration, got {}");
 
         Some(indented!(self, {
-            let ast = self.parse_ast().unwrap();
+            let ast = self.parse_ast();
 
             AST::DeclareFunction {
                 function_name,
@@ -698,7 +698,7 @@ impl Parser {
         identation_level
     }
 
-    pub fn parse_ast(&mut self) -> Result<Vec<AST>, ParsingError> {
+    pub fn parse_ast(&mut self) -> Vec<AST> {
         let mut parsed_successfully: bool;
         let mut results = vec![];
 
@@ -737,11 +737,11 @@ impl Parser {
                 self.set_cur(&popped);
             } else {
                 self.pop_stack();
-                return Ok(results);
+                return results;
             }
 
             if !self.is_not_end() {
-                return Ok(results);
+                return results;
             }
 
             try_parse!("struct", parse_structdef);
@@ -757,7 +757,7 @@ impl Parser {
             try_parse!("standalone expression", parse_standalone_expr);
 
             assert!(parsed_successfully, "Could not parse code");
-            
+
             let is_end = !self.is_not_end();
             if is_end { break; };
            
@@ -769,7 +769,7 @@ impl Parser {
             );   
         }
 
-        Ok(results)
+        results
     }
 
     fn index_access_helper(&mut self, expr_list_or_array: &Expr) -> Result<Expr, ParsingError> {
@@ -837,6 +837,7 @@ impl Parser {
         
     }
 
+    #[allow(clippy::too_many_lines)] //no patience to fix this, expr parsing is messy and I will not touch it
     pub fn parse_expr(&mut self) -> Result<ParseExpressionResult, ParsingError> {
         loop {
             if !self.can_go() {
@@ -871,7 +872,7 @@ impl Parser {
                             could_be_fcall = false;
                         }
                         if self.operand_stack().is_empty() {
-                            could_be_fcall = false
+                            could_be_fcall = false;
                         }
                         if could_be_fcall {
                             //when we parse a funcion, we need to parse its arguments as well.
@@ -947,7 +948,7 @@ impl Parser {
                         }
                         if self.operand_stack().is_empty() {
                             //no expression to access array onto
-                            could_be_indexing = false
+                            could_be_indexing = false;
                         }
                         if could_be_indexing {
                             //in the future,
@@ -979,8 +980,6 @@ impl Parser {
                                         self.push_operand(index_access);
                                     }
                                 }
-                            } else {
-                                //is just a normal expression, go back
                             }
                         } else {
                             self.new_stack(); //new parsing stack/state
@@ -1052,11 +1051,8 @@ impl Parser {
                         self.push_operand(Expr::BooleanValue(false));
                         was_operand = true;
                     }
-                    Token::CloseParen | Token::CloseArrayBracket => {
-                        not_part_of_expr = true;
-                    }
                     Token::Operator(o) => self.push_operator(o),
-                    _ => {
+                    _ => { //close paren, close bracket are not part of expr, as in "they're just syntax"
                         not_part_of_expr = true;
                     }
                 }
@@ -1232,7 +1228,7 @@ pub struct ParseExpressionResult {
 
 pub fn parse_ast(tokens: Vec<Token>) -> Vec<AST> {
     let mut parser = Parser::new(tokens);
-    parser.parse_ast().unwrap()
+    parser.parse_ast()
 }
 
 #[cfg(test)]

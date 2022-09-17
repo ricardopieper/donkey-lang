@@ -7,43 +7,27 @@ use crate::types::type_errors::{AssignContext, CallToNonCallableType, FunctionCa
 use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 
-fn find_variable<'block, 'scope>(
-    name: &str,
-    current_block: &'block MIRBlock,
-    scopes: &'scope [MIRScope],
-    names: &'scope NameRegistry,
-) -> Option<&'scope TypeInstance> {
-    let mut current_scope = &scopes[current_block.scope.0];
-
-    loop {
-        let bound_name = current_scope.boundnames.iter().find(|x| x.name == name);
-        match bound_name {
-            Some(name_and_type) => return Some(&name_and_type.typename),
-            None => {
-                if current_scope.index == 0 {
-                    break;
-                }
-                current_scope = &scopes[current_scope.index - 1];
-                
-            }
-        };
-    }
-
-    //try find in the global scope
-    return Some(names.get_ref(name).expect_resolved());
-}
-
-fn expect_find_variable<'block, 'scope>(
+fn find_variable_and_get_type<'block, 'scope>(
     name: &str,
     current_block: &'block MIRBlock,
     scopes: &'scope [MIRScope],
     names: &'scope NameRegistry,
 ) -> &'scope TypeInstance {
-    let variable = find_variable(name, current_block, scopes, names);
-    match variable {
-        Some(x) => x,
-        None => panic!("Variable not found: {name}"),
+    let mut current_scope = &scopes[current_block.scope.0];
+
+    loop {
+        let bound_name = current_scope.boundnames.iter().find(|x| x.name == name);
+        if let Some(name_and_type) = bound_name {
+            return &name_and_type.typename
+        }
+        if current_scope.index == 0 {
+            break;
+        }
+        current_scope = &scopes[current_scope.index - 1];
     }
+
+    //try find in the global scope
+    return names.get_ref(name).expect_resolved();
 }
 
 fn check_function_arguments(
@@ -131,25 +115,18 @@ fn all_assignments_correct_type(
                 } if path.len() == 1 => {
                     let var = path.first().unwrap();
                     //find variable
-                    let variable_type = find_variable(var, body_node, scopes, names);
-                    match variable_type {
-                        Some(variable_found_type) => {
-                            let expr_type = expression.get_expr_type().expect_resolved();
+                    let variable_type = find_variable_and_get_type(var, body_node, scopes, names);
+                    let expr_type = expression.get_expr_type().expect_resolved();
 
-                            if variable_found_type != expr_type {
-                                type_errors.assign_mismatches.push(TypeMismatch {
-                                    on_function: function_name.to_string(),
-                                    context: AssignContext {
-                                        target_variable_name: var.to_string(),
-                                    },
-                                    expected: variable_found_type.clone(),
-                                    actual: expr_type.clone(),
-                                });
-                            }
-                        }
-                        None => {
-                            panic!("Variable not found: {var}")
-                        }
+                    if variable_type != expr_type {
+                        type_errors.assign_mismatches.push(TypeMismatch {
+                            on_function: function_name.to_string(),
+                            context: AssignContext {
+                                target_variable_name: var.to_string(),
+                            },
+                            expected: variable_type.clone(),
+                            actual: expr_type.clone(),
+                        });
                     }
                 }
                 MIRBlockNode::Assign { path, .. } if path.len() != 1 => {
@@ -165,7 +142,7 @@ fn all_assignments_correct_type(
 pub enum FunctionName {
     Function(String),
     IndexAccess,
-    Method {
+    #[allow(dead_code)] Method {
         function_name: String,
         type_name: String,
     },
@@ -268,7 +245,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     args,
                     meta_ast,
                 } => {
-                    let function_type = expect_find_variable(function, body_node, scopes, names);
+                    let function_type = find_variable_and_get_type(function, body_node, scopes, names);
                     match function_type {
                         TypeInstance::Function(argument_types, _) => {
                             let passed = args
@@ -376,7 +353,7 @@ mod tests {
             .ok()
             .unwrap();
         let mut parser = Parser::new(tokenized);
-        let ast = AST::Root(parser.parse_ast().ok().unwrap());
+        let ast = AST::Root(parser.parse_ast());
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         let mir = hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db);
 

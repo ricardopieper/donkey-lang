@@ -29,7 +29,7 @@ pub enum MIRTopLevelNode {
         scopes: Vec<MIRScope>,
         return_type: TypeInstance,
     },
-    StructDeclaration {
+    #[allow(dead_code)] StructDeclaration {
         struct_name: String,
         body: Vec<HIRTypedBoundName>,
     },
@@ -235,7 +235,9 @@ impl MIRFunctionEmitter {
     }
 }
 
+
 //returns the "root block" that this execution generated (or started with)
+#[allow(clippy::too_many_lines)] //too lazy for now, and I think it's ok here
 fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
     for hir in body {
         match hir {
@@ -529,7 +531,7 @@ mod tests {
             .ok()
             .unwrap();
         let mut parser = Parser::new(tokenized);
-        let ast = AST::Root(parser.parse_ast().ok().unwrap());
+        let ast = AST::Root(parser.parse_ast());
         println!("AST: {:?}", &ast);
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         println!("HIR: {:?}", &analysis_result.final_mir);

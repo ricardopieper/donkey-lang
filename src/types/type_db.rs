@@ -13,11 +13,10 @@ pub enum TypeInstance {
 
 impl TypeInstance {
     pub fn expect_simple(&self) -> TypeId {
-        match self {
-            TypeInstance::Simple(id) => *id,
-            TypeInstance::Generic(_, _) => panic!("Not a simple type"),
-            TypeInstance::Function(_, _) => panic!("Not a simple type"),
-        }
+        let TypeInstance::Simple(id) = self else {
+            panic!("Not a simple type");
+        };
+        *id
     }
     pub fn as_string(&self, type_db: &TypeDatabase) -> String {
         match self {
@@ -73,7 +72,7 @@ pub enum TypeSign {
 pub enum Type {
     Simple(Either<GenericParameter, TypeId>),
     Generic(TypeId, Vec<Type>), //on generics, the base root type has to be known
-    Function(Vec<Type>, Box<Type>), //on functions, both return or args can use generics
+    //Function(Vec<Type>, Box<Type>), //on functions, both return or args can use generics
 }
 
 //@TODO must implement a way to perform generic substitution on every type instance...
@@ -369,7 +368,7 @@ impl TypeDatabase {
 
     pub fn add_method(&mut self, type_id: TypeId, signature: FunctionSignature) {
         let record = self.types.get_mut(type_id.0).unwrap();
-        record.methods.push(signature)
+        record.methods.push(signature);
     }
 
     pub fn add_field(&mut self, type_id: TypeId, name: &str, field_type: TypeId) {
@@ -377,9 +376,10 @@ impl TypeDatabase {
         record.fields.push(TypeField {
             name: name.to_string(),
             field_type: Type::Simple(Either::Right(field_type)),
-        })
+        });
     }
-
+    
+    #[allow(clippy::similar_names)]
     fn init_builtin(&mut self) {
         use std::mem;
 

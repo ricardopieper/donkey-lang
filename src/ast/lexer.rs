@@ -1,4 +1,4 @@
-use crate::commons::float::Float;
+use crate::commons::float::FloatLiteral;
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
 pub enum Operator {
@@ -23,7 +23,7 @@ pub enum Operator {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Token {
-    LiteralFloat(Float),
+    LiteralFloat(FloatLiteral),
     LiteralInteger(i128),
     LiteralString(String),
     Operator(Operator),
@@ -65,8 +65,7 @@ impl Token {
             Token::Identifier(_) =>  "identifier",
             Token::NewLine =>  "new line",
             Token::Assign =>  "assign",
-            Token::True =>  "boolean",
-            Token::False =>  "boolean",
+            Token::True | Token::False => "boolean literal",
             Token::None =>  "none",
             Token::Comma =>  "comma",
             Token::Colon =>  "colon",

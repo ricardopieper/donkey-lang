@@ -16,6 +16,7 @@ pub struct Memory {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 #[repr(u8)]
+#[allow(dead_code)]
 pub enum MemorySegment {
     Reserved = 0,
     Data = 1,
@@ -26,6 +27,7 @@ pub enum MemorySegment {
 
 pub trait NativeNumericType<T> {
     fn from_bytes(data: &[u8]) -> T;
+    fn from_exact_bytes(data: [u8; std::mem::size_of::<T>()]) -> T;
     fn to_bytes(&self) -> [u8; std::mem::size_of::<T>()];
 }
 
@@ -36,6 +38,9 @@ macro_rules! impl_native_read {
                 let mut as_bytes = (0 as $type).to_le_bytes();
                 as_bytes[0..(data.len() as usize)].copy_from_slice(data);
                 <$type>::from_le_bytes(as_bytes)
+            }
+            fn from_exact_bytes(data: [u8; std::mem::size_of::<$type>()]) -> $type {
+                <$type>::from_le_bytes(data)
             }
             fn to_bytes(&self) -> [u8; std::mem::size_of::<$type>()] {
                 self.to_le_bytes().try_into().unwrap()
@@ -75,21 +80,8 @@ impl Memory {
         }
     }
 
-    pub fn get_section_type(&self, address: u32) -> MemorySegment {
-        if address < self.data_start {
-            MemorySegment::Reserved
-        } else if address < self.code_start {
-            MemorySegment::Data
-        } else if address < self.stack_start {
-            MemorySegment::Code
-        } else if address < self.heap_start {
-            MemorySegment::Stack
-        } else {
-            MemorySegment::Heap
-        }
-    }
-
-    pub fn set_section(&mut self, section: MemorySegment, section_data: &[u8]) {
+    #[allow(dead_code)]
+    pub fn set_section(&mut self, section: &MemorySegment, section_data: &[u8]) {
         //how many pages?
         let len = section_data.len();
         let pages = (len >> 16) + 1;
@@ -238,17 +230,8 @@ impl Memory {
             self.mem.get_unchecked(address_page as usize) as _
         }
     }
-
-    fn get_page_mut(&mut self, address: u32) -> &mut Option<Box<Page>> {
-        unsafe {
-            //mem is always filled
-            let address_page = address >> 16;
-
-            self.mem.get_unchecked_mut(address_page as usize) as _
-        }
-    }
-
-    fn get_page_and_allocate(&mut self, address: u32) -> Option<&mut Page> {
+    
+    fn get_page_and_allocate(&mut self, address: u32) -> &mut Page {
         unsafe {
             //mem is always filled
             let address_page = address >> 16;
@@ -257,48 +240,8 @@ impl Memory {
             if ptr.is_none() {
                 *ptr = Some(Box::new([0u8; PAGE_SIZE]));
             }
-            let unwrapped = ptr.as_mut().unwrap_unchecked();
-            Some(unwrapped)
+            return ptr.as_mut().unwrap_unchecked();
         }
-    }
-
-    fn ensure_page_allocated(&mut self, address: u32) {
-        unsafe {
-            //mem is always filled
-            let address_page = address >> 16;
-
-            let ptr = self.mem.get_unchecked_mut(address_page as usize);
-            if ptr.is_none() {
-                *ptr = Some(Box::new([0u8; PAGE_SIZE]));
-            }
-        }
-    }
-
-    fn allocate(page: &mut Option<Box<Page>>) {
-        *page = Some(Box::new([0u8; PAGE_SIZE]));
-    }
-
-    fn get_page_read_unsafe(&mut self, address: u32) -> &mut Page {
-        //mem is always filled
-        let address_page = address >> 16;
-        //no bounding panic is possible
-        unsafe {
-            let ptr = self.mem.get_unchecked_mut(address_page as usize);
-            assert!(!ptr.is_none(), "Read to unloaded page");
-            let unwrapped = ptr.as_mut().unwrap_unchecked();
-            unwrapped
-        }
-    }
-
-    fn get_page_very_safe(&mut self, address: u32) -> &mut Page {
-        let address_page = address >> 16;
-
-        let ptr = self.mem.get_mut(address_page as usize).unwrap();
-        if ptr.is_none() {
-            *ptr = Some(Box::new([0u8; PAGE_SIZE]));
-        }
-        let unwrapped = ptr.as_mut().unwrap();
-        unwrapped
     }
 
     pub fn write(&mut self, address: u32, data: &[u8]) {
@@ -314,7 +257,7 @@ impl Memory {
             let bytes_until_fill_page = PAGE_SIZE - index;
             {
                 let bytes_to_write = &data[0..bytes_until_fill_page];
-                let seg_page = self.get_page_and_allocate(address).unwrap();
+                let seg_page = self.get_page_and_allocate(address);
 
                 let start = index;
                 let end = PAGE_LAST_INDEX;
@@ -324,10 +267,10 @@ impl Memory {
 
             //call write again to write the other pages
             let new_starting_address = address + bytes_until_fill_page as u32;
-            self.write(new_starting_address, &data[bytes_until_fill_page..])
+            self.write(new_starting_address, &data[bytes_until_fill_page..]);
         } else {
             //no page faults
-            let seg_page = self.get_page_and_allocate(address).unwrap();
+            let seg_page = self.get_page_and_allocate(address);
             seg_page[index..end_index].copy_from_slice(data);
         }
     }
@@ -345,8 +288,8 @@ impl Memory {
 
         //SAFETY: simple copy from array to another array, memory is "unmanaged" by design
         //as our language doesn't care about borrowing rules
-        let from_page = self.get_page_and_allocate(address_from).unwrap() as *mut Page;
-        let to_page = self.get_page_and_allocate(address_to).unwrap() as *mut Page;
+        let from_page = self.get_page_and_allocate(address_from) as *mut Page;
+        let to_page = self.get_page_and_allocate(address_to) as *mut Page;
 
         let ptr_from = unsafe {
             let deref = (*from_page).as_mut_ptr();
@@ -369,7 +312,7 @@ impl Memory {
                 address_from + read_size,
                 address_from + read_size,
                 remaining,
-            )
+            );
         }
     }
 }
@@ -383,7 +326,7 @@ mod tests {
     pub fn test_write_data_section() {
         let mut mem = Memory::new();
         mem.make_ready();
-        mem.set_section(MemorySegment::Data, &[5; 42]);
+        mem.set_section(&MemorySegment::Data, &[5; 42]);
         let (read, fault, remaining, _) = mem.read(0x0001_0000, 42);
         assert!(!fault);
         assert_eq!(remaining, 0);
@@ -394,7 +337,7 @@ mod tests {
     pub fn test_write_code_section() {
         let mut mem = Memory::new();
         mem.make_ready();
-        mem.set_section(MemorySegment::Code, &[1; 42]);
+        mem.set_section(&MemorySegment::Code, &[1; 42]);
         let (read, fault, remaining, _) = mem.read(mem.code_start, 42);
         assert!(!fault);
         assert_eq!(remaining, 0);

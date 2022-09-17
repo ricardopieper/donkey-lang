@@ -1,36 +1,14 @@
 use core::panic;
 
 use super::{
-    asm::asm_instructions::AssemblyInstruction,
     vm::instructions::{
         get_all_instruction_layouts, BitLayout, Instruction, InstructionTable, PartType,
     },
 };
 
-pub fn truncate_to_bits(num: u32, bits: u32) -> u32 {
-    (num << (32 - bits)) >> (32 - bits)
-}
 
 pub fn delete_msb_bits(num: u32, bits: u32) -> u32 {
     (num << bits) >> bits
-}
-
-pub fn encode_stackoffset(offset: u32) -> u32 {
-    let bit_pattern: u32 = 0b01101 << 27;
-    let bytes: u32 = truncate_to_bits(offset, 27);
-
-    bit_pattern + bytes
-}
-
-pub fn encode_instruction(ins: &AssemblyInstruction) -> u32 {
-    match ins {
-        AssemblyInstruction::StackOffset { bytes } => encode_stackoffset(*bytes),
-        _ => 0,
-    }
-}
-
-pub fn encode_asm(code: &[AssemblyInstruction]) -> Vec<u32> {
-    code.iter().map(encode_instruction).collect()
 }
 
 pub struct InstructionEncoder<'a> {
@@ -95,6 +73,8 @@ pub struct InstructionDecoder<'a> {
 }
 
 impl<'a> InstructionDecoder<'a> {
+
+    #[allow(clippy::too_many_lines)]
     pub fn decode(&self) -> Instruction {
         let pseudoop = self.layout.instruction_pseudoop;
 
@@ -265,6 +245,7 @@ impl LayoutHelper {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn encode_instruction(&self, instruction: &Instruction) -> u32 {
         match instruction {
             Instruction::Noop => 0,

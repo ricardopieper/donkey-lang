@@ -64,7 +64,7 @@ pub fn expr_str(expr: &HIRExpr) -> String {
         HIRExpr::MemberAccess(obj, elem, ..) => {
             format!("{}.{}", trivial_expr_str(obj), elem)
         }
-        e => format!("not added to expr_str: {:?}", e),
+        HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".to_string(),
     }
 }
 
@@ -92,6 +92,7 @@ pub fn hir_type_str(typ: &HIRTypeDef, type_db: &TypeDatabase) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
     match node {
         HIR::Assign {
@@ -199,6 +200,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub fn print_hir(mir: &[HIR], type_db: &TypeDatabase) -> String {
     let mut buffer = String::new();
     for node in mir {

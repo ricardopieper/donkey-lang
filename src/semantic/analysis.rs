@@ -23,7 +23,7 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
 
     let mut globals = name_registry::build_name_registry(&type_db, &hir);
 
-    hir = first_assignments::transform_first_assignment_into_declaration(hir);
+    hir = first_assignments::transform_first_assignment_into_declaration(&hir);
     let after_make_declarations_mir = hir.clone();
     undeclared_vars::detect_undeclared_vars_and_redeclarations(&globals, &hir);
 
@@ -31,7 +31,7 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
 
     let mut errors = TypeErrors::new();
 
-    hir = type_inference::infer_types(&mut globals, &type_db, hir, &mut errors);
+    hir = type_inference::infer_types(&mut globals, &type_db, &hir, &mut errors);
 
     AnalysisResult {
         initial_mir,
@@ -60,7 +60,7 @@ mod tests {
             .ok()
             .unwrap();
         let mut parser = Parser::new(tokenized);
-        let ast = AST::Root(parser.parse_ast().ok().unwrap());
+        let ast = AST::Root(parser.parse_ast());
         do_analysis(&ast)
     }
 

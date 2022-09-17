@@ -93,7 +93,7 @@ pub fn immediate_integer_arith<T>(
     memory: &mut Memory,
     reg: &mut ControlRegisterValues,
     operation: ArithmeticOperation,
-    rhs: &[u8; 2],
+    rhs: [u8; 2],
 ) where
     T: NativeNumericType<T>
         + std::ops::Add<T, Output = T>
@@ -105,7 +105,7 @@ pub fn immediate_integer_arith<T>(
 {
     reg.sp -= std::mem::size_of::<T>() as u32;
     let lhs = memory.native_read::<T>(reg.sp);
-    let rhs = T::from_bytes(rhs);
+    let rhs = T::from_bytes(&rhs);
     let bytes = match operation {
         ArithmeticOperation::Sum => (lhs + rhs).to_bytes(),
         ArithmeticOperation::Subtract => (lhs - rhs).to_bytes(),
@@ -151,14 +151,14 @@ pub fn immediate_integer_compare<T>(
     memory: &mut Memory,
     reg: &mut ControlRegisterValues,
     operation: CompareOperation,
-    operand: &[u8; 2],
+    operand: [u8; 2],
 ) where
     T: NativeNumericType<T> + std::cmp::PartialEq<T> + std::cmp::PartialOrd<T> + Display,
     [(); std::mem::size_of::<T>()]:,
 {
     reg.sp -= std::mem::size_of::<T>() as u32;
     let lhs = memory.native_read::<T>(reg.sp);
-    let rhs = T::from_bytes(operand);
+    let rhs = T::from_bytes(&operand);
     println!("Freyr: Comparing {lhs} and {rhs}");
     let result = match operation {
         CompareOperation::Equals => lhs == rhs,
@@ -172,8 +172,10 @@ pub fn immediate_integer_compare<T>(
     reg.sp += std::mem::size_of::<u8>() as u32;
 }
 
+const IP_OFFSET: usize = 1_usize;
+
+#[allow(clippy::match_same_arms)]
 pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegisterValues) -> bool {
-    const IP_OFFSET: usize = 1_usize;
     match inst {
         Instruction::Noop => {
             reg.ip += IP_OFFSET;
@@ -187,97 +189,21 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             lshift,
             immediate,
         } => {
-            let shift_size = (*lshift as u8) * 16;
-            let as_u16 = u16::from_bytes(immediate);
-
-            match bytes {
-                NumberOfBytes::Bytes1 => {
-                    let from_byte_imm = as_u16 as u8;
-                    let shifted = from_byte_imm << shift_size;
-                    let as_bytes = shifted.to_le_bytes();
-                    memory.write(reg.sp, &as_bytes);
-                }
-                NumberOfBytes::Bytes2 => {
-                    let from_byte_imm = as_u16;
-                    let shifted = from_byte_imm << shift_size;
-                    let as_bytes = shifted.to_le_bytes();
-                    memory.write(reg.sp, &as_bytes);
-                }
-                NumberOfBytes::Bytes4 => {
-                    let from_byte_imm = u32::from(as_u16);
-                    let shifted = from_byte_imm << shift_size;
-                    let as_bytes = shifted.to_le_bytes();
-                    memory.write(reg.sp, &as_bytes);
-                }
-                NumberOfBytes::Bytes8 => {
-                    let from_byte_imm = u64::from(as_u16);
-                    let shifted = from_byte_imm << shift_size;
-                    let as_bytes = shifted.to_le_bytes();
-                    memory.write(reg.sp, &as_bytes);
-                }
-            };
-
-            reg.sp += u32::from(bytes.get_bytes());
-            reg.ip += IP_OFFSET;
+            execute_push_imm(*lshift, *immediate, *bytes, memory, reg);
         }
         Instruction::LoadAddress {
             bytes,
             mode,
             operand,
         } => {
-            let num_bytes = u32::from(bytes.get_bytes());
-            match mode {
-                LoadStoreAddressingMode::Stack => {
-                    //load 32 bits from stack
-                    reg.sp -= 4;
-                    let stack_addr = reg.sp;
-                    let address = memory.native_read::<u32>(stack_addr);
-                    memory.copy(stack_addr, address, num_bytes);
-                }
-                LoadStoreAddressingMode::RelativeForward => {
-                    let address = reg.bp + operand;
-                    memory.copy(address, reg.sp, num_bytes);
-                }
-                LoadStoreAddressingMode::RelativeBackward => {
-                    let address = reg.bp - operand;
-                    memory.copy(address, reg.sp, num_bytes);
-                }
-                LoadStoreAddressingMode::Absolute => {
-                    memory.copy(*operand, reg.sp, num_bytes);
-                }
-            }
-            reg.sp += num_bytes as u32;
-            reg.ip += IP_OFFSET;
+            execute_loadaddr(*bytes, *mode, reg, memory, *operand);
         }
         Instruction::StoreAddress {
             bytes,
             mode,
             operand,
         } => {
-            let num_bytes = u32::from(bytes.get_bytes());
-            reg.sp -= num_bytes;
-            let addr_to_read = reg.sp;
-            match mode {
-                LoadStoreAddressingMode::Stack => {
-                    //load 32 bits from stack
-                    reg.sp -= 4;
-                    let stack_addr = reg.sp;
-                    let address = memory.native_read::<u32>(stack_addr);
-                    memory.copy(addr_to_read, address, num_bytes);
-                }
-                LoadStoreAddressingMode::RelativeForward => {
-                    let address = reg.bp + operand;
-                    memory.copy(addr_to_read, address, num_bytes);
-                }
-                LoadStoreAddressingMode::RelativeBackward => {
-                    let address = reg.bp - operand;
-                    memory.copy(addr_to_read, address, num_bytes);
-                }
-                LoadStoreAddressingMode::Absolute => {
-                    memory.copy(addr_to_read, *operand, num_bytes);
-                }
-            }
-            reg.ip += IP_OFFSET;
+            execute_storeaddr(*bytes, reg, *mode, memory, *operand);
         }
         Instruction::BitShift {
             bytes,
@@ -286,33 +212,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             mode: OperationMode::PureStack,
             ..
         } => {
-            match (bytes, sign) {
-                (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-                    stacked_bitshift::<u8>(memory, reg, *direction)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-                    stacked_bitshift::<u16>(memory, reg, *direction)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-                    stacked_bitshift::<u32>(memory, reg, *direction)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-                    stacked_bitshift::<u64>(memory, reg, *direction)
-                }
-                (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-                    stacked_bitshift::<i8>(memory, reg, *direction)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-                    stacked_bitshift::<i16>(memory, reg, *direction)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                    stacked_bitshift::<i32>(memory, reg, *direction)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-                    stacked_bitshift::<i64>(memory, reg, *direction)
-                }
-            }
-            reg.ip += IP_OFFSET;
+            execute_bitshift_stack(*bytes, *sign, memory, reg, *direction);
         }
         Instruction::BitShift {
             bytes,
@@ -321,35 +221,8 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             mode: OperationMode::StackAndImmediate,
             operand,
         } => {
-            match (bytes, sign) {
-                (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-                    immediate_bitshift::<u8>(memory, reg, *direction, *operand as u8)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-                    immediate_bitshift::<u16>(memory, reg, *direction, u16::from(*operand))
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-                    immediate_bitshift::<u32>(memory, reg, *direction, u32::from(*operand))
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-                    immediate_bitshift::<u64>(memory, reg, *direction, u64::from(*operand))
-                }
-                (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-                    immediate_bitshift::<i8>(memory, reg, *direction, *operand as i8)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-                    immediate_bitshift::<i16>(memory, reg, *direction, i16::from(*operand))
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                    immediate_bitshift::<i32>(memory, reg, *direction, i32::from(*operand))
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-                    immediate_bitshift::<i64>(memory, reg, *direction, i64::from(*operand))
-                }
-            }
-            reg.ip += IP_OFFSET;
+            execute_bitshift_imm(*bytes, *sign, memory, reg, *direction, *operand);
         }
-
         Instruction::Bitwise {
             bytes: _,
             operation: _,
@@ -366,33 +239,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             mode: OperationMode::PureStack,
             ..
         } => {
-            match (bytes, sign) {
-                (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-                    stacked_binop_arith::<u8>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-                    stacked_binop_arith::<u16>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-                    stacked_binop_arith::<u32>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-                    stacked_binop_arith::<u64>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-                    stacked_binop_arith::<i8>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-                    stacked_binop_arith::<i16>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                    stacked_binop_arith::<i32>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-                    stacked_binop_arith::<i64>(memory, reg, *operation)
-                }
-            }
-            reg.ip += IP_OFFSET;
+            execute_integer_arith_stack(*bytes, *sign, memory, reg, *operation);
         }
         Instruction::IntegerArithmetic {
             bytes,
@@ -401,33 +248,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             mode: OperationMode::StackAndImmediate,
             operand,
         } => {
-            match (bytes, sign) {
-                (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-                    immediate_integer_arith::<u8>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-                    immediate_integer_arith::<u16>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-                    immediate_integer_arith::<u32>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-                    immediate_integer_arith::<u64>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-                    immediate_integer_arith::<i8>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-                    immediate_integer_arith::<i16>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                    immediate_integer_arith::<i32>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-                    immediate_integer_arith::<i64>(memory, reg, *operation, operand)
-                }
-            }
-            reg.ip += IP_OFFSET;
+            execute_integer_arith_imm(*bytes, *sign, memory, reg, *operation, *operand);
         }
         Instruction::IntegerCompare {
             bytes,
@@ -436,33 +257,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             mode: OperationMode::PureStack,
             ..
         } => {
-            match (bytes, sign) {
-                (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-                    stacked_binop_compare::<u8>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-                    stacked_binop_compare::<u16>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-                    stacked_binop_compare::<u32>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-                    stacked_binop_compare::<u64>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-                    stacked_binop_compare::<i8>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-                    stacked_binop_compare::<i16>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                    stacked_binop_compare::<i32>(memory, reg, *operation)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-                    stacked_binop_compare::<i64>(memory, reg, *operation)
-                }
-            }
-            reg.ip += IP_OFFSET;
+            execute_integer_compare_stack(*bytes, *sign, memory, reg, *operation);
         }
         Instruction::IntegerCompare {
             bytes,
@@ -471,33 +266,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             mode: OperationMode::StackAndImmediate,
             operand,
         } => {
-            match (bytes, sign) {
-                (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-                    immediate_integer_compare::<u8>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-                    immediate_integer_compare::<u16>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-                    immediate_integer_compare::<u32>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-                    immediate_integer_compare::<u64>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-                    immediate_integer_compare::<i8>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-                    immediate_integer_compare::<i16>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                    immediate_integer_compare::<i32>(memory, reg, *operation, operand)
-                }
-                (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-                    immediate_integer_compare::<i64>(memory, reg, *operation, operand)
-                }
-            }
-            reg.ip += IP_OFFSET;
+            execute_integer_compare_imm(*bytes, *sign, memory, reg, *operation, *operand);
         }
         Instruction::FloatArithmetic { bytes, operation } => {
             match bytes {
@@ -553,24 +322,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             reg.sp -= u32::from(bytes.get_bytes());
             reg.ip += IP_OFFSET;
         }
-        Instruction::Call { source, offset } => match source {
-            super::instructions::AddressJumpAddressSource::FromOperand => {
-                let return_ip = (reg.ip + IP_OFFSET) as u32;
-                reg.ip = *offset as usize;
-                memory.write(reg.sp, &return_ip.to_le_bytes());
-                reg.sp += std::mem::size_of::<u32>() as u32;
-                reg.bp = reg.sp;
-            }
-            super::instructions::AddressJumpAddressSource::PopFromStack => {
-                reg.sp -= std::mem::size_of::<u32>() as u32;
-                let popped = memory.native_read::<u32>(reg.sp);
-                let return_ip = (reg.ip + IP_OFFSET) as u32;
-                reg.ip = popped as usize;
-                memory.write(reg.sp, &return_ip.to_le_bytes());
-                reg.sp += std::mem::size_of::<u32>() as u32;
-                reg.bp = reg.sp;
-            }
-        },
+        Instruction::Call { source, offset } => execute_call(*source, reg, *offset, memory),
         Instruction::Return => {
             reg.sp -= std::mem::size_of::<u32>() as u32;
             let popped = memory.native_read::<u32>(reg.sp);
@@ -608,10 +360,10 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
         } => {
             reg.sp -= std::mem::size_of::<u8>() as u32;
             let popped = memory.read_single(reg.sp);
-            if popped != 0 {
-                reg.ip = *offset as usize;
-            } else {
+            if popped == 0 {
                 reg.ip += 1;
+            } else {
+                reg.ip = *offset as usize;
             }
         }
         Instruction::JumpIfNotZero {
@@ -622,10 +374,10 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             let popped = memory.read_single(reg.sp);
             reg.sp -= std::mem::size_of::<u32>() as u32;
             let offset = memory.native_read::<u32>(reg.sp);
-            if popped != 0 {
-                reg.ip = offset as usize;
-            } else {
+            if popped == 0 {
                 reg.ip += 1;
+            } else {
+                reg.ip = offset as usize;
             }
         }
         Instruction::JumpUnconditional {
@@ -650,6 +402,338 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
     false
 }
 
+fn execute_call(source: AddressJumpAddressSource, reg: &mut ControlRegisterValues, offset: u32, memory: &mut Memory) {
+    match source {
+        super::instructions::AddressJumpAddressSource::FromOperand => {
+            let return_ip = (reg.ip + IP_OFFSET) as u32;
+            reg.ip = offset as usize;
+            memory.write(reg.sp, &return_ip.to_le_bytes());
+            reg.sp += std::mem::size_of::<u32>() as u32;
+            reg.bp = reg.sp;
+        }
+        super::instructions::AddressJumpAddressSource::PopFromStack => {
+            reg.sp -= std::mem::size_of::<u32>() as u32;
+            let popped = memory.native_read::<u32>(reg.sp);
+            let return_ip = (reg.ip + IP_OFFSET) as u32;
+            reg.ip = popped as usize;
+            memory.write(reg.sp, &return_ip.to_le_bytes());
+            reg.sp += std::mem::size_of::<u32>() as u32;
+            reg.bp = reg.sp;
+        }
+    }
+}
+
+fn execute_integer_compare_imm(bytes: NumberOfBytes, sign: SignFlag, memory: &mut Memory, reg: &mut ControlRegisterValues, operation: CompareOperation, operand: [u8; 2]) {
+    match (bytes, sign) {
+        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+            immediate_integer_compare::<u8>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+            immediate_integer_compare::<u16>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+            immediate_integer_compare::<u32>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+            immediate_integer_compare::<u64>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+            immediate_integer_compare::<i8>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+            immediate_integer_compare::<i16>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+            immediate_integer_compare::<i32>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+            immediate_integer_compare::<i64>(memory, reg, operation, operand);
+        }
+    }
+    reg.ip += IP_OFFSET;
+}
+
+fn execute_integer_compare_stack(bytes: NumberOfBytes, sign: SignFlag, memory: &mut Memory, reg: &mut ControlRegisterValues, operation: CompareOperation) {
+    match (bytes, sign) {
+        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+            stacked_binop_compare::<u8>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+            stacked_binop_compare::<u16>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+            stacked_binop_compare::<u32>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+            stacked_binop_compare::<u64>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+            stacked_binop_compare::<i8>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+            stacked_binop_compare::<i16>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+            stacked_binop_compare::<i32>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+            stacked_binop_compare::<i64>(memory, reg, operation);
+        }
+    }
+    reg.ip += IP_OFFSET;
+}
+
+fn execute_integer_arith_imm(
+    bytes: NumberOfBytes,
+    sign: SignFlag,
+    memory: &mut Memory,
+    reg: &mut ControlRegisterValues,
+    operation: ArithmeticOperation,
+    operand: [u8; 2],
+) {
+    match (bytes, sign) {
+        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+            immediate_integer_arith::<u8>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+            immediate_integer_arith::<u16>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+            immediate_integer_arith::<u32>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+            immediate_integer_arith::<u64>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+            immediate_integer_arith::<i8>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+            immediate_integer_arith::<i16>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+            immediate_integer_arith::<i32>(memory, reg, operation, operand);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+            immediate_integer_arith::<i64>(memory, reg, operation, operand);
+        }
+    }
+    reg.ip += IP_OFFSET;
+}
+
+fn execute_integer_arith_stack(
+    bytes: NumberOfBytes,
+    sign: SignFlag,
+    memory: &mut Memory,
+    reg: &mut ControlRegisterValues,
+    operation: ArithmeticOperation,
+) {
+    match (bytes, sign) {
+        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+            stacked_binop_arith::<u8>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+            stacked_binop_arith::<u16>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+            stacked_binop_arith::<u32>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+            stacked_binop_arith::<u64>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+            stacked_binop_arith::<i8>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+            stacked_binop_arith::<i16>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+            stacked_binop_arith::<i32>(memory, reg, operation);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+            stacked_binop_arith::<i64>(memory, reg, operation);
+        }
+    }
+    reg.ip += IP_OFFSET;
+}
+
+fn execute_bitshift_imm(
+    bytes: NumberOfBytes,
+    sign: SignFlag,
+    memory: &mut Memory,
+    reg: &mut ControlRegisterValues,
+    direction: ShiftDirection,
+    operand: u8,
+) {
+    match (bytes, sign) {
+        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+            immediate_bitshift::<u8>(memory, reg, direction, operand as u8);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+            immediate_bitshift::<u16>(memory, reg, direction, u16::from(operand));
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+            immediate_bitshift::<u32>(memory, reg, direction, u32::from(operand));
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+            immediate_bitshift::<u64>(memory, reg, direction, u64::from(operand));
+        }
+        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+            immediate_bitshift::<i8>(memory, reg, direction, operand as i8);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+            immediate_bitshift::<i16>(memory, reg, direction, i16::from(operand));
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+            immediate_bitshift::<i32>(memory, reg, direction, i32::from(operand));
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+            immediate_bitshift::<i64>(memory, reg, direction, i64::from(operand));
+        }
+    }
+    reg.ip += IP_OFFSET;
+}
+
+fn execute_bitshift_stack(
+    bytes: NumberOfBytes,
+    sign: SignFlag,
+    memory: &mut Memory,
+    reg: &mut ControlRegisterValues,
+    direction: ShiftDirection,
+) {
+    match (bytes, sign) {
+        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+            stacked_bitshift::<u8>(memory, reg, direction);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+            stacked_bitshift::<u16>(memory, reg, direction);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+            stacked_bitshift::<u32>(memory, reg, direction);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+            stacked_bitshift::<u64>(memory, reg, direction);
+        }
+        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+            stacked_bitshift::<i8>(memory, reg, direction);
+        }
+        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+            stacked_bitshift::<i16>(memory, reg, direction);
+        }
+        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+            stacked_bitshift::<i32>(memory, reg, direction);
+        }
+        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+            stacked_bitshift::<i64>(memory, reg, direction);
+        }
+    }
+    reg.ip += IP_OFFSET;
+}
+
+fn execute_storeaddr(
+    bytes: NumberOfBytes,
+    reg: &mut ControlRegisterValues,
+    mode: LoadStoreAddressingMode,
+    memory: &mut Memory,
+    operand: u32,
+) {
+    let num_bytes = u32::from(bytes.get_bytes());
+    reg.sp -= num_bytes;
+    let addr_to_read = reg.sp;
+    match mode {
+        LoadStoreAddressingMode::Stack => {
+            //load 32 bits from stack
+            reg.sp -= 4;
+            let stack_addr = reg.sp;
+            let address = memory.native_read::<u32>(stack_addr);
+            memory.copy(addr_to_read, address, num_bytes);
+        }
+        LoadStoreAddressingMode::RelativeForward => {
+            let address = reg.bp + operand;
+            memory.copy(addr_to_read, address, num_bytes);
+        }
+        LoadStoreAddressingMode::RelativeBackward => {
+            let address = reg.bp - operand;
+            memory.copy(addr_to_read, address, num_bytes);
+        }
+        LoadStoreAddressingMode::Absolute => {
+            memory.copy(addr_to_read, operand, num_bytes);
+        }
+    }
+    reg.ip += IP_OFFSET;
+}
+
+fn execute_loadaddr(
+    bytes: NumberOfBytes,
+    mode: LoadStoreAddressingMode,
+    reg: &mut ControlRegisterValues,
+    memory: &mut Memory,
+    operand: u32,
+) {
+    let num_bytes = u32::from(bytes.get_bytes());
+    match mode {
+        LoadStoreAddressingMode::Stack => {
+            //load 32 bits from stack
+            reg.sp -= 4;
+            let stack_addr = reg.sp;
+            let address = memory.native_read::<u32>(stack_addr);
+            memory.copy(stack_addr, address, num_bytes);
+        }
+        LoadStoreAddressingMode::RelativeForward => {
+            let address = reg.bp + operand;
+            memory.copy(address, reg.sp, num_bytes);
+        }
+        LoadStoreAddressingMode::RelativeBackward => {
+            let address = reg.bp - operand;
+            memory.copy(address, reg.sp, num_bytes);
+        }
+        LoadStoreAddressingMode::Absolute => {
+            memory.copy(operand, reg.sp, num_bytes);
+        }
+    }
+    reg.sp += num_bytes as u32;
+    reg.ip += IP_OFFSET;
+}
+
+fn execute_push_imm(
+    lshift: super::instructions::LeftShift,
+    immediate: [u8; 2],
+    bytes: NumberOfBytes,
+    memory: &mut Memory,
+    reg: &mut ControlRegisterValues,
+) {
+    let shift_size = (lshift as u8) * 16;
+    let as_u16 = u16::from_le_bytes(immediate);
+    match bytes {
+        NumberOfBytes::Bytes1 => {
+            let from_byte_imm = as_u16 as u8;
+            let shifted = from_byte_imm << shift_size;
+            let as_bytes = shifted.to_le_bytes();
+            memory.write(reg.sp, &as_bytes);
+        }
+        NumberOfBytes::Bytes2 => {
+            let from_byte_imm = as_u16;
+            let shifted = from_byte_imm << shift_size;
+            let as_bytes = shifted.to_le_bytes();
+            memory.write(reg.sp, &as_bytes);
+        }
+        NumberOfBytes::Bytes4 => {
+            let from_byte_imm = u32::from(as_u16);
+            let shifted = from_byte_imm << shift_size;
+            let as_bytes = shifted.to_le_bytes();
+            memory.write(reg.sp, &as_bytes);
+        }
+        NumberOfBytes::Bytes8 => {
+            let from_byte_imm = u64::from(as_u16);
+            let shifted = from_byte_imm << shift_size;
+            let as_bytes = shifted.to_le_bytes();
+            memory.write(reg.sp, &as_bytes);
+        }
+    };
+    reg.sp += u32::from(bytes.get_bytes());
+    reg.ip += IP_OFFSET;
+}
+
+#[allow(dead_code)] //sometimes useful in debugging
 pub fn print_stack(memory: &mut Memory) {
     let (read, ..) = memory.read(memory.stack_start, 4 * 50);
     let (by_u32, _) = read.as_chunks::<4>();

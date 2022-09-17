@@ -9,11 +9,8 @@ fn check_trivial_expr(
     function_name: &str,
     expr: &TypedTrivialHIRExpr,
 ) {
-    match &expr.0 {
-        TrivialHIRExpr::Variable(v) => {
-            assert!(declarations_found.get(v).is_some(), "Variable {v} not found, function: {function_name}");
-        }
-        _ => {}
+    if let TrivialHIRExpr::Variable(v) = &expr.0 {
+        assert!(declarations_found.get(v).is_some(), "Variable {v} not found, function: {function_name}");
     }
 }
 
@@ -44,7 +41,7 @@ fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &
             }
         }
         HIRExpr::Cast(expr, _typedef, ..) => {
-            check_trivial_expr(declarations_found, function_name, expr)
+            check_trivial_expr(declarations_found, function_name, expr);
         }
     }
 }
@@ -128,33 +125,27 @@ pub fn detect_undeclared_vars_and_redeclarations(globals: &NameRegistry, mir: &[
 
     //first collect all globals
     for node in mir.iter() {
-        match node {
-            HIR::DeclareFunction { function_name, .. } => {
-                declarations_found.insert(function_name.clone());
-            }
-            _ => {}
+        if let HIR::DeclareFunction { function_name, .. } = node {
+            declarations_found.insert(function_name.clone());
         };
     }
 
     //then check functions
     for node in mir.iter() {
-        match node {
-            HIR::DeclareFunction {
+        if let HIR::DeclareFunction {
+                        function_name,
+                        parameters,
+                        body,
+                        return_type,
+                        ..
+                    } = node {
+            detect_declaration_errors_in_function(
+                declarations_found.clone(),
                 function_name,
                 parameters,
                 body,
                 return_type,
-                ..
-            } => {
-                detect_declaration_errors_in_function(
-                    declarations_found.clone(),
-                    function_name,
-                    parameters,
-                    body,
-                    return_type,
-                );
-            }
-            _ => {}
+            );
         };
     }
 }

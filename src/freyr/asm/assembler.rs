@@ -59,6 +59,7 @@ fn split_instruction_mnemonic(mnemonic: &str) -> Vec<String> {
     all_parts
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
     let splitted = split_in_whitespace_tab_etc_ignore_comment(asm_line);
     if splitted.len() == 1 && splitted[0].is_empty() {
@@ -346,10 +347,10 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
                 current_instruction_index += 1;
                 resolved_instructions.push(AssemblyInstruction::Call {
                     offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
-                })
+                });
             }
             AssemblyInstruction::UnresolvedCall { label: None, .. } => {
-                resolved_instructions.push(AssemblyInstruction::CallFromStack)
+                resolved_instructions.push(AssemblyInstruction::CallFromStack);
             }
             AssemblyInstruction::UnresolvedJumpIfZero {
                 label: Some(label), ..
@@ -358,7 +359,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
                 current_instruction_index += 1;
                 resolved_instructions.push(AssemblyInstruction::JumpIfZero {
                     offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
-                })
+                });
             }
             AssemblyInstruction::UnresolvedJumpIfNotZero {
                 label: Some(label), ..
@@ -367,20 +368,20 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
                 current_instruction_index += 1;
                 resolved_instructions.push(AssemblyInstruction::JumpIfNotZero {
                     offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
-                })
+                });
             }
             AssemblyInstruction::UnresolvedJumpIfZero { label: None, .. } => {
-                resolved_instructions.push(AssemblyInstruction::JumpIfZeroFromStack)
+                resolved_instructions.push(AssemblyInstruction::JumpIfZeroFromStack);
             }
             AssemblyInstruction::UnresolvedJumpIfNotZero { label: None, .. } => {
-                resolved_instructions.push(AssemblyInstruction::JumpIfNotZeroFromStack)
+                resolved_instructions.push(AssemblyInstruction::JumpIfNotZeroFromStack);
             }
             AssemblyInstruction::UnresolvedJump { label: Some(label) } => {
                 let offset = label_offsets.get(label);
                 current_instruction_index += 1;
                 resolved_instructions.push(AssemblyInstruction::Jump {
                     offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
-                })
+                });
             }
             AssemblyInstruction::UnresolvedJump { label: None } => {
                 resolved_instructions.push(AssemblyInstruction::JumpFromStack);
@@ -392,90 +393,91 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
     resolved_instructions
 }
 
+fn load_store(ls: AsmLoadStoreMode) -> (LoadStoreAddressingMode, u32) {
+    match ls {
+        AsmLoadStoreMode::StackPop => (LoadStoreAddressingMode::Stack, 0),
+        AsmLoadStoreMode::Relative { offset } => {
+            if offset > 0 {
+                (LoadStoreAddressingMode::RelativeForward, offset.unsigned_abs())
+            } else {
+                (
+                    LoadStoreAddressingMode::RelativeBackward,
+                    offset.unsigned_abs(),
+                )
+            }
+        }
+        AsmLoadStoreMode::Immediate { absolute_address } => {
+            (LoadStoreAddressingMode::Absolute, absolute_address)
+        }
+    }
+}
+
+fn num_bytes(bytes: u8) -> NumberOfBytes {
+    match bytes {
+        1 => NumberOfBytes::Bytes1,
+        2 => NumberOfBytes::Bytes2,
+        4 => NumberOfBytes::Bytes4,
+        8 => NumberOfBytes::Bytes8,
+        _ => panic!("Unsupported number of bytes: {bytes}"),
+    }
+}
+
+fn lshift_size(shift: u8) -> LeftShift {
+    match shift {
+        0 => LeftShift::None,
+        16 => LeftShift::Shift16,
+        32 => LeftShift::Shift32,
+        48 => LeftShift::Shift48,
+        _ => panic!("Unsupported shift size: {shift}"),
+    }
+}
+
+fn arith_op(op: AsmArithmeticBinaryOp) -> ArithmeticOperation {
+    match op {
+        AsmArithmeticBinaryOp::Sum => ArithmeticOperation::Sum,
+        AsmArithmeticBinaryOp::Multiply => ArithmeticOperation::Multiply,
+        AsmArithmeticBinaryOp::Subtract => ArithmeticOperation::Subtract,
+        AsmArithmeticBinaryOp::Divide => ArithmeticOperation::Divide,
+        AsmArithmeticBinaryOp::Power => ArithmeticOperation::Power,
+    }
+}
+
+fn bitwise_op(op: AsmIntegerBitwiseBinaryOp) -> BitwiseOperation {
+    match op {
+        AsmIntegerBitwiseBinaryOp::And => BitwiseOperation::And,
+        AsmIntegerBitwiseBinaryOp::Or => BitwiseOperation::Or,
+        AsmIntegerBitwiseBinaryOp::Xor => BitwiseOperation::Xor,
+    }
+}
+
+fn compare_op(op: AsmIntegerCompareBinaryOp) -> CompareOperation {
+    match op {
+        AsmIntegerCompareBinaryOp::Equals => CompareOperation::Equals,
+        AsmIntegerCompareBinaryOp::NotEquals => CompareOperation::NotEquals,
+        AsmIntegerCompareBinaryOp::LessThan => CompareOperation::LessThan,
+        AsmIntegerCompareBinaryOp::LessThanOrEquals => CompareOperation::LessThanOrEquals,
+        AsmIntegerCompareBinaryOp::GreaterThan => CompareOperation::GreaterThan,
+        AsmIntegerCompareBinaryOp::GreaterThanOrEquals => CompareOperation::GreaterThanOrEquals,
+    }
+}
+
+fn sign_flag(sign: AsmSignFlag) -> SignFlag {
+    match sign {
+        AsmSignFlag::Signed => SignFlag::Signed,
+        AsmSignFlag::Unsigned => SignFlag::Unsigned,
+    }
+}
+
+fn control_register(sign: AsmControlRegister) -> ControlRegister {
+    match sign {
+        AsmControlRegister::Base => ControlRegister::Base,
+        AsmControlRegister::Stack => ControlRegister::Stack,
+        AsmControlRegister::Instruction => ControlRegister::Instruction,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instruction> {
-    fn load_store(ls: AsmLoadStoreMode) -> (LoadStoreAddressingMode, u32) {
-        match ls {
-            AsmLoadStoreMode::StackPop => (LoadStoreAddressingMode::Stack, 0),
-            AsmLoadStoreMode::Relative { offset } => {
-                if offset > 0 {
-                    (LoadStoreAddressingMode::RelativeForward, offset as u32)
-                } else {
-                    (
-                        LoadStoreAddressingMode::RelativeBackward,
-                        offset.unsigned_abs(),
-                    )
-                }
-            }
-            AsmLoadStoreMode::Immediate { absolute_address } => {
-                (LoadStoreAddressingMode::Absolute, absolute_address)
-            }
-        }
-    }
-
-    fn num_bytes(bytes: &u8) -> NumberOfBytes {
-        match bytes {
-            1 => NumberOfBytes::Bytes1,
-            2 => NumberOfBytes::Bytes2,
-            4 => NumberOfBytes::Bytes4,
-            8 => NumberOfBytes::Bytes8,
-            _ => panic!("Unsupported number of bytes: {bytes}"),
-        }
-    }
-
-    fn lshift_size(shift: &u8) -> LeftShift {
-        match shift {
-            0 => LeftShift::None,
-            16 => LeftShift::Shift16,
-            32 => LeftShift::Shift32,
-            48 => LeftShift::Shift48,
-            _ => panic!("Unsupported shift size: {shift}"),
-        }
-    }
-
-    fn arith_op(op: &AsmArithmeticBinaryOp) -> ArithmeticOperation {
-        match op {
-            AsmArithmeticBinaryOp::Sum => ArithmeticOperation::Sum,
-            AsmArithmeticBinaryOp::Multiply => ArithmeticOperation::Multiply,
-            AsmArithmeticBinaryOp::Subtract => ArithmeticOperation::Subtract,
-            AsmArithmeticBinaryOp::Divide => ArithmeticOperation::Divide,
-            AsmArithmeticBinaryOp::Power => ArithmeticOperation::Power,
-        }
-    }
-
-    fn bitwise_op(op: &AsmIntegerBitwiseBinaryOp) -> BitwiseOperation {
-        match op {
-            AsmIntegerBitwiseBinaryOp::And => BitwiseOperation::And,
-            AsmIntegerBitwiseBinaryOp::Or => BitwiseOperation::Or,
-            AsmIntegerBitwiseBinaryOp::Xor => BitwiseOperation::Xor,
-        }
-    }
-
-    fn compare_op(op: &AsmIntegerCompareBinaryOp) -> CompareOperation {
-        match op {
-            AsmIntegerCompareBinaryOp::Equals => CompareOperation::Equals,
-            AsmIntegerCompareBinaryOp::NotEquals => CompareOperation::NotEquals,
-            AsmIntegerCompareBinaryOp::LessThan => CompareOperation::LessThan,
-            AsmIntegerCompareBinaryOp::LessThanOrEquals => CompareOperation::LessThanOrEquals,
-            AsmIntegerCompareBinaryOp::GreaterThan => CompareOperation::GreaterThan,
-            AsmIntegerCompareBinaryOp::GreaterThanOrEquals => CompareOperation::GreaterThanOrEquals,
-        }
-    }
-
-    fn sign_flag(sign: &AsmSignFlag) -> SignFlag {
-        match sign {
-            AsmSignFlag::Signed => SignFlag::Signed,
-            AsmSignFlag::Unsigned => SignFlag::Unsigned,
-        }
-    }
-
-    fn control_register(sign: &AsmControlRegister) -> ControlRegister {
-        match sign {
-            AsmControlRegister::Base => ControlRegister::Base,
-            AsmControlRegister::Stack => ControlRegister::Stack,
-            AsmControlRegister::Instruction => ControlRegister::Instruction,
-        }
-    }
-
     instructions
         .iter()
         .map(|x| match x {
@@ -485,7 +487,7 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
             AssemblyInstruction::LoadAddress { bytes, mode } => {
                 let (addressing_mode, operand) = load_store(*mode);
                 Instruction::LoadAddress {
-                    bytes: num_bytes(bytes),
+                    bytes: num_bytes(*bytes),
                     mode: addressing_mode,
                     operand,
                 }
@@ -493,7 +495,7 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
             AssemblyInstruction::StoreAddress { bytes, mode } => {
                 let (addressing_mode, operand) = load_store(*mode);
                 Instruction::StoreAddress {
-                    bytes: num_bytes(bytes),
+                    bytes: num_bytes(*bytes),
                     mode: addressing_mode,
                     operand,
                 }
@@ -503,8 +505,8 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 shift_size,
                 immediate,
             } => Instruction::PushImmediate {
-                bytes: num_bytes(bytes),
-                lshift: lshift_size(shift_size),
+                bytes: num_bytes(*bytes),
+                lshift: lshift_size(*shift_size),
                 immediate: *immediate,
             },
             AssemblyInstruction::IntegerArithmeticBinaryOperation {
@@ -518,9 +520,9 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                     None => (OperationMode::PureStack, [0, 0]),
                 };
                 Instruction::IntegerArithmetic {
-                    bytes: num_bytes(bytes),
-                    operation: arith_op(operation),
-                    sign: sign_flag(sign),
+                    bytes: num_bytes(*bytes),
+                    operation: arith_op(*operation),
+                    sign: sign_flag(*sign),
                     mode,
                     operand,
                 }
@@ -536,9 +538,9 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                     None => (OperationMode::PureStack, [0, 0]),
                 };
                 Instruction::Bitwise {
-                    bytes: num_bytes(bytes),
-                    operation: bitwise_op(operation),
-                    sign: sign_flag(sign),
+                    bytes: num_bytes(*bytes),
+                    operation: bitwise_op(*operation),
+                    sign: sign_flag(*sign),
                     mode,
                     operand,
                 }
@@ -554,22 +556,22 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                     None => (OperationMode::PureStack, [0, 0]),
                 };
                 Instruction::IntegerCompare {
-                    bytes: num_bytes(bytes),
-                    operation: compare_op(operation),
-                    sign: sign_flag(sign),
+                    bytes: num_bytes(*bytes),
+                    operation: compare_op(*operation),
+                    sign: sign_flag(*sign),
                     mode,
                     operand,
                 }
             }
 
             AssemblyInstruction::PopRegister { register } => Instruction::PopIntoRegister {
-                control_register: control_register(register),
+                control_register: control_register(*register),
             },
             AssemblyInstruction::PushRegister { register } => Instruction::PushFromRegister {
-                control_register: control_register(register),
+                control_register: control_register(*register),
             },
             AssemblyInstruction::PopBytes { bytes } => Instruction::Pop {
-                bytes: num_bytes(bytes),
+                bytes: num_bytes(*bytes),
             },
             AssemblyInstruction::UnresolvedCall { label: _ } => {
                 panic!("Unresolved call reached ASM compiler!")

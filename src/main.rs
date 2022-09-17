@@ -17,6 +17,7 @@ use crate::ast::parser;
 use crate::compiler::freyr_gen::generate_freyr;
 use crate::freyr::asm::assembler::as_freyr_instructions;
 use crate::freyr::asm::assembler::resolve;
+use crate::semantic::hir_printer::print_hir;
 use std::env;
 use std::fs;
 use std::fs::File;
@@ -28,7 +29,7 @@ use crate::freyr::encoder::LayoutHelper;
 use crate::freyr::vm::memory::Memory;
 use crate::freyr::vm::runner;
 
-#[macro_use]
+#[allow(unused_imports)] #[macro_use]
 extern crate time_test;
 
 use crate::semantic::mir::hir_to_mir;
@@ -37,6 +38,8 @@ use crate::semantic::type_checker::check_type;
 
 use crate::types::type_errors::TypeErrorPrinter;
 
+use freyr::asm::asm_instructions::AssemblyInstruction;
+use freyr::vm::instructions::Instruction;
 use tracy_client::frame_name;
 use tracy_client::Client;
 
@@ -63,7 +66,7 @@ fn main() {
 
         let now = Instant::now();
 
-        let loops = 1000;
+        let loops = 1000_u32;
 
         for _ in 0..loops {
             for addr in start..end {
@@ -75,9 +78,9 @@ fn main() {
         let end = Instant::now();
         let diff = end - now;
 
-        let num_bytes: u64 = loops * 8 * 1024 * 1024;
+        let num_bytes: u32 = loops * 8 * 1024 * 1024;
 
-        let tp = (num_bytes as f64 / (diff.as_secs_f64())) / f64::from(1024 * 1024);
+        let tp = (f64::from(num_bytes) / (diff.as_secs_f64())) / f64::from(1024 * 1024);
 
         println!("Throughput: {tp}MB/s");
         return;
@@ -96,17 +99,7 @@ fn main() {
             args[3].as_str()
         };
 
-        {
-            let mut file = File::create(out_file).unwrap();
-
-            let instruction_layout = LayoutHelper::new();
-
-            for ins in vm_instructions {
-                let encoded = instruction_layout.encode_instruction(&ins);
-                let bytes = encoded.to_le_bytes();
-                file.write_all(&bytes).unwrap();
-            }
-        }
+        write_instructions(out_file, vm_instructions);
 
         {
             let instruction_layout = LayoutHelper::new();
@@ -124,37 +117,57 @@ fn main() {
                 println!("{:?}", decoded);
             }
         }
-    } else {
-        let input = fs::read_to_string(args[1].clone())
-            .unwrap_or_else(|_| panic!("Could not read file {}", args[1]));
-        let tokens = lexer::tokenize(input.as_str());
-        let ast = parser::parse_ast(tokens.unwrap());
-
-        let root = parser::AST::Root(ast);
-        let result = crate::semantic::analysis::do_analysis(&root);
-
-        let mir = hir_to_mir(&result.final_mir, &result.type_db);
-        println!("{}", mir_printer::print_mir(&mir, &result.type_db));
-        let errors = check_type(&mir, &result.type_db, &result.globals);
-        if errors.count() > 0 {
-            let printer = TypeErrorPrinter::new(&errors, &result.type_db);
-            println!("{}", printer);
-        }
-        let generated_asm = generate_freyr(&result.type_db, &mir);
-
+    } 
+    
+    if args[1] == "compile" {
+        let generated_asm = compile(&args[2]);
         let resolved = resolve(&generated_asm);
-
         let as_instructions = as_freyr_instructions(&resolved);
 
+        let out_file = if args.len() <= 3 {
+            "out"
+        } else {
+            args[3].as_str()
+        };
+
+        write_instructions(out_file, as_instructions);
+    }
+    else {
+        let generated_asm = compile(&args[1]);
+        let resolved = resolve(&generated_asm);
+        let as_instructions = as_freyr_instructions(&resolved);
+       
         let (mut memory, mut registers) = runner::prepare_vm();
 
         runner::run(&as_instructions, &mut memory, &mut registers);
-
-        //crate::semantic::mir_printer::print_mir(&result.initial_mir, &result.type_db);
-        //crate::semantic::mir_printer::print_mir(&result.after_make_declarations_mir, &result.type_db);
-        println!(
-            "{}",
-            crate::semantic::hir_printer::print_hir(&result.final_mir, &result.type_db)
-        );
     }
+}
+
+fn write_instructions(out_file: &str, vm_instructions: Vec<Instruction>) {
+    let mut file = File::create(out_file).unwrap();
+    let instruction_layout = LayoutHelper::new();
+    for ins in vm_instructions {
+        let encoded = instruction_layout.encode_instruction(&ins);
+        let bytes = encoded.to_le_bytes();
+        file.write_all(&bytes).unwrap();
+    }
+}
+
+fn compile(file_name: &str) -> Vec<AssemblyInstruction> {
+    let input = fs::read_to_string(file_name)
+        .unwrap_or_else(|_| panic!("Could not read file {}", file_name));
+    let tokens = lexer::tokenize(input.as_str());
+    let ast = parser::parse_ast(tokens.unwrap());
+    let root = parser::AST::Root(ast);
+    let result = crate::semantic::analysis::do_analysis(&root);
+    print_hir(&result.final_mir, &result.type_db);
+    let mir = hir_to_mir(&result.final_mir, &result.type_db);
+    println!("{}", mir_printer::print_mir(&mir, &result.type_db));
+    let errors = check_type(&mir, &result.type_db, &result.globals);
+    if errors.count() > 0 {
+        let printer = TypeErrorPrinter::new(&errors, &result.type_db);
+        println!("{}", printer);
+    }
+    generate_freyr(&result.type_db, &mir)
+    
 }

@@ -2,8 +2,8 @@ use std::fmt::Display;
 use std::fmt::Write;
 
 use crate::ast::lexer::Operator;
-use crate::ast::parser::{AST, ASTType, Expr};
-use crate::commons::float::Float;
+use crate::ast::parser::{ASTType, Expr, AST};
+use crate::commons::float::FloatLiteral;
 use crate::types::type_db::TypeInstance;
 
 /**
@@ -21,7 +21,7 @@ use crate::types::type_db::TypeInstance;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrivialHIRExpr {
     IntegerValue(i128),
-    FloatValue(Float),
+    FloatValue(FloatLiteral),
     StringValue(String),
     BooleanValue(bool),
     Variable(String),
@@ -52,7 +52,7 @@ pub struct TypedTrivialHIRExpr(pub TrivialHIRExpr, pub HIRTypeDef);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRExpr {
     Trivial(TypedTrivialHIRExpr, HIRExprMetadata),
-    Cast(TypedTrivialHIRExpr, HIRTypeDef, HIRExprMetadata),
+    #[allow(dead_code)] Cast(TypedTrivialHIRExpr, HIRTypeDef, HIRExprMetadata),
     BinaryOperation(
         TypedTrivialHIRExpr,
         Operator,
@@ -131,12 +131,12 @@ impl HIRExpr {
     pub fn get_expr_type(&self) -> &HIRTypeDef {
         match self {
             HIRExpr::Trivial(t, ..) => &t.1,
-            HIRExpr::Cast(_, t, ..) => t,
-            HIRExpr::BinaryOperation(.., t, _) => t,
-            HIRExpr::FunctionCall(.., t, _) => t,
-            HIRExpr::UnaryExpression(.., t, _) => t,
-            HIRExpr::MemberAccess(.., t, _) => t,
-            HIRExpr::Array(.., t, _) => t,
+            HIRExpr::Cast(_, t, ..)
+            | HIRExpr::BinaryOperation(.., t, _)
+            | HIRExpr::FunctionCall(.., t, _)
+            | HIRExpr::UnaryExpression(.., t, _)
+            | HIRExpr::MemberAccess(.., t, _)
+            | HIRExpr::Array(.., t, _) => t,
         }
     }
 }
@@ -305,10 +305,7 @@ fn check_if_reducible(expr: &Expr) -> bool {
             }
             false
         }
-        Expr::IndexAccess(_, _) => {
-            //return true so that it can be lowered to a __index__ call
-            true
-        }
+       
         Expr::MemberAccess(path_expr, _member) => {
             return_true_if_non_trivial!(path_expr);
             false
@@ -317,7 +314,7 @@ fn check_if_reducible(expr: &Expr) -> bool {
             return_true_if_non_trivial!(expr);
             false
         }
-        _ => true,
+        _ => true, //index operator is lowered into __index__ call so it's marked as reducible
     }
 }
 
@@ -335,9 +332,8 @@ fn reduce_expr_to_hir_declarations<'a>(
     metadata: &'a Expr,
 ) -> (HIRExpr, i32) {
     let trivial_expr = get_trivial_hir_expr(expr);
-    match trivial_expr {
-        Some(x) => return (HIRExpr::Trivial(x.pending_type(), Some(expr.clone())), 0),
-        None => {}
+    if let Some(x) = trivial_expr {
+        return (HIRExpr::Trivial(x.pending_type(), Some(expr.clone())), 0);
     }
 
     match expr {
@@ -665,7 +661,6 @@ fn reduce_expr_to_hir_declarations<'a>(
     }
 }
 
-
 struct IfTreeNode {
     condition: TypedTrivialHIRExpr,
     true_body: Vec<HIR>,
@@ -717,36 +712,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
             body,
             return_type,
         } => {
-            let mut function_body = vec![];
-
-            for node in body {
-                let created_intermediaries = ast_to_hir(node, intermediary, &mut function_body);
-                intermediary += created_intermediaries;
-            }
-
-            let decl_hir = HIR::DeclareFunction {
-                function_name: function_name.clone(),
-                parameters: parameters
-                    .iter()
-                    .map(|param| {
-                        let name = param.name.clone();
-                        HIRTypedBoundName {
-                            name,
-                            typename: HIRTypeDef::Unresolved(HIRType::from_ast(&param.name_type)),
-                        }
-                    })
-                    .collect(),
-                body: function_body,
-                return_type: match return_type {
-                    Some(x) => HIRTypeDef::Unresolved(HIRType::from_ast(x)),
-                    None => HIRTypeDef::Unresolved(HIRType::Simple("Void".into())),
-                },
-                meta: Some(ast.clone()),
-            };
-
-            accum.push(decl_hir);
-            0 //yes, each function declaration created the intermediares for their body to work, but they don't
-              //escape the scope of the function!
+            ast_decl_function_to_hir(body, &mut intermediary, function_name, parameters, return_type, ast, accum)
         }
         AST::Root(ast_nodes) => {
             let mut sum_intermediaries = 0;
@@ -810,26 +776,61 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
             elifs,
             final_else,
         } => {
-            let (true_branch_result_expr, num_intermediaries) = reduce_expr_to_hir_declarations(
-                &true_branch.expression,
-                intermediary,
-                accum,
-                true,
-                &true_branch.expression,
-            );
-            intermediary += num_intermediaries;
-            let HIRExpr::Trivial(trivial_true_branch_expr, _) = &true_branch_result_expr else {
-                panic!("Lowering of true branch expr returned invalid result: {:?}", true_branch_result_expr);
-            };
+            ast_if_to_hir(true_branch, intermediary, accum, elifs, final_else, ast)
+        }
+        ast => panic!("Not implemented HIR for {:?}", ast),
+    }
+}
 
-            let mut true_body_hir = vec![];
+fn ast_decl_function_to_hir(body: &[AST], intermediary: &mut i32, function_name: &str, parameters: &[crate::ast::parser::TypeBoundName], return_type: &Option<ASTType>, ast: &AST, accum: &mut Vec<HIR>) -> i32 {
+    let mut function_body = vec![];
+    for node in body {
+        let created_intermediaries = ast_to_hir(node, *intermediary, &mut function_body);
+        *intermediary += created_intermediaries;
+    }
+    let decl_hir = HIR::DeclareFunction {
+        function_name: function_name.to_string(),
+        parameters: parameters
+            .iter()
+            .map(|param| {
+                let name = param.name.clone();
+                HIRTypedBoundName {
+                    name,
+                    typename: HIRTypeDef::Unresolved(HIRType::from_ast(&param.name_type)),
+                }
+            })
+            .collect(),
+        body: function_body,
+        return_type: match return_type {
+            Some(x) => HIRTypeDef::Unresolved(HIRType::from_ast(x)),
+            None => HIRTypeDef::Unresolved(HIRType::Simple("Void".into())),
+        },
+        meta: Some(ast.clone()),
+    };
+    accum.push(decl_hir);
+    0
+    //yes, each function declaration created the intermediares for their body to work, but they don't
+    //escape the scope of the function!
+}
 
-            for node in &true_branch.statements {
-                let created_intermediaries = ast_to_hir(node, intermediary, &mut true_body_hir);
-                intermediary += created_intermediaries;
-            }
-
-            /*
+fn ast_if_to_hir(true_branch: &crate::ast::parser::ASTIfStatement, mut intermediary: i32, accum: &mut Vec<HIR>, elifs: &[crate::ast::parser::ASTIfStatement], final_else: &Option<Vec<AST>>, ast: &AST) -> i32 {
+    let (true_branch_result_expr, num_intermediaries) = reduce_expr_to_hir_declarations(
+        &true_branch.expression,
+        intermediary,
+        accum,
+        true,
+        &true_branch.expression,
+    );
+    intermediary += num_intermediaries;
+    let HIRExpr::Trivial(trivial_true_branch_expr, _) = &true_branch_result_expr else {
+        panic!("Lowering of true branch expr returned invalid result: {:?}", true_branch_result_expr);
+    };
+    let mut true_body_hir = vec![];
+    for node in &true_branch.statements {
+        let created_intermediaries = ast_to_hir(node, intermediary, &mut true_body_hir);
+        intermediary += created_intermediaries;
+    }
+    /*
               The HIR representation is simpler, but that means we have to do work to simplify it.
               HIR is only condition, true branch, false branch so the rest of the else ifs go inside the false branch.
 
@@ -837,130 +838,125 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
 
               First we have to handle some base cases, i.e. no more elifs ou elses, no more elifs but there is an else, etc.
             */
-
-            if elifs.is_empty() && final_else.is_none() {
-                /* Just like function declarations, the intermediaries created here don't escape the context.
+    if elifs.is_empty() && final_else.is_none() {
+        /* Just like function declarations, the intermediaries created here don't escape the context.
                    This is different than python, where all variables declared are scoped to the entire function;
                 */
+
+        accum.push(HIR::If(
+            trivial_true_branch_expr.clone(),
+            true_body_hir,
+            vec![],
+            Some(ast.clone()),
+        ));
+
+        0
+    } else if elifs.is_empty() && final_else.is_some() {
+        //in this case we have a final else, just generate a false branch
+        let mut false_body_hir = vec![];
+
+        match final_else {
+            None => panic!("Shouldn't happen!"),
+            Some(nodes) => {
+                for node in nodes.iter() {
+                    let created_intermediaries =
+                        ast_to_hir(node, intermediary, &mut false_body_hir);
+                    intermediary += created_intermediaries;
+                }
 
                 accum.push(HIR::If(
                     trivial_true_branch_expr.clone(),
                     true_body_hir,
-                    vec![],
+                    false_body_hir,
                     Some(ast.clone()),
                 ));
-
-                0
-            } else if elifs.is_empty() && final_else.is_some() {
-                //in this case we have a final else, just generate a false branch
-                let mut false_body_hir = vec![];
-
-                match final_else {
-                    None => panic!("Shouldn't happen!"),
-                    Some(nodes) => {
-                        for node in nodes.iter() {
-                            let created_intermediaries =
-                                ast_to_hir(node, intermediary, &mut false_body_hir);
-                            intermediary += created_intermediaries;
-                        }
-
-                        accum.push(HIR::If(
-                            trivial_true_branch_expr.clone(),
-                            true_body_hir,
-                            false_body_hir,
-                            Some(ast.clone()),
-                        ));
-                    }
-                }
-                0
-            } else {
-                //in this case we have elifs, so we build the "tree"
-                //and we don't actually need to store the false body because we'll connect everything later.
-                //it's not actually a tree... it's more like a linked list.
-
-                //let mut current_if_tree = HIR::If(trivial_true_branch_expr, true_body_hir, ());
-                let mut nodes = vec![];
-
-
-                let root_node = IfTreeNode {
-                    condition: trivial_true_branch_expr.clone(),
-                    true_body: true_body_hir,
-                    body_meta: AST::Root(true_branch.statements.clone()),
-                };
-
-                nodes.push(root_node);
-
-                for item in elifs {
-                    let (elif_true_branch_result_expr, num_intermediaries) =
-                        reduce_expr_to_hir_declarations(
-                            &item.expression,
-                            intermediary,
-                            accum,
-                            true,
-                            &item.expression,
-                        );
-                    intermediary += num_intermediaries;
-
-                    let HIRExpr::Trivial(elif_trivial_true_branch_result_expr, _) = &elif_true_branch_result_expr else {
-                        panic!("Lowering of elif true branch expr returned invalid result: {:?}", elif_true_branch_result_expr);
-                    };
-                    let mut if_node = IfTreeNode {
-                        condition: elif_trivial_true_branch_result_expr.clone(),
-                        true_body: vec![],
-                        body_meta: AST::Root(item.statements.clone()),
-                    };
-
-                    for node in &item.statements {
-                        let created_intermediaries =
-                            ast_to_hir(node, intermediary, &mut if_node.true_body);
-                        intermediary += created_intermediaries;
-                    }
-                    nodes.push(if_node);
-                }
-                let mut final_else_body = vec![];
-                if let Some(statements) = final_else {
-                    for node in statements.iter() {
-                        let created_intermediaries =
-                            ast_to_hir(node, intermediary, &mut final_else_body);
-                        intermediary += created_intermediaries;
-                    }
-                }
-
-                //trivialexpr, vec<hir>, vec<hir>
-                let mut final_if_chain = None;
-
-                if !final_else_body.is_empty() {
-                    let first_node = nodes.pop().unwrap(); //there MUST be a node here
-                    final_if_chain = Some(HIR::If(
-                        first_node.condition,
-                        first_node.true_body,
-                        final_else_body,
-                        Some(ast.clone()),
-                    ));
-                }
-
-                nodes.reverse();
-                //we navigate through the nodes in reverse and build the final HIR tree
-                for node in nodes {
-                    let new_node = match final_if_chain {
-                        None => {
-                            HIR::If(node.condition, node.true_body, vec![], Some(node.body_meta))
-                        }
-                        Some(current_chain) => HIR::If(
-                            node.condition,
-                            node.true_body,
-                            vec![current_chain],
-                            Some(node.body_meta),
-                        ),
-                    };
-                    final_if_chain = Some(new_node);
-                }
-                accum.push(final_if_chain.unwrap());
-
-                0
             }
         }
-        ast => panic!("Not implemented HIR for {:?}", ast),
+        0
+    } else {
+        //in this case we have elifs, so we build the "tree"
+        //and we don't actually need to store the false body because we'll connect everything later.
+        //it's not actually a tree... it's more like a linked list.
+
+        //let mut current_if_tree = HIR::If(trivial_true_branch_expr, true_body_hir, ());
+        let mut nodes = vec![];
+
+        let root_node = IfTreeNode {
+            condition: trivial_true_branch_expr.clone(),
+            true_body: true_body_hir,
+            body_meta: AST::Root(true_branch.statements.clone()),
+        };
+
+        nodes.push(root_node);
+
+        for item in elifs {
+            let (elif_true_branch_result_expr, num_intermediaries) =
+                reduce_expr_to_hir_declarations(
+                    &item.expression,
+                    intermediary,
+                    accum,
+                    true,
+                    &item.expression,
+                );
+            intermediary += num_intermediaries;
+
+            let HIRExpr::Trivial(elif_trivial_true_branch_result_expr, _) = &elif_true_branch_result_expr else {
+                panic!("Lowering of elif true branch expr returned invalid result: {:?}", elif_true_branch_result_expr);
+            };
+            let mut if_node = IfTreeNode {
+                condition: elif_trivial_true_branch_result_expr.clone(),
+                true_body: vec![],
+                body_meta: AST::Root(item.statements.clone()),
+            };
+
+            for node in &item.statements {
+                let created_intermediaries =
+                    ast_to_hir(node, intermediary, &mut if_node.true_body);
+                intermediary += created_intermediaries;
+            }
+            nodes.push(if_node);
+        }
+        let mut final_else_body = vec![];
+        if let Some(statements) = final_else {
+            for node in statements.iter() {
+                let created_intermediaries =
+                    ast_to_hir(node, intermediary, &mut final_else_body);
+                intermediary += created_intermediaries;
+            }
+        }
+
+        //trivialexpr, vec<hir>, vec<hir>
+        let mut final_if_chain = None;
+
+        if !final_else_body.is_empty() {
+            let first_node = nodes.pop().unwrap(); //there MUST be a node here
+            final_if_chain = Some(HIR::If(
+                first_node.condition,
+                first_node.true_body,
+                final_else_body,
+                Some(ast.clone()),
+            ));
+        }
+
+        nodes.reverse();
+        //we navigate through the nodes in reverse and build the final HIR tree
+        for node in nodes {
+            let new_node = match final_if_chain {
+                None => {
+                    HIR::If(node.condition, node.true_body, vec![], Some(node.body_meta))
+                }
+                Some(current_chain) => HIR::If(
+                    node.condition,
+                    node.true_body,
+                    vec![current_chain],
+                    Some(node.body_meta),
+                ),
+            };
+            final_if_chain = Some(new_node);
+        }
+        accum.push(final_if_chain.unwrap());
+
+        0
     }
 }
 
@@ -969,8 +965,8 @@ mod tests {
 
     use super::*;
 
-    use crate::semantic::hir_printer::print_hir;
     use crate::semantic::hir;
+    use crate::semantic::hir_printer::print_hir;
     use crate::types::type_db::TypeDatabase;
 
     //Parses a single expression

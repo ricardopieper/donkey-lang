@@ -1,18 +1,23 @@
 use std::hash::Hash;
 
-#[derive(PartialEq, Debug, Copy, Clone)]
-pub struct Float(pub f64);
+#[derive(Debug, Copy, Clone)]
+pub struct FloatLiteral(pub f64);
 
-impl Hash for Float {
+impl Hash for FloatLiteral {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.to_bits().hash(state);
     }
 }
 
-impl From<f64> for Float {
-    fn from(w: f64) -> Float {
-        Float(w)
+impl From<f64> for FloatLiteral {
+    fn from(w: f64) -> FloatLiteral {
+        FloatLiteral(w)
     }
 }
 
-impl Eq for Float {}
+impl PartialEq for FloatLiteral {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for FloatLiteral {}

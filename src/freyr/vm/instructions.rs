@@ -25,7 +25,7 @@ impl From<u8> for LoadStoreAddressingMode {
 }
 
 impl LoadStoreAddressingMode {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             LoadStoreAddressingMode::Stack => 0b00,
             LoadStoreAddressingMode::RelativeForward => 0b01,
@@ -45,8 +45,8 @@ pub enum NumberOfBytes {
 }
 
 impl NumberOfBytes {
-    pub fn get_bytes(&self) -> u8 {
-        2u8.pow(u32::from(*self as u8))
+    pub fn get_bytes(self) -> u8 {
+        2u8.pow(u32::from(self as u8))
     }
 }
 
@@ -79,7 +79,7 @@ impl From<u8> for OperationMode {
 }
 
 impl OperationMode {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             OperationMode::PureStack => 0b00,
             OperationMode::StackAndImmediate => 0b01,
@@ -109,7 +109,7 @@ impl From<u8> for LeftShift {
 }
 
 impl LeftShift {
-    pub fn get_shift_size(&self) -> u8 {
+    pub fn get_shift_size(self) -> u8 {
         match self {
             LeftShift::None => 0,
             LeftShift::Shift16 => 16,
@@ -136,7 +136,7 @@ impl From<u8> for ShiftDirection {
 }
 
 impl ShiftDirection {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             ShiftDirection::Left => 0b00,
             ShiftDirection::Right => 0b01,
@@ -163,7 +163,7 @@ impl From<u8> for BitwiseOperation {
 }
 
 impl BitwiseOperation {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             BitwiseOperation::And => 0b00,
             BitwiseOperation::Or => 0b01,
@@ -195,7 +195,7 @@ impl From<u8> for ArithmeticOperation {
 }
 
 impl ArithmeticOperation {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             ArithmeticOperation::Sum => 0b000,
             ArithmeticOperation::Subtract => 0b001,
@@ -231,7 +231,7 @@ impl From<u8> for CompareOperation {
 }
 
 impl CompareOperation {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             CompareOperation::Equals => 0b000,
             CompareOperation::NotEquals => 0b001,
@@ -260,7 +260,7 @@ impl From<u8> for SignFlag {
 }
 
 impl SignFlag {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             SignFlag::Unsigned => 0b0,
             SignFlag::Signed => 0b1,
@@ -276,7 +276,7 @@ pub enum ControlRegister {
 }
 
 impl ControlRegister {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             ControlRegister::Base => 0b00,
             ControlRegister::Stack => 0b01,
@@ -313,7 +313,7 @@ impl From<u8> for AddressJumpAddressSource {
 }
 
 impl AddressJumpAddressSource {
-    pub fn get_bit_pattern(&self) -> u8 {
+    pub fn get_bit_pattern(self) -> u8 {
         match self {
             AddressJumpAddressSource::FromOperand => 0b00,
             AddressJumpAddressSource::PopFromStack => 0b01,
@@ -434,7 +434,7 @@ impl BitLayout {
                     }
                 }
             }
-            skipped_bits += layout_item.length
+            skipped_bits += layout_item.length;
         }
         panic!("Failed to get pattern {name} from bits {value:#034b}");
     }
@@ -589,6 +589,7 @@ macro_rules! layout {
     };
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn get_all_instruction_layouts() -> InstructionTable {
     let mut table = InstructionTable::new();
 

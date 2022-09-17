@@ -8,13 +8,14 @@ use crate::freyr::asm::{
 
 use super::asm_instructions::AssemblyInstruction;
 
+#[allow(dead_code, clippy::too_many_lines)] //sometimes useful in debugging
 pub fn print(instructions: &[AssemblyInstruction]) {
     let ops_indent = "\t\t";
     for inst in instructions {
         print!("\t");
         match inst {
             AssemblyInstruction::StackOffset { bytes } => {
-                println!("stackoffset{ops_indent}{bytes}", bytes = bytes)
+                println!("stackoffset{ops_indent}{bytes}", bytes = bytes);
             }
             AssemblyInstruction::LoadAddress { bytes, mode } => {
                 print!("loadaddr");
@@ -29,9 +30,9 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                     AsmLoadStoreMode::Relative { offset } => {
                         print!("_rel{bytes_str}{ops_indent}");
                         if *offset > 0 {
-                            println!("bp+{offset}")
+                            println!("bp+{offset}");
                         } else {
-                            println!("bp-{offset}")
+                            println!("bp-{offset}");
                         }
                     }
                     AsmLoadStoreMode::Immediate { absolute_address } => {
@@ -55,9 +56,9 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                     AsmLoadStoreMode::Relative { offset } => {
                         print!("_rel{bytes_str}{ops_indent}");
                         if *offset > 0 {
-                            println!("bp+{offset}")
+                            println!("bp+{offset}");
                         } else {
-                            println!("bp-{offset}")
+                            println!("bp-{offset}");
                         }
                     }
                     AsmLoadStoreMode::Immediate { absolute_address } => {
