@@ -1,6 +1,6 @@
-use super::hir::*;
+use super::hir::{HIR, HIRAstMetadata, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, TypedTrivialHIRExpr};
 
-use crate::ast::parser::*;
+use crate::ast::parser::{AST, Expr};
 
 use crate::types::type_db::TypeDatabase;
 use crate::types::type_db::TypeInstance;
@@ -67,10 +67,10 @@ pub enum MIRBlockNode {
 }
 
 /**
- A MIRTypedBoundName can be understood as a variable name and type, but it can be used as arguments of a function,
+ A `MIRTypedBoundName` can be understood as a variable name and type, but it can be used as arguments of a function,
  and struct fields as well as plain old variable declarations as well.
 
- Everything that needs a name and a type can use a MIRTypedBoundName.
+ Everything that needs a name and a type can use a `MIRTypedBoundName`.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MIRTypedBoundName {
@@ -340,9 +340,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 let has_else_code = !false_branch_hir.is_empty();
 
                 let (true_block, true_branch_returns) = {
-                    if true_branch_hir.is_empty() {
-                        panic!("Empty true branch on if statement reached MIR");
-                    }
+                    assert!(!true_branch_hir.is_empty(), "Empty true branch on if statement reached MIR");
                     //create a block for the true branch
                     let true_branch_scope = emitter.create_scope(current_scope);
                     let true_branch_block = emitter.new_block(true_branch_scope);
@@ -517,7 +515,7 @@ pub fn hir_to_mir(hir_nodes: &[HIR], type_db: &TypeDatabase) -> Vec<MIRTopLevelN
 
 #[cfg(test)]
 mod tests {
-    use crate::semantic::mir_printer;
+    use crate::{semantic::mir_printer, ast::parser::Parser};
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 

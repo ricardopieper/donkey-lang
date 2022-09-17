@@ -57,32 +57,30 @@ impl<'a> InstructionEncoder<'a> {
     pub fn encode(&mut self, part: &str, value: u32) -> &mut Self {
         let mut bit_offset = 5;
         let mut found = false;
-        for layout_part in self.layout.layout.iter() {
+        for layout_part in &self.layout.layout {
             if layout_part.name == part {
                 found = true;
                 match &layout_part.layout_type {
                     PartType::BitPattern(patterns) => {
                         let pattern = patterns.iter().find(|x| x.value == value).unwrap();
                         let offseted = delete_msb_bits(pattern.pattern, bit_offset);
-                        let position_offset = (32 - bit_offset) - layout_part.length as u32;
+                        let position_offset = (32 - bit_offset) - u32::from(layout_part.length);
                         let positioned = offseted << position_offset;
                         self.current += positioned;
                         break;
                     }
                     PartType::Immediate => {
                         let offseted = delete_msb_bits(value, bit_offset);
-                        let position_offset = (32 - bit_offset) - layout_part.length as u32;
+                        let position_offset = (32 - bit_offset) - u32::from(layout_part.length);
                         let positioned = offseted << position_offset;
                         self.current += positioned;
                         break;
                     }
                 }
             }
-            bit_offset += layout_part.length as u32;
+            bit_offset += u32::from(layout_part.length);
         }
-        if !found {
-            panic!("Could not find instruction part {part}");
-        }
+        assert!(found, "Could not find instruction part {part}");
         self
     }
 
@@ -263,7 +261,7 @@ impl LayoutHelper {
 
         InstructionEncoder {
             layout: instruction,
-            current: (instruction.instruction_pseudoop as u32) << 27,
+            current: u32::from(instruction.instruction_pseudoop) << 27,
         }
     }
 
@@ -280,8 +278,8 @@ impl LayoutHelper {
                 immediate,
             } => self
                 .begin_encode("push_imm")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("lshift", lshift.get_shift_size() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("lshift", u32::from(lshift.get_shift_size()))
                 .encode_bytes("immediate lsb", immediate)
                 .make(),
             Instruction::LoadAddress {
@@ -290,8 +288,8 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("loadaddr")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("mode", mode.get_bit_pattern() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("mode", u32::from(mode.get_bit_pattern()))
                 .encode("operand", *operand)
                 .make(),
             Instruction::StoreAddress {
@@ -300,8 +298,8 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("storeaddr")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("mode", mode.get_bit_pattern() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("mode", u32::from(mode.get_bit_pattern()))
                 .encode("operand", *operand as u32)
                 .make(),
             Instruction::BitShift {
@@ -312,11 +310,11 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("shift")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("direction", direction.get_bit_pattern() as u32)
-                .encode("mode", mode.get_bit_pattern() as u32)
-                .encode("keep sign", sign.get_bit_pattern() as u32)
-                .encode("operand", *operand as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("direction", u32::from(direction.get_bit_pattern()))
+                .encode("mode", u32::from(mode.get_bit_pattern()))
+                .encode("keep sign", u32::from(sign.get_bit_pattern()))
+                .encode("operand", u32::from(*operand))
                 .make(),
             Instruction::Bitwise {
                 bytes,
@@ -326,10 +324,10 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("bitwise")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("operation", operation.get_bit_pattern() as u32)
-                .encode("mode", mode.get_bit_pattern() as u32)
-                .encode("sign", sign.get_bit_pattern() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("operation", u32::from(operation.get_bit_pattern()))
+                .encode("mode", u32::from(mode.get_bit_pattern()))
+                .encode("sign", u32::from(sign.get_bit_pattern()))
                 .encode_bytes("operand", operand)
                 .make(),
             Instruction::IntegerArithmetic {
@@ -340,10 +338,10 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("integer_binary_op")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("operation", operation.get_bit_pattern() as u32)
-                .encode("sign", sign.get_bit_pattern() as u32)
-                .encode("mode", mode.get_bit_pattern() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("operation", u32::from(operation.get_bit_pattern()))
+                .encode("sign", u32::from(sign.get_bit_pattern()))
+                .encode("mode", u32::from(mode.get_bit_pattern()))
                 .encode_bytes("operand", operand)
                 .make(),
             Instruction::IntegerCompare {
@@ -354,52 +352,52 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("integer_compare")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("operation", operation.get_bit_pattern() as u32)
-                .encode("sign", sign.get_bit_pattern() as u32)
-                .encode("mode", mode.get_bit_pattern() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("operation", u32::from(operation.get_bit_pattern()))
+                .encode("sign", u32::from(sign.get_bit_pattern()))
+                .encode("mode", u32::from(mode.get_bit_pattern()))
                 .encode_bytes("operand", operand)
                 .make(),
             Instruction::FloatArithmetic { bytes, operation } => self
                 .begin_encode("float_binary_op")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("operation", operation.get_bit_pattern() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("operation", u32::from(operation.get_bit_pattern()))
                 .make(),
             Instruction::FloatCompare { bytes, operation } => self
                 .begin_encode("float_compare_op")
-                .encode("num bytes", bytes.get_bytes() as u32)
-                .encode("operation", operation.get_bit_pattern() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("operation", u32::from(operation.get_bit_pattern()))
                 .make(),
             Instruction::PushFromRegister { control_register } => self
                 .begin_encode("push_reg")
-                .encode("register", control_register.get_bit_pattern() as u32)
+                .encode("register", u32::from(control_register.get_bit_pattern()))
                 .make(),
             Instruction::PopIntoRegister { control_register } => self
                 .begin_encode("pop_reg")
-                .encode("register", control_register.get_bit_pattern() as u32)
+                .encode("register", u32::from(control_register.get_bit_pattern()))
                 .make(),
             Instruction::Pop { bytes } => self
                 .begin_encode("pop")
-                .encode("num bytes", bytes.get_bytes() as u32)
+                .encode("num bytes", u32::from(bytes.get_bytes()))
                 .make(),
             Instruction::Call { source, offset } => self
                 .begin_encode("call")
-                .encode("source", source.get_bit_pattern() as u32)
+                .encode("source", u32::from(source.get_bit_pattern()))
                 .encode("offset", *offset)
                 .make(),
             Instruction::JumpIfZero { source, offset } => self
                 .begin_encode("jz")
-                .encode("source", source.get_bit_pattern() as u32)
+                .encode("source", u32::from(source.get_bit_pattern()))
                 .encode("offset", *offset)
                 .make(),
             Instruction::JumpIfNotZero { source, offset } => self
                 .begin_encode("jnz")
-                .encode("source", source.get_bit_pattern() as u32)
+                .encode("source", u32::from(source.get_bit_pattern()))
                 .encode("offset", *offset)
                 .make(),
             Instruction::JumpUnconditional { source, offset } => self
                 .begin_encode("jmp")
-                .encode("source", source.get_bit_pattern() as u32)
+                .encode("source", u32::from(source.get_bit_pattern()))
                 .encode("offset", *offset)
                 .make(),
             Instruction::Exit => self.begin_encode("exit").make(),
@@ -431,7 +429,7 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::freyr::{encoder::*, vm::instructions::*};
+    use crate::freyr::{encoder::LayoutHelper, vm::instructions::{AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation, ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes, OperationMode, ShiftDirection, SignFlag}};
 
     #[test]
     fn encode_decode_push_immediate32_lshift16() {

@@ -72,7 +72,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
     }
 
     let mnemonics = split_instruction_mnemonic(splitted[0].to_lowercase().as_str());
-    let mnems_str_vec = mnemonics.iter().map(|x| x.as_str()).collect::<Vec<_>>();
+    let mnems_str_vec = mnemonics.iter().map(std::string::String::as_str).collect::<Vec<_>>();
 
     let mnems_str = mnems_str_vec.as_slice();
 
@@ -102,12 +102,8 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
             let (bytes, lsm) = match rest {
                 ["rel", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
-                    if !splitted[1].contains("bp") {
-                        panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
-                    }
-                    if !splitted[1].contains('+') && !splitted[1].contains('-') {
-                        panic!("Please say whether the offset in storeaddr is positive or negative at line {line}");
-                    }
+                    assert!(splitted[1].contains("bp"), "Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
+                    assert!(!(!splitted[1].contains('+') && !splitted[1].contains('-')), "Please say whether the offset in storeaddr is positive or negative at line {line}");
                     let remove_bp = splitted[1].replace("bp", "");
                     let offset = remove_bp.parse().unwrap();
                     (bytes, AsmLoadStoreMode::Relative { offset })
@@ -136,12 +132,8 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
             let (bytes, lsm) = match &rest {
                 ["rel", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
-                    if !splitted[1].contains("bp") {
-                        panic!("Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
-                    }
-                    if !splitted[1].contains('+') && !splitted[1].contains('-') {
-                        panic!("Please say whether the offset in storeaddr is positive or negative at line {line}");
-                    }
+                    assert!(splitted[1].contains("bp"), "Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
+                    assert!(!(!splitted[1].contains('+') && !splitted[1].contains('-')), "Please say whether the offset in storeaddr is positive or negative at line {line}");
                     let remove_bp = splitted[1].replace("bp", "");
                     let offset = remove_bp.parse().unwrap();
                     (bytes, AsmLoadStoreMode::Relative { offset })
@@ -637,7 +629,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::freyr::asm::{
-        asm_instructions::*,
+        asm_instructions::{AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction},
         assembler::{parse_asm, resolve},
     };
 

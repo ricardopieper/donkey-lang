@@ -1,7 +1,7 @@
-use crate::semantic::hir::*;
+use crate::semantic::hir::{HIR, HIRExpr, HIRType, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, TypedTrivialHIRExpr};
 use crate::semantic::name_registry::NameRegistry;
 use crate::types::type_db::{FunctionSignature, Type, TypeDatabase, TypeId, TypeInstance};
-use crate::types::type_errors::*;
+use crate::types::type_errors::{BinaryOperatorNotFound, CallToNonCallableType, FieldOrMethodNotFound, InsufficientTypeInformationForArray, TypeErrors, TypeNotFound, UnaryOperatorNotFound, UnexpectedTypeFound};
 use either::Either;
 
 use super::name_registry::PartiallyResolvedFunctionSignature;
@@ -82,7 +82,7 @@ pub fn instantiate_type(
                 .collect::<Vec<_>>();
             let return_type_instance = instantiate_type(on_function, type_db, return_type, errors);
 
-            if args_instances.iter().any(|x| x.is_none()) {
+            if args_instances.iter().any(std::option::Option::is_none) {
                 return None;
             }
 
@@ -231,9 +231,7 @@ fn resolve_function_signature(
     //if function signature has type parameters
     //we have to replace them but for now forget about it
     //we don't have syntax to call functions with their own type params
-    if !signature.type_args.is_empty() {
-        panic!("Function type args not supported yet")
-    }
+    assert!(signature.type_args.is_empty(), "Function type args not supported yet");
     //however, any of the parameters in the function can
     //be generic and reference the struct type arg
 
@@ -568,9 +566,7 @@ pub fn compute_and_infer_expr_type(
                         //if function signature has type parameters
                         //we have to replace them but for now forget about it
                         //we don't have syntax to call functions with their own type params
-                        if !signature.type_args.is_empty() {
-                            panic!("Function type args not supported yet")
-                        }
+                        assert!(signature.type_args.is_empty(), "Function type args not supported yet");
 
                         //Now we have to resolve each element in the type signature.
                         //Remember that &generics will contain an i32 if we have a __index__(u32): TItem call on arr<i32>
@@ -905,7 +901,7 @@ pub fn infer_types(
 ) -> Vec<HIR> {
     let mut new_mir = vec![];
 
-    for node in mir.iter() {
+    for node in &mir {
         let result = match node {
             HIR::DeclareFunction {
                 function_name,
@@ -925,7 +921,7 @@ pub fn infer_types(
 
                 let mut parameter_types = vec![];
                 let mut found_type_errors = return_type_inferred.is_none();
-                for f in parameters_resolved.iter() {
+                for f in &parameters_resolved {
                     match &f.typename {
                         HIRTypeDef::Resolved(r) => parameter_types.push(r.clone()),
                         HIRTypeDef::Unresolved(unresolved) => {

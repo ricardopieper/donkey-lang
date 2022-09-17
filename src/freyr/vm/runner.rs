@@ -204,20 +204,20 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
                     memory.write(reg.sp, &as_bytes);
                 }
                 NumberOfBytes::Bytes4 => {
-                    let from_byte_imm = as_u16 as u32;
+                    let from_byte_imm = u32::from(as_u16);
                     let shifted = from_byte_imm << shift_size;
                     let as_bytes = shifted.to_le_bytes();
                     memory.write(reg.sp, &as_bytes);
                 }
                 NumberOfBytes::Bytes8 => {
-                    let from_byte_imm = as_u16 as u64;
+                    let from_byte_imm = u64::from(as_u16);
                     let shifted = from_byte_imm << shift_size;
                     let as_bytes = shifted.to_le_bytes();
                     memory.write(reg.sp, &as_bytes);
                 }
             };
 
-            reg.sp += bytes.get_bytes() as u32;
+            reg.sp += u32::from(bytes.get_bytes());
             reg.ip += IP_OFFSET;
         }
         Instruction::LoadAddress {
@@ -225,7 +225,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             mode,
             operand,
         } => {
-            let num_bytes = bytes.get_bytes() as u32;
+            let num_bytes = u32::from(bytes.get_bytes());
             match mode {
                 LoadStoreAddressingMode::Stack => {
                     //load 32 bits from stack
@@ -254,7 +254,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             mode,
             operand,
         } => {
-            let num_bytes = bytes.get_bytes() as u32;
+            let num_bytes = u32::from(bytes.get_bytes());
             reg.sp -= num_bytes;
             let addr_to_read = reg.sp;
             match mode {
@@ -326,25 +326,25 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
                     immediate_bitshift::<u8>(memory, reg, *direction, *operand as u8)
                 }
                 (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-                    immediate_bitshift::<u16>(memory, reg, *direction, *operand as u16)
+                    immediate_bitshift::<u16>(memory, reg, *direction, u16::from(*operand))
                 }
                 (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-                    immediate_bitshift::<u32>(memory, reg, *direction, *operand as u32)
+                    immediate_bitshift::<u32>(memory, reg, *direction, u32::from(*operand))
                 }
                 (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-                    immediate_bitshift::<u64>(memory, reg, *direction, *operand as u64)
+                    immediate_bitshift::<u64>(memory, reg, *direction, u64::from(*operand))
                 }
                 (NumberOfBytes::Bytes1, SignFlag::Signed) => {
                     immediate_bitshift::<i8>(memory, reg, *direction, *operand as i8)
                 }
                 (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-                    immediate_bitshift::<i16>(memory, reg, *direction, *operand as i16)
+                    immediate_bitshift::<i16>(memory, reg, *direction, i16::from(*operand))
                 }
                 (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                    immediate_bitshift::<i32>(memory, reg, *direction, *operand as i32)
+                    immediate_bitshift::<i32>(memory, reg, *direction, i32::from(*operand))
                 }
                 (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-                    immediate_bitshift::<i64>(memory, reg, *direction, *operand as i64)
+                    immediate_bitshift::<i64>(memory, reg, *direction, i64::from(*operand))
                 }
             }
             reg.ip += IP_OFFSET;
@@ -549,8 +549,8 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             };
         }
         Instruction::Pop { bytes } => {
-            let _num = bytes.get_bytes() as u32;
-            reg.sp -= bytes.get_bytes() as u32;
+            let _num = u32::from(bytes.get_bytes());
+            reg.sp -= u32::from(bytes.get_bytes());
             reg.ip += IP_OFFSET;
         }
         Instruction::Call { source, offset } => match source {

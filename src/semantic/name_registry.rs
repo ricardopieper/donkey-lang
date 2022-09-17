@@ -1,5 +1,5 @@
 use crate::{
-    semantic::hir::*,
+    semantic::hir::{HIR, HIRType, HIRTypeDef},
     types::type_db::{TypeDatabase, TypeInstance},
 };
 
@@ -45,7 +45,7 @@ impl NameRegistry {
     }
 
     pub fn include(&mut self, outer: &NameRegistry) {
-        for (k, v) in outer.names.iter() {
+        for (k, v) in &outer.names {
             self.insert(k.clone(), v.clone())
         }
     }

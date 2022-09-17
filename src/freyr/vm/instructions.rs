@@ -46,7 +46,7 @@ pub enum NumberOfBytes {
 
 impl NumberOfBytes {
     pub fn get_bytes(&self) -> u8 {
-        2u8.pow(*self as u8 as u32)
+        2u8.pow(u32::from(*self as u8))
     }
 }
 
@@ -464,13 +464,9 @@ pub struct BitLayoutPart {
 fn validate_instruction_sizes(table: &InstructionTable) {
     for layout in table.table.values() {
         let sum: u8 = (5u8) + layout.layout.iter().map(|x| x.length as u8).sum::<u8>() as u8;
-        if sum != 32 {
-            panic!(
-                "Instruction {ins} has {defined} bits defined instead of required 32!",
+        assert!(sum == 32, "Instruction {ins} has {defined} bits defined instead of required 32!",
                 ins = layout.name,
-                defined = sum
-            );
-        }
+                defined = sum);
     }
 }
 

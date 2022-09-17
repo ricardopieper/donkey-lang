@@ -19,7 +19,7 @@ pub fn print(instructions: &[AssemblyInstruction]) {
             AssemblyInstruction::LoadAddress { bytes, mode } => {
                 print!("loadaddr");
                 let bytes_str = if *bytes == 4 {
-                    "".to_string()
+                    String::new()
                 } else {
                     format!("{bytes}", bytes = bytes * 8)
                 };
@@ -45,7 +45,7 @@ pub fn print(instructions: &[AssemblyInstruction]) {
             AssemblyInstruction::StoreAddress { bytes, mode } => {
                 print!("storeaddr");
                 let bytes_str = if *bytes == 4 {
-                    "".to_string()
+                    String::new()
                 } else {
                     format!("{bytes}", bytes = bytes * 8)
                 };
@@ -71,7 +71,7 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                 immediate,
             } => {
                 let bytes_str = if *bytes == 4 {
-                    "".to_string()
+                    String::new()
                 } else {
                     format!("{bytes}", bytes = bytes * 8)
                 };
@@ -95,7 +95,7 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                 immediate,
             } => {
                 let bytes_str = if *bytes == 4 {
-                    "".to_string()
+                    String::new()
                 } else {
                     format!("{bytes}", bytes = bytes * 8)
                 };
@@ -129,7 +129,7 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                 immediate,
             } => {
                 let bytes_str = if *bytes == 4 {
-                    "".to_string()
+                    String::new()
                 } else {
                     format!("{bytes}", bytes = bytes * 8)
                 };
@@ -165,7 +165,7 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                 immediate,
             } => {
                 let bytes_str = if *bytes == 4 {
-                    "".to_string()
+                    String::new()
                 } else {
                     format!("{bytes}", bytes = bytes * 8)
                 };

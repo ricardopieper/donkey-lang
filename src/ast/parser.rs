@@ -1,5 +1,5 @@
-use crate::ast::lexer::*;
-use crate::commons::float::*;
+use crate::ast::lexer::{Operator, Token};
+use crate::commons::float::Float;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -104,8 +104,7 @@ impl From<i128> for Box<Expr> {
 
 fn precedence(o: Operator) -> u32 {
     match o {
-        Operator::Multiply => 100,
-        Operator::Divide => 100,
+        Operator::Multiply | Operator::Divide => 100,
         _ => 1,
     }
 }
@@ -142,6 +141,84 @@ pub enum ParsingError {
     TypeBoundExpectedColonAfterFieldName,
 }
 
+macro_rules! parse_guard {
+    ($parser:expr, $pattern:pat_param) => {
+        parse_guard!($parser, $pattern, None)
+    };
+    ($parser:expr, $pattern:pat_param, $result:expr) => {
+        if let $pattern = $parser.cur().clone() {
+            $parser.next();
+            if (!$parser.can_go()) {
+                return $result;
+            }
+        } else {
+            return $result;
+        }
+    };
+}
+
+
+macro_rules! expect_token {
+    ($parser:expr, $token:tt::$pattern:tt) => {
+        if let $token::$pattern = $parser.cur() {
+            $parser.next();
+        } else {
+            panic!(
+                "Expected {}, got {}",
+                ($token::$pattern).name(),
+                $parser.cur().name()
+            );
+        }
+    };
+    ($parser:expr, $token:tt::$pattern:tt, $msg:expr) => {
+        if let $token::$pattern = $parser.cur() {
+            $parser.next();
+        } else {
+            panic!(
+                $msg,
+                $parser.cur().name()
+            );
+        }
+    };
+}
+
+macro_rules! expect_identifier {
+    ($parser:expr, $role:expr) => {
+        {
+            if let Token::Identifier(id) = $parser.cur() {
+                let return_val = id.clone();
+                $parser.next();
+                return_val
+            } else {
+                panic!(
+                    "Expected {}, got {}",
+                    $role,
+                    $parser.cur().name()
+                );
+            }
+        }
+    };
+}
+
+macro_rules! expect_colon_newline {
+    ($parser:expr) => {
+        expect_token!($parser, Token::Colon);
+        expect_token!($parser, Token::NewLine);
+    };
+}
+
+macro_rules! indented {
+    ($parser:expr, $indented_parsing:block) => {{
+        println!("indent++");
+        $parser.increment_expected_indent();
+        let returned = $indented_parsing;
+        $parser.decrement_expected_indent();
+        println!("indent--");
+
+        returned
+    }};
+}
+
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Parser {
         Parser {
@@ -162,7 +239,7 @@ impl Parser {
             operator_stack: vec![],
             operand_stack: vec![],
             current_indent: cur_indent,
-        })
+        });
     }
 
     fn pop_stack(&mut self) -> ParsingState {
@@ -171,7 +248,6 @@ impl Parser {
 
     fn next(&mut self) {
         self.advance(1);
-        //println!("Current reading {:?}", self.cur());
     }
 
     fn advance(&mut self, offset: isize) {
@@ -206,10 +282,6 @@ impl Parser {
         self.cur_offset_opt(-1)
     }
 
-    fn cur_opt(&self) -> Option<&Token> {
-        self.cur_offset_opt(0)
-    }
-
     fn cur_offset(&self, offset: isize) -> &Token {
         return self.cur_offset_opt(offset).unwrap();
     }
@@ -224,7 +296,7 @@ impl Parser {
     }
 
     fn is_not_end(&self) -> bool {
-        //!self.is_last()
+        //!`self.is_last`()
         self.parsing_state.last().unwrap().index < self.tokens.len()
     }
 
@@ -274,9 +346,10 @@ impl Parser {
             path.push(id.clone());
             if self.is_last() {
                 return None;
-            } else {
-                self.next()
             }
+
+            self.next();
+
             if let Token::MemberAccessor = self.cur() {
                 self.next();
             }
@@ -320,263 +393,141 @@ impl Parser {
     }
 
     pub fn parse_if_statement(&mut self) -> Option<AST> {
-        if let Token::IfKeyword = self.cur().clone() {
-            self.next();
-            if !self.can_go() {
-                None
-            } else {
-                let expr = self.parse_expr().expect("Expected expr").resulting_expr;
-                if let Token::Colon = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected colon after if expr");
-                }
+        parse_guard!(self, Token::IfKeyword);
 
-                if let Token::NewLine = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected newline after colon");
-                }
+        let expr = self.parse_expr().expect("Expected expr").resulting_expr;
 
-                self.increment_expected_indent();
-                let ast = self.parse_ast().unwrap();
-                let mut if_statement = AST::IfStatement {
-                    true_branch: ASTIfStatement {
-                        expression: expr,
-                        statements: ast,
-                    },
-                    elifs: vec![],
-                    final_else: None,
-                };
-                self.decrement_expected_indent();
+        expect_colon_newline!(self);
 
-                let cur_identation = self.get_expected_indent();
-                //lets try getting the else statement:
-                self.new_stack();
-                let identation_else = self.skip_whitespace_newline();
-
-                if self.can_go() && identation_else == cur_identation {
-                    if let Token::ElseKeyword = self.cur() {
-                        self.next();
-                        if let Token::Colon = self.cur() {
-                            self.next();
-                        } else {
-                            panic!("Expected colon after if expr");
-                        }
-
-                        if let Token::NewLine = self.cur() {
-                            self.next();
-                        } else {
-                            panic!("Expected newline after colon");
-                        }
-
-                        self.increment_expected_indent();
-                        let ast = self.parse_ast().unwrap();
-                        if_statement = match if_statement {
-                            AST::IfStatement {
-                                true_branch,
-                                elifs,
-                                final_else: _,
-                            } => AST::IfStatement {
-                                true_branch,
-                                elifs,
-                                final_else: Some(ast),
-                            },
-                            _ => panic!("Unrecognized ast on if else parsing"),
-                        };
-                        self.decrement_expected_indent();
-                    } else {
-                        self.pop_stack();
-                    }
-                } else {
-                    self.pop_stack();
-                }
-                Some(if_statement)
+        let mut if_statement = indented!(self, {
+            let ast = self.parse_ast().unwrap();
+            AST::IfStatement {
+                true_branch: ASTIfStatement {
+                    expression: expr,
+                    statements: ast,
+                },
+                elifs: vec![],
+                final_else: None,
             }
-        } else {
-            None
+        });
+
+        self.new_stack();
+
+        //lets try getting the else statement:
+        let cur_identation = self.get_expected_indent();
+        let identation_else = self.skip_whitespace_newline();
+
+        if !self.can_go() || identation_else != cur_identation {
+            self.pop_stack();
+            return Some(if_statement);
         }
+
+        if let Token::ElseKeyword = self.cur() {
+            self.next();
+            expect_colon_newline!(self);
+
+            if_statement = indented!(self, {
+                let ast = self.parse_ast().unwrap();
+                match if_statement {
+                    AST::IfStatement {
+                        true_branch, elifs, ..
+                    } => AST::IfStatement {
+                        true_branch,
+                        elifs,
+                        final_else: Some(ast),
+                    },
+                    _ => panic!("Unrecognized ast on if else parsing"),
+                }
+            });
+        } else {
+            self.pop_stack();
+        }
+        return Some(if_statement);
     }
 
-    /*
-        pub fn parse_typed_var_decl(&mut self) -> Result<Option<AST>, ParsingError> {
-            if let Token::Identifier(field_name) = self.cur().clone() {
+    pub fn parse_structdef(&mut self) -> Option<AST> {
+        parse_guard!(self, Token::StructDef);
+
+        let struct_name = expect_identifier!(self, "struct name");
+
+        expect_colon_newline!(self);
+
+        let struct_def = indented!(self, {
+            let mut fields = vec![];
+
+            loop {
+                self.skip_whitespace_newline();
+                if !self.can_go() {
+                    break;
+                }
+                let Token::Identifier(_) = self.cur() else { break; };
+                let parsed = self.parse_type_bound_name().unwrap().unwrap();
+                fields.push(parsed);
+
+                if !self.can_go() {
+                    break;
+                }
+
+                self.next();
+                let Token::NewLine = self.cur() else { break; };
+               
                 self.next();
                 if !self.can_go() {
-                    return Ok(None);
+                    break;
                 }
-                if let Token::Colon = self.cur() {
-                    self.next();
-                    if let Token::Identifier(type_name) = self.cur().clone() {
-                        return Ok(Some(AST::FieldDeclaration {
-                            field_name: field_name,
-                            type_name: type_name
-                        }));
-                    } else {
-                        return Err(ParsingError::FieldDeclMissingTypeSpecifier);
-                    }
-                } else {
-                    return Err(ParsingError::ExpectedColumnAfterFieldName);
-                }
-            } else {
-                return Ok(None);
-            }
-        }
-    */
-    pub fn parse_structdef(&mut self) -> Option<AST> {
-        if let Token::StructDef = self.cur().clone() {
-            self.next();
-            if !self.can_go() {
-                return None;
-            }
-            if let Token::Identifier(name) = self.cur().clone() {
-                self.next();
-                if let Token::Colon = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected colon after class decl identifier");
-                }
+                //if a second newline is found, then the struct declaration is found
                 if let Token::NewLine = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected newline after colon");
+                    break;
                 }
-                self.increment_expected_indent();
-
-                let mut fields = vec![];
-
-                loop {
-                    self.skip_whitespace_newline();
-                    if !self.can_go() {
-                        break;
-                    }
-                    if let Token::Identifier(_) = self.cur() {
-                        let parsed = self.parse_type_bound_name().unwrap().unwrap();
-                        fields.push(parsed);
-
-                        if !self.can_go() {
-                            break;
-                        }
-
-                        self.next();
-                        if let Token::NewLine = self.cur() {
-                            self.next();
-                            if !self.can_go() {
-                                break;
-                            }
-                            if let Token::NewLine = self.cur() {
-                                break;
-                            }
-                            continue;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-
-                let def_classdecl = AST::StructDeclaration {
-                    struct_name: name,
-                    body: fields,
-                };
-
-                self.decrement_expected_indent();
-
-                Some(def_classdecl)
-            } else {
-                panic!("Unexpected token: expected identifier, got something else")
             }
-        } else {
-            None
-        }
+    
+            AST::StructDeclaration {
+                struct_name,
+                body: fields,
+            }
+        });
+
+        Some(struct_def)
+        
     }
 
     pub fn parse_while_statement(&mut self) -> Option<AST> {
-        if let Token::WhileKeyword = self.cur().clone() {
-            self.next();
-            if !self.can_go() {
-                None
-            } else {
-                let expr = self.parse_expr().expect("Expected expr").resulting_expr;
-                if let Token::Colon = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected colon after while expr");
-                }
+        parse_guard!(self, Token::WhileKeyword);
+        
+        let expr = self.parse_expr().expect("Expected expr").resulting_expr;
+        
+        expect_colon_newline!(self);
 
-                if let Token::NewLine = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected newline after colon");
-                }
-
-                self.increment_expected_indent();
-                let ast = self.parse_ast().unwrap();
-                let while_statement = AST::WhileStatement {
-                    expression: expr,
-                    body: ast,
-                };
-                self.decrement_expected_indent();
-
-                Some(while_statement)
+        return Some(indented!(self, {
+            let ast = self.parse_ast().unwrap();
+            AST::WhileStatement {
+                expression: expr,
+                body: ast,
             }
-        } else {
-            None
-        }
+        }));
     }
 
     pub fn parse_for_statement(&mut self) -> Option<AST> {
-        if let Token::ForKeyword = self.cur().clone() {
-            self.next();
-            if !self.can_go() {
-                None
-            } else {
-                let variable_name: String;
-                if let Token::Identifier(name) = self.cur() {
-                    variable_name = name.clone();
-                    self.next();
-                } else {
-                    panic!("Expected identifier after for keyword")
-                }
+        parse_guard!(self, Token::ForKeyword);
+        let variable_name = expect_identifier!(self, "variable name in for loop");
+        expect_token!(self, Token::InKeyword);
 
-                if let Token::InKeyword = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected in keyword after identifier in for keyword")
-                }
+        let expr = self
+            .parse_expr()
+            .expect("Expected expr after in keyword in for expression")
+            .resulting_expr;
+        
+        expect_colon_newline!(self);
+        
+        return Some(indented!(self, {
+            let ast = self.parse_ast().unwrap();
 
-                let expr = self
-                    .parse_expr()
-                    .expect("Expected expr after in keyword in for expression")
-                    .resulting_expr;
-                if let Token::Colon = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected colon after for statement");
-                }
-
-                if let Token::NewLine = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected newline after colon");
-                }
-
-                self.increment_expected_indent();
-                let ast = self.parse_ast().unwrap();
-
-                let for_statement = AST::ForStatement {
-                    item_name: variable_name,
-                    list_expression: expr,
-                    body: ast,
-                };
-                self.decrement_expected_indent();
-
-                Some(for_statement)
+            AST::ForStatement {
+                item_name: variable_name,
+                list_expression: expr,
+                body: ast,
             }
-        } else {
-            None
-        }
+        }));
     }
 
     pub fn parse_type_name(&mut self) -> Option<ASTType> {
@@ -635,78 +586,97 @@ impl Parser {
     }
 
     pub fn parse_def_statement(&mut self) -> Option<AST> {
-        if let Token::DefKeyword = self.cur().clone() {
+        parse_guard!(self, Token::DefKeyword);
+        let function_name = expect_identifier!(self, "function name");
+
+        expect_token!(self, Token::OpenParen);
+            
+        let mut params: Vec<TypeBoundName> = vec![];
+
+        while let Token::Identifier(_) = self.cur() {
+            let param = self.parse_type_bound_name().unwrap().unwrap();
+
+            params.push(param);
             self.next();
-            if !self.can_go() {
-                None
+            if let Token::Comma = self.cur() {
+                self.next();
             } else {
-                let function_name: String;
-                if let Token::Identifier(name) = self.cur() {
-                    function_name = name.clone();
-                    self.next();
-                } else {
-                    panic!("Expected function identifier")
-                }
-
-                if let Token::OpenParen = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected open paren function name")
-                }
-                let mut params: Vec<TypeBoundName> = vec![];
-
-                while let Token::Identifier(_) = self.cur() {
-                    let param = self.parse_type_bound_name().unwrap().unwrap();
-
-                    params.push(param);
-                    self.next();
-                    if let Token::Comma = self.cur() {
-                        self.next();
-                    } else {
-                        break;
-                    }
-                }
-
-                if let Token::CloseParen = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected close paren after parameters in function declaration")
-                }
-
-                let mut return_type: Option<ASTType> = None;
-
-                if let Token::ArrowRight = self.cur() {
-                    self.next();
-
-                    return_type = self.parse_type_name();
-                    if return_type.is_none() {
-                        panic!("Expected type name after arrow right on function declaration")
-                    }
-                    self.next();
-                }
-
-                if let Token::Colon = self.cur() {
-                    self.next();
-                } else {
-                    panic!("Expected colon paren after parameters and return type in function declaration")
-                }
-
-                self.increment_expected_indent();
-                let ast = self.parse_ast().unwrap();
-
-                let for_statement = AST::DeclareFunction {
-                    function_name,
-                    parameters: params,
-                    body: ast,
-                    return_type,
-                };
-                self.decrement_expected_indent();
-
-                Some(for_statement)
+                break;
             }
-        } else {
-            None
         }
+
+        if let Token::CloseParen = self.cur() {
+            self.next();
+        } else {
+            panic!("Expected close paren after parameters in function declaration")
+        }
+
+        let mut return_type: Option<ASTType> = None;
+
+        if let Token::ArrowRight = self.cur() {
+            self.next();
+
+            return_type = self.parse_type_name();
+            assert!(
+                return_type.is_some(),
+                "Expected type name after arrow right on function declaration"
+            );
+            self.next();
+        }
+
+        expect_token!(self, Token::Colon, "Expected colon paren after parameters and return type in function declaration, got {}");
+
+        return Some(indented!(self, {
+            let ast = self.parse_ast().unwrap();
+
+            AST::DeclareFunction {
+                function_name,
+                parameters: params,
+                body: ast,
+                return_type,
+            }
+        }));
+    }
+
+    pub fn parse_break(&mut self) -> Option<AST> {
+        let tok = self.cur();
+        if let Token::BreakKeyword = tok {
+            self.next();
+            return Some(AST::Break);
+        }
+
+        return None;
+    }
+
+    pub fn parse_return(&mut self) -> Option<AST> {
+        let tok = self.cur();
+        if let Token::ReturnKeyword = tok {
+            self.next();
+            if self.can_go() {
+                let expr = self.parse_expr().ok().unwrap();
+                return Some(AST::Return(Some(expr.resulting_expr)));
+            }
+            return Some(AST::Return(None));
+        }
+        return None;
+    }
+
+    pub fn parse_raise(&mut self) -> Option<AST> {
+        let tok = self.cur();
+        if let Token::RaiseKeyword = tok {
+            self.next();
+            if self.can_go() {
+                let expr = self.parse_expr().ok().unwrap();
+                return Some(AST::Raise(expr.resulting_expr));
+            }
+            panic!("Must inform expression with raise keyword")
+        }
+        return None;
+    }
+
+    pub fn parse_standalone_expr(&mut self) -> Option<AST> {
+        let expr = self.parse_expr().ok().unwrap();
+        return Some(AST::StandaloneExpr(expr.resulting_expr));
     }
 
     //returns the identation level until the first non-whitespace token
@@ -729,9 +699,34 @@ impl Parser {
     }
 
     pub fn parse_ast(&mut self) -> Result<Vec<AST>, ParsingError> {
+        let mut parsed_successfully: bool;
         let mut results = vec![];
 
+        macro_rules! try_parse {
+            ($name:expr, $parse_method:tt) => {
+                if !parsed_successfully {
+                    self.new_stack();
+                    if let Some(parsed_result) = self.$parse_method() {
+                        results.push(parsed_result);
+                        parsed_successfully = true;
+                        let popped = self.pop_stack();
+                        //correct indentation found: commit
+                        self.set_cur(&popped);
+                        assert!(
+                            !self.is_not_end() || self.cur_is_newline(),
+                            "Newline or EOF expected after {}, got {:?}",
+                            $name,
+                            self.cur()
+                        );
+                    } else {
+                        self.pop_stack();
+                    }
+                }
+            };
+        }
+
         loop {
+            parsed_successfully = false;
             self.new_stack();
 
             let last_identation = self.skip_whitespace_newline();
@@ -749,248 +744,19 @@ impl Parser {
                 return Ok(results);
             }
 
-            let mut parsed_successfully = false;
+            try_parse!("struct", parse_structdef);
+            try_parse!("assign", parse_assign);
+            try_parse!("assign with type", parse_assign_typed);
+            try_parse!("if block", parse_if_statement);
+            try_parse!("while block", parse_while_statement);
+            try_parse!("for block", parse_for_statement);
+            try_parse!("function definition", parse_def_statement);
+            try_parse!("break", parse_break);
+            try_parse!("return", parse_return);
+            try_parse!("raise", parse_raise);
+            try_parse!("standalone expression", parse_standalone_expr);
 
-            if !parsed_successfully {
-                self.new_stack();
-                if let Some(assign_ast) = self.parse_structdef() {
-                    results.push(assign_ast);
-                    parsed_successfully = true;
-                    let popped = self.pop_stack();
-                    //correct indentation found: commit
-                    self.set_cur(&popped);
-                    assert!(
-                        !self.is_not_end() || self.cur_is_newline(),
-                        "Newline or EOF expected after struct, got {:?}",
-                        self.cur()
-                    );
-                } else {
-                    self.pop_stack();
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                if let Some(assign_ast) = self.parse_assign() {
-                    results.push(assign_ast);
-                    parsed_successfully = true;
-                    let popped = self.pop_stack();
-                    //correct indentation found: commit
-                    self.set_cur(&popped);
-                    assert!(
-                        !self.is_not_end() || self.cur_is_newline(),
-                        "Newline or EOF expected after assign"
-                    );
-                } else {
-                    self.pop_stack();
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                if let Some(assign_ast) = self.parse_assign_typed() {
-                    results.push(assign_ast);
-                    parsed_successfully = true;
-                    let popped = self.pop_stack();
-                    //correct indentation found: commit
-                    self.set_cur(&popped);
-                    assert!(
-                        !self.is_not_end() || self.cur_is_newline(),
-                        "Newline or EOF expected after assign"
-                    );
-                } else {
-                    self.pop_stack();
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                let expr = self.parse_if_statement();
-                match expr {
-                    Some(ast_if) => {
-                        results.push(ast_if);
-                        parsed_successfully = true;
-                        let popped = self.pop_stack();
-                        //correct indentation found: commit
-                        self.set_cur(&popped);
-                        assert!(
-                            !self.is_not_end() || self.cur_is_newline(),
-                            "Newline or EOF expected after if block"
-                        );
-                    }
-                    None => {
-                        parsed_successfully = false;
-                        self.pop_stack();
-                    }
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                let expr = self.parse_while_statement();
-                match expr {
-                    Some(ast_if) => {
-                        results.push(ast_if);
-                        parsed_successfully = true;
-                        let popped = self.pop_stack();
-                        //correct indentation found: commit
-                        self.set_cur(&popped);
-                        assert!(
-                            !self.is_not_end() || self.cur_is_newline(),
-                            "Newline or EOF expected after if block"
-                        );
-                    }
-                    None => {
-                        parsed_successfully = false;
-                        self.pop_stack();
-                    }
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                let expr = self.parse_for_statement();
-                match expr {
-                    Some(ast_for) => {
-                        results.push(ast_for);
-                        parsed_successfully = true;
-                        let popped = self.pop_stack();
-                        //correct indentation found: commit
-                        self.set_cur(&popped);
-                        assert!(
-                            !self.is_not_end() || self.cur_is_newline(),
-                            "Newline or EOF expected after for block"
-                        );
-                    }
-                    None => {
-                        parsed_successfully = false;
-                        self.pop_stack();
-                    }
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                let expr = self.parse_def_statement();
-                match expr {
-                    Some(ast_for) => {
-                        results.push(ast_for);
-                        parsed_successfully = true;
-                        let popped = self.pop_stack();
-                        //correct indentation found: commit
-                        self.set_cur(&popped);
-                        assert!(
-                            !self.is_not_end() || self.cur_is_newline(),
-                            "Newline or EOF expected after for block"
-                        );
-                    }
-                    None => {
-                        parsed_successfully = false;
-                        self.pop_stack();
-                    }
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                let tok = self.cur();
-                match tok {
-                    Token::BreakKeyword => {
-                        results.push(AST::Break);
-                        self.next();
-                        parsed_successfully = true;
-                        let popped = self.pop_stack();
-                        //correct indentation found: commit
-                        self.set_cur(&popped);
-                        assert!(
-                            !self.is_not_end() || self.cur_is_newline(),
-                            "Newline or EOF expected after if block, got {:?}",
-                            self.cur_opt()
-                        );
-                    }
-                    _ => {
-                        parsed_successfully = false;
-                        self.pop_stack();
-                    }
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                let tok = self.cur();
-                match tok {
-                    Token::ReturnKeyword => {
-                        self.next();
-                        if self.can_go() {
-                            let expr = self.parse_expr()?;
-                            results.push(AST::Return(Some(expr.resulting_expr)));
-                        } else {
-                            results.push(AST::Return(None));
-                        }
-                        parsed_successfully = true;
-                        let popped = self.pop_stack();
-                        //correct indentation found: commit
-                        self.set_cur(&popped);
-                        assert!(
-                            !self.is_not_end() || self.cur_is_newline(),
-                            "Newline or EOF expected after if block, got {:?}",
-                            self.cur_opt()
-                        );
-                    }
-                    _ => {
-                        parsed_successfully = false;
-                        self.pop_stack();
-                    }
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                let tok = self.cur();
-                match tok {
-                    Token::RaiseKeyword => {
-                        self.next();
-                        if self.can_go() {
-                            let expr = self.parse_expr()?;
-                            results.push(AST::Raise(expr.resulting_expr));
-                        } else {
-                            panic!("Must inform expression with raise keyword")
-                        }
-                        parsed_successfully = true;
-                        let popped = self.pop_stack();
-                        //correct indentation found: commit
-                        self.set_cur(&popped);
-                        assert!(
-                            !self.is_not_end() || self.cur_is_newline(),
-                            "Newline or EOF expected after if block, got {:?}",
-                            self.cur_opt()
-                        );
-                    }
-                    _ => {
-                        parsed_successfully = false;
-                        self.pop_stack();
-                    }
-                }
-            }
-
-            if !parsed_successfully {
-                self.new_stack();
-                let expr = self.parse_expr()?;
-                results.push(AST::StandaloneExpr(expr.resulting_expr));
-                let popped = self.pop_stack();
-                //correct indentation found: commit
-                self.set_cur(&popped);
-                parsed_successfully = true;
-                assert!(
-                    !self.is_not_end() || self.cur_is_newline(),
-                    "Newline or EOF expected after standalone expr, instead found {:?}",
-                    self.cur()
-                );
-            }
-
-            if !parsed_successfully {
-                panic!("Could not parse code")
-            }
+            assert!(parsed_successfully, "Could not parse code");
 
             if self.is_not_end() {
                 if !self.cur_is_newline() {
@@ -1009,75 +775,70 @@ impl Parser {
 
         Ok(results)
     }
-    /**
-    *
-    *          //if we parsed some expression and we find an open paren... this might be a function call.
-               //it's time to support generic funcion call syntax, not only on names.
-
-    *
-    */
 
     fn index_access_helper(&mut self, expr_list_or_array: &Expr) -> Result<Expr, ParsingError> {
         if let Token::CloseParen = self.cur() {
             panic!("Invalid syntax: must inform index value");
-        } else {
-            self.new_stack();
-            let list_of_exprs = self.parse_comma_sep_list_expr();
+        }
 
-            match list_of_exprs {
-                //try parse stuff
-                Ok(expressions) => {
-                    //commit the result
-                    let popped = self.pop_stack();
-                    let mut resulting_exprs = expressions.resulting_expr_list;
-                    if resulting_exprs.len() > 1 {
-                        panic!("Invalid syntax: must inform only one index");
-                    }
+        self.new_stack();
+        let list_of_exprs = self.parse_comma_sep_list_expr();
 
-                    let fcall = Expr::IndexAccess(
-                        Box::new(expr_list_or_array.clone()),
-                        Box::new(resulting_exprs.pop().unwrap()),
-                    );
+        match list_of_exprs {
+            //try parse stuff
+            Ok(expressions) => {
+                //commit the result
+                let popped = self.pop_stack();
+                let mut resulting_exprs = expressions.resulting_expr_list;
+                assert!(
+                    resulting_exprs.len() <= 1,
+                    "Invalid syntax: must inform only one index"
+                );
 
-                    self.set_cur(&popped);
+                let fcall = Expr::IndexAccess(
+                    Box::new(expr_list_or_array.clone()),
+                    Box::new(resulting_exprs.pop().unwrap()),
+                );
 
-                    Ok(fcall)
-                }
-                Err(e) => {
-                    eprintln!("Failed parsing exprssion: {:?}", e);
-                    Err(e)
-                }
+                self.set_cur(&popped);
+
+                Ok(fcall)
+            }
+            Err(e) => {
+                eprintln!("Failed parsing exprssion: {:?}", e);
+                Err(e)
             }
         }
     }
 
     fn function_call_helper(&mut self, expr_callable: &Expr) -> Result<Expr, ParsingError> {
         if let Token::CloseParen = self.cur() {
-            Ok(Expr::FunctionCall(Box::new(expr_callable.clone()), vec![]))
-        } else {
-            self.new_stack();
-            let list_of_exprs = self.parse_comma_sep_list_expr();
+            return Ok(Expr::FunctionCall(Box::new(expr_callable.clone()), vec![]))
+        }
 
-            match list_of_exprs {
-                //try parse stuff
-                Ok(expressions) => {
-                    //commit the result
-                    let popped = self.pop_stack();
-                    let resulting_exprs = expressions.resulting_expr_list;
+        self.new_stack();
+        let list_of_exprs = self.parse_comma_sep_list_expr();
 
-                    let fcall =
-                        Expr::FunctionCall(Box::new(expr_callable.clone()), resulting_exprs);
+        match list_of_exprs {
+            //try parse stuff
+            Ok(expressions) => {
+                //commit the result
+                let popped = self.pop_stack();
+                let resulting_exprs = expressions.resulting_expr_list;
 
-                    self.set_cur(&popped);
+                let fcall =
+                    Expr::FunctionCall(Box::new(expr_callable.clone()), resulting_exprs);
 
-                    Ok(fcall)
-                }
-                Err(e) => {
-                    eprintln!("Failed parsing exprssion: {:?}", e);
-                    Err(e)
-                }
+                self.set_cur(&popped);
+
+                Ok(fcall)
+            }
+            Err(e) => {
+                eprintln!("Failed parsing exprssion: {:?}", e);
+                Err(e)
             }
         }
+        
     }
 
     pub fn parse_expr(&mut self) -> Result<ParseExpressionResult, ParsingError> {
@@ -1153,8 +914,6 @@ impl Parser {
                                         was_operand = true;
                                     }
                                 }
-                            } else {
-                                //is just a normal expression, go back
                             }
                         } else {
                             self.new_stack(); //new parsing stack/state
@@ -1308,15 +1067,15 @@ impl Parser {
             }
             if not_part_of_expr {
                 break;
-            } else {
-                self.next();
-                if self.can_go() && Token::MemberAccessor == self.cur().clone() {
-                    continue;
-                }
+            }
+
+            self.next();
+            if self.can_go() && Token::MemberAccessor == self.cur().clone() {
+                continue;
             }
 
             //if the token is an open paren... then wait a minute, could be a function call!
-            //same thing for an open bracket!
+            //same thing for an open bracket! could be an array!
             //try parse it first!
 
             if self.can_go() {
@@ -1344,7 +1103,7 @@ impl Parser {
                         self.push_operand(Expr::UnaryExpression(op, Box::new(last_operand)));
                     }
                 }
-                //if it executes the previous if, we will have an operand, operator, and an unary exp operand
+                //if we enter the previous if, we will have an operand, operator, and an unary exp operand
 
                 let has_sufficient_operands = self.operand_stack().len() >= 2;
                 let has_pending_operators = !self.operator_stack().is_empty();
@@ -1449,12 +1208,10 @@ impl Parser {
                 if let Token::Comma = self.cur() {
                     self.next();
                     continue;
-                } else {
-                    break;
                 }
-            } else {
                 break;
             }
+            break;
         }
 
         if expressions.is_empty() {
@@ -1503,6 +1260,8 @@ mod tests {
             }
         }
     }
+
+    use crate::ast::lexer::tokenize;
 
     use super::*;
 
@@ -1587,7 +1346,7 @@ while True:
             expression: Expr::BinaryOperation(
                 Box::new(Expr::Variable("x".to_string())),
                 Operator::Less,
-                Box::new(Expr::IntegerValue(1000000)),
+                Box::new(Expr::IntegerValue(1_000_000)),
             ),
             body: vec![AST::IfStatement {
                 true_branch: ASTIfStatement {

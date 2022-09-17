@@ -31,7 +31,7 @@ use crate::freyr::vm::runner;
 #[macro_use]
 extern crate time_test;
 
-use crate::semantic::mir::*;
+use crate::semantic::mir::hir_to_mir;
 use crate::semantic::mir_printer;
 use crate::semantic::type_checker::check_type;
 
@@ -77,7 +77,7 @@ fn main() {
 
         let num_bytes: u64 = loops * 8 * 1024 * 1024;
 
-        let tp = (num_bytes as f64 / (diff.as_secs_f64())) / (1024 * 1024) as f64;
+        let tp = (num_bytes as f64 / (diff.as_secs_f64())) / f64::from(1024 * 1024);
 
         println!("Throughput: {tp}MB/s");
         return;

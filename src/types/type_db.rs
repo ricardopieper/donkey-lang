@@ -1,6 +1,6 @@
 use crate::ast::lexer::Operator;
 
-use either::*;
+use either::Either;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /*Represents a fully resolved type, with generics already substituted */
@@ -155,7 +155,7 @@ impl Default for TypeRecord {
             kind: TypeKind::Primitive,
             sign: TypeSign::Unsigned,
             size: 0,
-            name: "".into(),
+            name: String::new(),
             allowed_casts: vec![],
             rhs_binary_ops: vec![],
             unary_ops: vec![],

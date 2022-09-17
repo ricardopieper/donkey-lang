@@ -1,10 +1,10 @@
-use super::hir::*;
+use super::hir::{HIRAstMetadata, HIRExpr, HIRExprMetadata, TrivialHIRExpr};
 use crate::ast::parser::AST;
 use crate::types::type_db::TypeDatabase;
 use crate::types::type_db::TypeInstance;
-use crate::types::type_errors::*;
+use crate::types::type_errors::{AssignContext, CallToNonCallableType, FunctionCallArgumentCountMismatch, FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch};
 
-use super::mir::*;
+use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 
 fn find_variable<'block, 'scope>(
@@ -22,9 +22,9 @@ fn find_variable<'block, 'scope>(
             None => {
                 if current_scope.index == 0 {
                     break;
-                } else {
-                    current_scope = &scopes[current_scope.index - 1];
                 }
+                current_scope = &scopes[current_scope.index - 1];
+                
             }
         };
     }
@@ -124,7 +124,7 @@ fn all_assignments_correct_type(
     type_errors: &mut TypeErrors,
 ) {
     for body_node in body {
-        for block_node in body_node.block.iter() {
+        for block_node in &body_node.block {
             match block_node {
                 MIRBlockNode::Assign {
                     path, expression, ..
@@ -216,7 +216,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
 ) {
     //
     for body_node in body {
-        for block_node in body_node.block.iter() {
+        for block_node in &body_node.block {
             match block_node {
                 MIRBlockNode::Assign {
                     path,
@@ -224,9 +224,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     meta_ast,
                     meta_expr: _,
                 } => {
-                    if path.len() > 1 {
-                        panic!("Assign to path len > 2 not supported in type checker yet!");
-                    }
+                    assert!(path.len() <= 1, "Assign to path len > 2 not supported in type checker yet!");
 
                     //on assigns, we need to check if's a function call.
                     let HIRExpr::FunctionCall(call_expr, args, return_type, expr_metadata) = expression else {
@@ -245,9 +243,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         panic!("Cannot call function that is not named: anonymous functions not supported yet");
                     };
 
-                    if return_type.expect_resolved() != func_return_type.as_ref() {
-                        panic!("Return type of function is {func_return_type:#?} but expression return type is {return_type:#?}. This should not happen. This is a type inference bug, and something is inconsistent!");
-                    }
+                    assert!(!(return_type.expect_resolved() != func_return_type.as_ref()), "Return type of function is {func_return_type:#?} but expression return type is {return_type:#?}. This should not happen. This is a type inference bug, and something is inconsistent!");
 
                     let passed_types = args
                         .iter()
@@ -364,7 +360,7 @@ mod tests {
     use super::*;
     use crate::{
         ast::parser::{Parser, AST},
-        semantic::mir_printer,
+        semantic::{mir_printer, mir::hir_to_mir}, types::type_errors::TypeErrorPrinter,
     };
     use pretty_assertions::assert_eq;
 

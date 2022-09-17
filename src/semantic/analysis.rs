@@ -1,7 +1,7 @@
-use crate::semantic::hir::*;
-use crate::semantic::*;
+use crate::semantic::hir::{HIR, ast_to_hir};
+use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
 use crate::types::type_db::TypeDatabase;
-use crate::{ast::parser::*, types::type_errors::TypeErrors};
+use crate::{ast::parser::{AST}, types::type_errors::TypeErrors};
 
 use super::name_registry::NameRegistry;
 
@@ -49,7 +49,7 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::ast::lexer::Operator;
+    use crate::{ast::{lexer::Operator, parser::Parser}, semantic::hir_printer};
 
     use super::*;
 
@@ -61,7 +61,7 @@ mod tests {
             .unwrap();
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast().ok().unwrap());
-        super::analysis::do_analysis(&ast)
+        do_analysis(&ast)
     }
 
     #[test]

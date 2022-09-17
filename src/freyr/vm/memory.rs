@@ -162,7 +162,7 @@ impl Memory {
     //and the VM must read the remaining bytes again passing another address
     //and handle that accordingly
     pub fn read(&self, address: u32, len: u32) -> (&[u8], bool, u32, u32) {
-        let index = address & 0x0000ffff;
+        let index = address & 0x0000_ffff;
         if index + len > PAGE_SIZE as u32 {
             self.read_page_fault(address, len)
         } else {
@@ -182,14 +182,12 @@ impl Memory {
     pub fn read_single(&self, address: u32) -> u8 {
         //which page?
         let page = self.get_page(address);
-        if page.is_none() {
-            panic!("Cannot read from non-allocated page")
-        }
+        assert!(!page.is_none(), "Cannot read from non-allocated page");
         unsafe {
             *page
                 .as_ref()
                 .unwrap_unchecked()
-                .get_unchecked((address & 0x0000ffff) as usize)
+                .get_unchecked((address & 0x0000_ffff) as usize)
         }
     }
 
@@ -198,7 +196,7 @@ impl Memory {
 
         match page {
             Some(p) => {
-                let index = (address & 0x0000ffff) as usize;
+                let index = (address & 0x0000_ffff) as usize;
                 let remaining = (index + len as usize) - PAGE_SIZE;
 
                 let bytes_on_page_remaining = PAGE_SIZE as u32 - index as u32;
@@ -217,10 +215,8 @@ impl Memory {
 
     fn read_normal(&self, address: u32, len: u32) -> (&[u8], bool, u32, u32) {
         let page = self.get_page(address).as_ref();
-        if page.is_none() {
-            panic!("Read from unallocated page")
-        }
-        let index = (address & 0x0000ffff) as usize;
+        assert!(page.is_some(), "Read from unallocated page");
+        let index = (address & 0x0000_ffff) as usize;
 
         (
             unsafe {
@@ -288,9 +284,7 @@ impl Memory {
         //no bounding panic is possible
         unsafe {
             let ptr = self.mem.get_unchecked_mut(address_page as usize);
-            if ptr.is_none() {
-                panic!("Read to unloaded page");
-            }
+            assert!(!ptr.is_none(), "Read to unloaded page");
             let unwrapped = ptr.as_mut().unwrap_unchecked();
             unwrapped
         }
@@ -309,14 +303,12 @@ impl Memory {
 
     pub fn write(&mut self, address: u32, data: &[u8]) {
         //will this write page fault?
-        let index = (address & 0x0000ffff) as usize;
+        let index = (address & 0x0000_ffff) as usize;
         let end_index = index + data.len();
         if end_index > PAGE_SIZE {
             //stack overflow detection
             let end_address = address + data.len() as u32;
-            if address >= self.stack_start && end_address >= self.heap_start {
-                panic!("Freyr VM stack overflow detected");
-            }
+            assert!(!(address >= self.stack_start && end_address >= self.heap_start), "Freyr VM stack overflow detected");
 
             //first we write to the current page
             let bytes_until_fill_page = PAGE_SIZE - index;
@@ -342,8 +334,8 @@ impl Memory {
 
     pub fn copy(&mut self, address_from: u32, address_to: u32, len: u32) {
         //will this write page fault?
-        let index_from = address_from & 0x0000ffff;
-        let index_to = address_to & 0x0000ffff;
+        let index_from = address_from & 0x0000_ffff;
+        let index_to = address_to & 0x0000_ffff;
         let read_size_before_fault_from = PAGE_SIZE as u32 - index_from as u32;
         let read_size_before_fault_to = PAGE_SIZE as u32 - index_to as u32;
 
@@ -392,7 +384,7 @@ mod tests {
         let mut mem = Memory::new();
         mem.make_ready();
         mem.set_section(MemorySegment::Data, &[5; 42]);
-        let (read, fault, remaining, _) = mem.read(0x00010000, 42);
+        let (read, fault, remaining, _) = mem.read(0x0001_0000, 42);
         assert!(!fault);
         assert_eq!(remaining, 0);
         assert_eq!(read, &[5u8; 42]);
@@ -444,7 +436,7 @@ mod tests {
 
         let (read, fault, remaining, next_read) = mem.read(mem.stack_start + 0xfff0, 63);
         assert_eq!(read.len(), 16);
-        assert!(!fault);
+        assert!(fault);
         assert_eq!(remaining, 47);
         assert_eq!(read, &[3u8; 16]);
 
@@ -486,9 +478,9 @@ mod tests {
         let mut mem = Memory::new();
         mem.make_ready();
 
-        mem.write(262143, &[9u8; 1]);
+        mem.write(262_143, &[9u8; 1]);
 
-        let (read, fault, remaining, next_read) = mem.read(262143, 1);
+        let (read, fault, remaining, next_read) = mem.read(262_143, 1);
         assert_eq!(read, &[9u8; 1], "failed to get addr 262143");
         assert!(!fault);
         assert_eq!(remaining, 0);

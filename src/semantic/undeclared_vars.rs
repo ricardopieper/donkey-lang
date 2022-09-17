@@ -1,4 +1,4 @@
-use crate::semantic::hir::*;
+use crate::semantic::hir::{HIR, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, TypedTrivialHIRExpr};
 
 use std::collections::HashSet;
 
@@ -11,9 +11,7 @@ fn check_trivial_expr(
 ) {
     match &expr.0 {
         TrivialHIRExpr::Variable(v) => {
-            if declarations_found.get(v).is_none() {
-                panic!("Variable {v} not found, function: {function_name}");
-            }
+            assert!(declarations_found.get(v).is_some(), "Variable {v} not found, function: {function_name}");
         }
         _ => {}
     }
@@ -61,18 +59,14 @@ fn detect_decl_errors_in_body(
             HIR::Declare {
                 var, expression, ..
             } => {
-                if declarations_found.contains(var) {
-                    panic!("Variable {} declared more than once", var);
-                }
+                assert!(!declarations_found.contains(var), "Variable {} declared more than once", var);
                 declarations_found.insert(var.clone());
                 check_expr(declarations_found, function_name, expression);
             }
             HIR::Assign {
                 path, expression, ..
             } => {
-                if !declarations_found.contains(path.first().unwrap()) {
-                    panic!("Assign to undeclared variable {}", path.first().unwrap());
-                }
+                assert!(declarations_found.contains(path.first().unwrap()), "Assign to undeclared variable {}", path.first().unwrap());
                 check_expr(declarations_found, function_name, expression);
             }
             HIR::FunctionCall { function, args, .. } => {

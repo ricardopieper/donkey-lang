@@ -1,4 +1,4 @@
-use crate::semantic::hir::*;
+use crate::semantic::hir::{HIR, HIRTypeDef, HIRTypedBoundName};
 
 use std::collections::HashSet;
 
@@ -82,7 +82,7 @@ fn make_assignments_into_declarations_in_function(
 pub fn transform_first_assignment_into_declaration(mir: Vec<HIR>) -> Vec<HIR> {
     let mut new_mir = vec![];
 
-    for node in mir.iter() {
+    for node in &mir {
         let result = match node {
             HIR::DeclareFunction {
                 function_name,

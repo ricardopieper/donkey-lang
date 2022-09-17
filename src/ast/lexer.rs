@@ -55,6 +55,43 @@ pub enum Token {
     Indentation,
 }
 
+impl Token {
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Token::LiteralFloat(_) => "float literal",
+            Token::LiteralInteger(_) => "integer literal",
+            Token::LiteralString(_) => "string literal",
+            Token::Operator(_) =>  "operator",
+            Token::Identifier(_) =>  "identifier",
+            Token::NewLine =>  "new line",
+            Token::Assign =>  "assign",
+            Token::True =>  "boolean",
+            Token::False =>  "boolean",
+            Token::None =>  "none",
+            Token::Comma =>  "comma",
+            Token::Colon =>  "colon",
+            Token::StructDef =>  "struct keyword",
+            Token::IfKeyword =>  "if keyword",
+            Token::ForKeyword =>  "for keyword",
+            Token::RaiseKeyword =>  "raise keyword",
+            Token::ReturnKeyword =>  "return keyword",
+            Token::InKeyword =>  "in keyword",
+            Token::WhileKeyword =>  "while keyword",
+            Token::BreakKeyword =>  "break keyword",
+            Token::ElifKeyword =>  "elif keyword",
+            Token::ElseKeyword =>  "else keyword",
+            Token::DefKeyword =>  "def keyword",
+            Token::OpenParen =>  "open parenthesis",
+            Token::CloseParen =>  "close parenthesis",
+            Token::OpenArrayBracket =>  "open bracket",
+            Token::CloseArrayBracket =>  "close bracket",
+            Token::MemberAccessor =>  "member access (dot)",
+            Token::ArrowRight =>  "arrow right (->)",
+            Token::Indentation =>  "indentation",
+        } 
+    }
+}
+
 #[derive(Debug)]
 enum PartialToken {
     UndefinedOrWhitespace,
@@ -165,7 +202,7 @@ impl Tokenizer {
     }
 
     fn next(&mut self) {
-        self.advance(1)
+        self.advance(1);
     }
 
     fn advance(&mut self, offset: usize) {
@@ -267,17 +304,17 @@ impl Tokenizer {
     }
 
     fn commit_current_token(&mut self) {
-        match self.cur_partial_token {
-            PartialToken::UndefinedOrWhitespace => {}
-            _ => {
-                let cur_token = std::mem::replace(
-                    &mut self.cur_partial_token,
-                    PartialToken::UndefinedOrWhitespace,
-                );
-                self.final_result.push(cur_token.to_token());
-            }
-        };
+        if let PartialToken::UndefinedOrWhitespace = self.cur_partial_token {
+            return
+        }
+        let cur_token = std::mem::replace(
+            &mut self.cur_partial_token,
+            PartialToken::UndefinedOrWhitespace,
+        );
+        self.final_result.push(cur_token.to_token());
     }
+        
+    
 
     fn clone_buf(&self) -> String {
         self.eater_buf.clone()
@@ -289,7 +326,7 @@ impl Tokenizer {
             if self.cur_offset(i as isize) != item {
                 return (false, 0);
             }
-            matched_chars += 1
+            matched_chars += 1;
         }
         (true, matched_chars)
     }
@@ -352,9 +389,7 @@ impl Tokenizer {
                     current_spaces += 1;
                     self.next();
                 }
-                if current_spaces % 4 != 0 {
-                    panic!("Indentation must be a multiple of 4");
-                }
+                assert!(current_spaces % 4 == 0, "Indentation must be a multiple of 4");
                 let indents = current_spaces / 4;
                 for _i in 0..indents {
                     self.final_result.push(Token::Indentation);

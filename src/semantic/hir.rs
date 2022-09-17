@@ -1,9 +1,9 @@
 use std::fmt::Display;
 use std::fmt::Write;
 
-use crate::ast::lexer::*;
-use crate::ast::parser::*;
-use crate::commons::float::*;
+use crate::ast::lexer::Operator;
+use crate::ast::parser::{AST, ASTType, Expr};
+use crate::commons::float::Float;
 use crate::types::type_db::TypeInstance;
 
 /**
@@ -550,7 +550,7 @@ fn reduce_expr_to_hir_declarations<'a>(
         //i.e. if obj.map[0] becomes obj.map.__index__(0)
         //will need member access syntax support
         index_access @ Expr::IndexAccess(obj_expr, index_expr) => {
-            let owned = index_expr.to_owned();
+            let owned = index_expr.clone();
             let as_fcall = Expr::FunctionCall(
                 Box::new(Expr::MemberAccess(obj_expr.clone(), "__index__".into())),
                 vec![*owned],
@@ -663,6 +663,13 @@ fn reduce_expr_to_hir_declarations<'a>(
         }
         exprnode => panic!("Expr to HIR not implemented for {:?}", exprnode),
     }
+}
+
+
+struct IfTreeNode {
+    condition: TypedTrivialHIRExpr,
+    true_body: Vec<HIR>,
+    body_meta: AST,
 }
 
 pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32 {
@@ -789,7 +796,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 panic!("Lowering of function call returned invalid result: {:?}", result_expr);
             };
 
-            let typed_args = args.to_vec();
+            let typed_args = args.clone();
 
             accum.push(HIR::FunctionCall {
                 function: function.clone(),
@@ -817,7 +824,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
 
             let mut true_body_hir = vec![];
 
-            for node in true_branch.statements.iter() {
+            for node in &true_branch.statements {
                 let created_intermediaries = ast_to_hir(node, intermediary, &mut true_body_hir);
                 intermediary += created_intermediaries;
             }
@@ -874,11 +881,6 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                 //let mut current_if_tree = HIR::If(trivial_true_branch_expr, true_body_hir, ());
                 let mut nodes = vec![];
 
-                struct IfTreeNode {
-                    condition: TypedTrivialHIRExpr,
-                    true_body: Vec<HIR>,
-                    body_meta: AST,
-                }
 
                 let root_node = IfTreeNode {
                     condition: trivial_true_branch_expr.clone(),
@@ -908,7 +910,7 @@ pub fn ast_to_hir(ast: &AST, mut intermediary: i32, accum: &mut Vec<HIR>) -> i32
                         body_meta: AST::Root(item.statements.clone()),
                     };
 
-                    for node in item.statements.iter() {
+                    for node in &item.statements {
                         let created_intermediaries =
                             ast_to_hir(node, intermediary, &mut if_node.true_body);
                         intermediary += created_intermediaries;
@@ -968,7 +970,7 @@ mod tests {
     use super::*;
 
     use crate::semantic::hir_printer::print_hir;
-    use crate::semantic::*;
+    use crate::semantic::hir;
     use crate::types::type_db::TypeDatabase;
 
     //Parses a single expression

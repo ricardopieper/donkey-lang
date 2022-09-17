@@ -37,7 +37,7 @@ fn build_write_scope_byte_layout(
     loop {
         let scope = &all_scopes[current_index];
 
-        for var in scope.boundnames.iter() {
+        for var in &scope.boundnames {
             let type_record = type_db.find(var.typename.expect_simple());
             found_var.push((var.name.clone(), type_record.size));
         }
@@ -186,7 +186,7 @@ fn generate_trivial_expr(
             } else {
                 todo!("Integers of size {size} not implemented in asm generator yet")
             }
-            size as u32
+            u32::from(size)
         }
         TrivialHIRExpr::FloatValue(_) => todo!("Floats not implemented in asm generator yet"),
         TrivialHIRExpr::StringValue(_) => todo!("Strings not implemented in asm generator yet"),
@@ -228,9 +228,10 @@ const fn is_arith(op: &Operator) -> bool {
 const fn is_bitwise(op: &Operator) -> bool {
     matches!(op, Operator::And | Operator::Or | Operator::Xor)
 }
-const fn is_shift(op: &Operator) -> bool {
-    matches!(op, Operator::BitShiftLeft | Operator::BitShiftRight)
-}
+//const fn is_shift(op: &Operator) -> bool {
+//    matches!(op, Operator::BitShiftLeft | Operator::BitShiftRight)
+//}
+
 const fn is_compare(op: &Operator) -> bool {
     matches!(
         op,
@@ -530,7 +531,7 @@ fn generate_decl_function(
         .collect::<Vec<_>>();
 
     let mut largest_scope = 0;
-    for sbl in scope_byte_layout.iter() {
+    for sbl in &scope_byte_layout {
         let sum: u32 = sbl
             .values()
             .map(crate::compiler::freyr_gen::ByteRange::size)
@@ -573,7 +574,7 @@ fn generate_decl_function(
             bytecode.push(AssemblyInstruction::Label { label });
         }
 
-        for elems in block.block.iter() {
+        for elems in &block.block {
             match elems {
                 MIRBlockNode::Assign {
                     path, expression, ..

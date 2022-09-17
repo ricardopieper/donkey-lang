@@ -1,6 +1,6 @@
 use crate::ast::lexer;
 
-use crate::semantic::hir::*;
+use crate::semantic::hir::{HIR, HIRExpr, HIRType, HIRTypeDef, TrivialHIRExpr, TypedTrivialHIRExpr};
 use crate::types::type_db::TypeDatabase;
 use lexer::Operator;
 
