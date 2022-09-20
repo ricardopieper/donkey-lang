@@ -39,9 +39,9 @@ It's called Donkey because my previous attempt at writing an interpreter was nam
  - Donkey's bodies stay closer to the ground, or in other words, "lower in the air" than horses, the same way donkey will be a lower level, closer to the metal language. Doesn't mean it will be a low-level language though.
 
  - I wanted to name it "pony" but there is an actual programming language with that name. 
- - 
-Having said that, it's probably gonna be a much larger effort than Horse.
 
+
+Having said that, it's probably gonna be a much larger effort than Horse.
 
 Standard library
 ----------------
