@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'pony'",
+            "name": "Debug executable 'donkey-lang'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=pony",
-                    "--package=pony"
+                    "--bin=donkey-lang",
+                    "--package=donkey-lang"
                 ],
                 "filter": {
-                    "name": "pony",
+                    "name": "donkey-lang",
                     "kind": "bin"
                 }
             },
@@ -25,16 +25,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'pony'",
+            "name": "Debug unit tests in executable 'donkey-lang'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=pony",
-                    "--package=pony"
+                    "--bin=donkey-lang",
+                    "--package=donkey-lang"
                 ],
                 "filter": {
-                    "name": "pony",
+                    "name": "donkey-lang",
                     "kind": "bin"
                 }
             },

@@ -162,8 +162,6 @@ fn get_actual_function_name_with_details(
         _ => meta_expr.as_ref().unwrap(),
     };
 
-    println!("function metadata ast: {:?}", expr);
-
     match expr {
         crate::ast::parser::Expr::FunctionCall(function_name, _) => {
             match &**function_name {

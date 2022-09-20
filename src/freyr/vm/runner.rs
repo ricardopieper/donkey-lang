@@ -1,7 +1,7 @@
 use core::panic;
 use std::fmt::Display;
 
-use crate::freyr::vm::instructions::AddressJumpAddressSource;
+use crate::freyr::{vm::instructions::AddressJumpAddressSource, asm::assembler::FreyrProgram};
 
 use super::{
     instructions::{
@@ -73,9 +73,9 @@ pub fn stacked_binop_arith<T>(
     [(); std::mem::size_of::<T>()]:,
 {
     reg.sp -= std::mem::size_of::<T>() as u32;
-    let rhs = memory.native_read::<T>(reg.sp);
-    reg.sp -= std::mem::size_of::<T>() as u32;
     let lhs = memory.native_read::<T>(reg.sp);
+    reg.sp -= std::mem::size_of::<T>() as u32;
+    let rhs = memory.native_read::<T>(reg.sp);
 
     let bytes = match operation {
         ArithmeticOperation::Sum => (lhs + rhs).to_bytes(),
@@ -127,9 +127,9 @@ pub fn stacked_binop_compare<T>(
     [(); std::mem::size_of::<T>()]:,
 {
     reg.sp -= std::mem::size_of::<T>() as u32;
-    let rhs = memory.native_read::<T>(reg.sp);
-    reg.sp -= std::mem::size_of::<T>() as u32;
     let lhs = memory.native_read::<T>(reg.sp);
+    reg.sp -= std::mem::size_of::<T>() as u32;
+    let rhs = memory.native_read::<T>(reg.sp);
 
     let result = match operation {
         CompareOperation::Equals => lhs == rhs,
@@ -324,9 +324,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
         }
         Instruction::Call { source, offset } => execute_call(*source, reg, *offset, memory),
         Instruction::Return => {
-            reg.sp -= std::mem::size_of::<u32>() as u32;
-            let popped = memory.native_read::<u32>(reg.sp);
-            reg.ip = popped as usize;
+            execute_return(reg, memory);
         }
         Instruction::JumpIfZero {
             source: AddressJumpAddressSource::FromOperand,
@@ -394,12 +392,17 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             let offset = memory.native_read::<u32>(reg.sp);
             reg.ip = offset as usize;
         }
-        Instruction::Exit => return true,
         /*_ => {
             panic!("Tried to execute unknown instruction {:?}", inst);
         }*/
     }
     false
+}
+
+fn execute_return(reg: &mut ControlRegisterValues, memory: &mut Memory) {
+    reg.sp -= std::mem::size_of::<u32>() as u32;
+    let popped = memory.native_read::<u32>(reg.sp);
+    reg.ip = popped as usize;
 }
 
 fn execute_call(source: AddressJumpAddressSource, reg: &mut ControlRegisterValues, offset: u32, memory: &mut Memory) {
@@ -734,22 +737,36 @@ fn execute_push_imm(
 }
 
 #[allow(dead_code)] //sometimes useful in debugging
-pub fn print_stack(memory: &mut Memory) {
-    let (read, ..) = memory.read(memory.stack_start, 4 * 50);
+pub fn print_stack(memory: &Memory, registers: &ControlRegisterValues) {
+    let stack_position = registers.sp - memory.stack_start;
+    let (read, ..) = memory.read(memory.stack_start, 4 * 25);
     let (by_u32, _) = read.as_chunks::<4>();
 
     print!("Current stack: ");
-    for chunk in by_u32 {
+    let stack_mark = stack_position as usize / 4;
+
+    for (cell, chunk) in by_u32.iter().enumerate() {
         let as_u32 = u32::from_le_bytes(*chunk);
-        print!("{as_u32}, ");
+        if cell < stack_mark {
+            print!("*{as_u32} ");
+        } else {
+            print!("{as_u32} ");
+        }
+
     }
+
+   // print!("\n{}",  " ".repeat(i32_cell));
+   // print!("^\n");
+
     println!();
 }
 
 pub fn prepare_vm() -> (Memory, ControlRegisterValues) {
     let mut mem = Memory::new();
     mem.make_ready();
+    //writes the return BP, can be 0
     mem.write(mem.stack_start, &0u32.to_le_bytes());
+    //writes the return IP, max IP, return will pop this value and immediately terminate the program
     mem.write(mem.stack_start + 4, &u32::MAX.to_le_bytes());
 
     let registers = ControlRegisterValues {
@@ -760,23 +777,25 @@ pub fn prepare_vm() -> (Memory, ControlRegisterValues) {
     (mem, registers)
 }
 
-pub fn run(code: &[Instruction], memory: &mut Memory, registers: &mut ControlRegisterValues) {
+pub fn run(code: &FreyrProgram, memory: &mut Memory, registers: &mut ControlRegisterValues) {
+    registers.ip = code.entry_point;
+    let code_len = code.instructions.len();
     loop {
-        let inst = &code[registers.ip];
+        let inst = &code.instructions[registers.ip];
 
-        /*println!(
+       println!(
             "Executing instruction {inst:?} ip = {ip} sp = {sp} bp = {bp}",
             ip = registers.ip,
             sp = registers.sp,
             bp = registers.bp
         );
-        print_stack(memory);
-        */
+        
         if execute(inst, memory, registers) {
             break;
         }
-
-        if registers.ip >= code.len() {
+        print_stack(memory, &registers);
+        
+        if registers.ip >= code_len {
             break;
         }
     }
@@ -789,32 +808,22 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::freyr::{
-        asm::assembler::{as_freyr_instructions, parse_asm, resolve},
-        vm::{instructions::Instruction, memory::Memory, runner::execute},
+        asm::assembler::{as_freyr_program, parse_asm, resolve, FreyrProgram},
+        vm::{memory::Memory, runner::{execute, print_stack}},
     };
 
-    use super::{run, ControlRegisterValues};
+    use super::{run, ControlRegisterValues, prepare_vm};
 
-    fn assemble(code: &str) -> Vec<Instruction> {
+    fn assemble(code: &str) -> FreyrProgram {
         let parsed = parse_asm(code);
-        as_freyr_instructions(&resolve(&parsed))
-    }
-
-    fn prepare_vm() -> (Memory, ControlRegisterValues) {
-        let mut mem = Memory::new();
-        mem.make_ready();
-        mem.write(mem.stack_start, &[0]);
-        let registers = ControlRegisterValues {
-            ip: 0,
-            sp: mem.stack_start,
-            bp: mem.stack_start,
-        };
-        (mem, registers)
+        let resolved = resolve(&parsed); 
+        as_freyr_program(&resolved)
     }
 
     fn run_code(code: &str) -> (Memory, ControlRegisterValues) {
         let assembled = assemble(code);
         let (mut mem, mut registers) = prepare_vm();
+        print_stack(&mem, &registers);
         run(&assembled, &mut mem, &mut registers);
         (mem, registers)
     }
@@ -826,7 +835,7 @@ mod tests {
         push_imm32 20
 ";
         let (mem, reg) = run_code(code);
-        let stack_pop = mem.native_read::<i32>(reg.sp - 4);
+        let stack_pop = mem.native_read::<i32>(reg.bp);
         assert_eq!(stack_pop, 20);
     }
 
@@ -840,52 +849,40 @@ mod tests {
 ";
 
         let (mem, reg) = run_code(code);
-        let stack_pop = mem.native_read::<i32>(reg.sp - 4);
+        let stack_pop = mem.native_read::<i32>(reg.bp);
+        print_stack(&mem, &reg);
         assert_eq!(stack_pop, 45);
     }
 
     #[test]
     fn simple_code_example() {
-        /*
-            #this is the assembly for the following code:
-            def half(num: i32)->i32:
-                return num / 2
-
-            def main():
-                x : i32 = 15
-                y : i32 = half(x)
-
-
-            stack before entering half:     [x, return space, x (arg), bp, ip]
-            stack right after leaving half: [x, return space]
-        */
-
         let code = "
-    main:
-        stackoffset     8           ; reserve space for variables x, y (4 bytes each, so 8 bytes)
-        push_imm32      15          ; pushes to stack at byte 8 .. 12 value 15
-        storeaddr_rel32 bp+0        ; stores x = 15
-        push_imm32      0           ; reserve space for <half> function return
-        loadaddr_rel32  bp+0        ; load arg x
-        push_reg        bp          ; save bp
-        call half                   ; call, set bp = sp, ip on stack, return will pop ip
-        pop_reg         bp          ; restore bp      
-        pop32                       ; pop arg
-        storeaddr_rel32 bp+4        ; sets return of half to y
-        exit
-    half:
-        loadaddr_rel32  bp-12       ; loads from arg x into num
-        stackoffset     4           ; reserves space for variables, in this case num is already loaded by prev instruction
-        loadaddr_rel32  bp+0        ; loads from num
-        divs_imm32      2           ; divides by 2
-        storeaddr_rel32 bp-16       ; stores in reserved return space
-        stackoffset     0           ; clear function stack
-        return                      ; 
+FUNC_half:
+    loadaddr_rel            bp-12
+    stackoffset             4
+    push_imm                2
+    loadaddr_rel            bp+0
+    divs
+    storeaddr_rel           bp-16
+    stackoffset             0
+    return
+FUNC_main:
+    stackoffset             8
+    push_imm                15
+    storeaddr_rel           bp+0
+    stackoffset             16
+    loadaddr_rel            bp+0
+    push_reg                bp
+    call                    FUNC_half
+    pop_reg                 bp
+    stackoffset             16
+    storeaddr_rel           bp+4
+    stackoffset             0
+    return
 ";
         let (mem, reg) = run_code(code);
-        let stack_pop = mem.native_read::<i32>(reg.bp + 8);
+        let stack_pop = mem.native_read::<i32>(reg.bp + 4);
         assert_eq!(stack_pop, 7);
-        assert_eq!(reg.sp, reg.bp + 8);
     }
 
     #[test]
@@ -916,7 +913,7 @@ mod tests {
         loadaddr_rel32  bp+4    ; loads y sp = 24
         sums32                  ; sums result + y sp = 20
         storeaddr_rel32 bp+12   ; stores at result, sp = 16
-        exit
+        return
     some_function:
         loadaddr_rel32  bp-16       ;
         loadaddr_rel32  bp-12       ;
@@ -948,7 +945,7 @@ mod tests {
         let (mem, reg) = run_code(code);
         let stack_pop = mem.native_read::<i32>(reg.bp + 12);
         assert_eq!(stack_pop, 440);
-        assert_eq!(reg.sp, reg.bp + 16);
+        //assert_eq!(reg.sp, reg.bp + 16);
     }
 
     #[test]
@@ -961,7 +958,7 @@ mod tests {
         let (mut memory, mut registers) = prepare_vm();
 
         for _ in 0..50 {
-            let inst = &assembled[registers.ip];
+            let inst = &assembled.instructions[registers.ip];
             execute(inst, &mut memory, &mut registers);
         }
         assert_eq!(registers.ip, 0);
@@ -977,14 +974,15 @@ mod tests {
 ";
         let assembled = assemble(code);
         let (mut memory, mut registers) = prepare_vm();
-
+        let beginning_sp = registers.sp;
         for _ in 0..(3 * 10) {
             //execute the entire loop 10 times
-            let inst = &assembled[registers.ip];
+            let inst = &assembled.instructions[registers.ip];
             execute(inst, &mut memory, &mut registers);
+            print_stack(&memory, &registers);
         }
-        assert_eq!(registers.ip, 0); //gets back to sp = 0 at the end of execution
-        assert_eq!(registers.sp, memory.stack_start); //even pushes and pops result in not moving the stack ptr
+        assert_eq!(registers.ip, 0); //gets back to ip = 0 at the end of execution
+        assert_eq!(registers.sp, beginning_sp); //even pushes and pops result in not moving the stack ptr
     }
 
     #[test]
@@ -1001,11 +999,11 @@ mod tests {
         storeaddr_rel32 bp+0        ; x = 1
         jmp             loop_start  ; repeat loop
     loop_end:
-        exit
+        return
 ";
         let (mem, reg) = run_code(code);
         let x: u32 = mem.native_read(reg.bp);
         assert_eq!(x, 10); //even pushes and pops result in not moving the stack ptr
-        assert_eq!(reg.ip, 8);
+        assert_eq!(reg.ip, 10);
     }
 }

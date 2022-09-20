@@ -37,8 +37,7 @@ fn build_write_scope_byte_layout(
         let scope = &all_scopes[current_index];
 
         for var in &scope.boundnames {
-            let type_record = type_db.find(var.typename.expect_simple());
-            found_var.push((var.name.clone(), type_record.size));
+            found_var.push((var.name.clone(), var.typename.size(type_db)));
         }
 
         current_index = scope.inherit.0;
@@ -114,7 +113,7 @@ fn generate_trivial_expr(
     scope: &HashMap<String, ByteRange>,
 ) -> u32 {
     let trivial_type = expression.1.expect_resolved();
-    let size = type_db.find(trivial_type.expect_simple()).size as u8;
+    let size = trivial_type.size(type_db) as u8;
     match &expression.0 {
         TrivialHIRExpr::IntegerValue(v) => {
             if size == 4 {
@@ -133,7 +132,7 @@ fn generate_trivial_expr(
                     });
                 } else {
                     bytecode.push(AssemblyInstruction::PushImmediate {
-                        bytes: type_db.find(trivial_type.expect_simple()).size as u8,
+                        bytes: trivial_type.size(type_db) as u8,
                         shift_size: 16,
                         immediate: upper,
                     });
@@ -299,10 +298,11 @@ fn generate_expr(
 
 fn generate_function_call_code(type_db: &TypeDatabase, return_type: &crate::semantic::hir::HIRTypeDef, offset_from_bp: u32, bytecode: &mut Vec<AssemblyInstruction>, args: &[TypedTrivialHIRExpr], scope: &HashMap<String, ByteRange>, function_expr: &TypedTrivialHIRExpr) -> ExprGenerated {
     //push to stack some space for the return value of the function
-    let return_type = type_db.find(return_type.expect_resolved().expect_simple());
-    let mut offset_from_bp_arg = offset_from_bp + return_type.size as u32;
+    let resolved_return_type = return_type.expect_resolved();
+    let return_size = resolved_return_type.size(type_db);
+    let mut offset_from_bp_arg = offset_from_bp + return_size as u32;
     bytecode.push(AssemblyInstruction::StackOffset {
-        bytes: offset_from_bp_arg + offset_from_bp_arg,
+        bytes: offset_from_bp_arg,
     });
     //load all args
     let mut args_size: u32 = 0;
@@ -388,8 +388,8 @@ fn generate_function_call_code(type_db: &TypeDatabase, return_type: &crate::sema
     });
     //@TODO allow generic type function returns here
     ExprGenerated {
-        pushed_size: return_type.size as u32,
-        offset_from_bp: offset_from_bp + return_type.size as u32,
+        pushed_size: return_size as u32,
+        offset_from_bp: offset_from_bp +return_size as u32,
     }
 }
 
@@ -398,6 +398,7 @@ fn generate_compare_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIREx
     generate_trivial_expr(type_db, lhs, bytecode, scope);
     //since both expr are the same type, we take the lhs type size and sign
     let lhs_type = lhs.1.expect_resolved();
+    let lhs_size = lhs_type.size(type_db);
     let type_db_record = type_db.find(lhs_type.expect_simple());
     println!("Comparison of types {}", type_db_record.name);
     let compare_op = match op {
@@ -415,7 +416,7 @@ fn generate_compare_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIREx
     };
     if type_db_record.is_integer(type_db) {
         bytecode.push(AssemblyInstruction::IntegerCompareBinaryOperation {
-            bytes: type_db_record.size as u8,
+            bytes: lhs_size as u8,
             operation: compare_op,
             sign: sign_flag,
             immediate: None,
@@ -428,7 +429,7 @@ fn generate_compare_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIREx
         )
     }
     let boolean_type = type_db.find(type_db.special_types.bool.expect_simple());
-    let pushed_size = boolean_type.size as u32;
+    let pushed_size = boolean_type.rep_size.unwrap() as u32;
     ExprGenerated {
         pushed_size,
         offset_from_bp: offset_from_bp + pushed_size,
@@ -453,7 +454,7 @@ fn generate_bitwise_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIREx
     };
     if type_db_record.is_integer(type_db) {
         bytecode.push(AssemblyInstruction::IntegerBitwiseBinaryOperation {
-            bytes: type_db_record.size as u8,
+            bytes: lhs_type.size(type_db) as u8,
             operation: bitwise_op,
             sign: sign_flag,
             immediate: None,
@@ -463,7 +464,7 @@ fn generate_bitwise_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIREx
             "Could not generate binary arithmetic operation, type is not integer or float"
         )
     }
-    let pushed_size = type_db_record.size as u32;
+    let pushed_size = lhs_type.size(type_db) as u32;
     ExprGenerated {
         pushed_size,
         offset_from_bp: offset_from_bp + pushed_size,
@@ -475,6 +476,7 @@ fn generate_arith_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIRExpr
     generate_trivial_expr(type_db, lhs, bytecode, scope);
     //since both expr are the same type, we take the lhs type size and sign
     let lhs_type = lhs.1.expect_resolved();
+    let lhs_size = lhs_type.size(type_db);
     let type_db_record = type_db.find(lhs_type.expect_simple());
     let arith_op = match op {
         Operator::Plus => AsmArithmeticBinaryOp::Sum,
@@ -490,7 +492,7 @@ fn generate_arith_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIRExpr
     };
     if type_db_record.is_integer(type_db) {
         bytecode.push(AssemblyInstruction::IntegerArithmeticBinaryOperation {
-            bytes: type_db_record.size as u8,
+            bytes: lhs_size as u8,
             operation: arith_op,
             sign: sign_flag,
             immediate: None,
@@ -502,7 +504,7 @@ fn generate_arith_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIRExpr
             "Could not generate binary arithmetic operation, type is not integer or float"
         )
     }
-    let pushed_size = type_db_record.size as u32;
+    let pushed_size = lhs_size as u32;
     ExprGenerated {
         pushed_size,
         offset_from_bp: offset_from_bp + pushed_size,
@@ -511,7 +513,7 @@ fn generate_arith_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIRExpr
 
 fn generate_decl_function(
     name: &str,
-    _parameters: &[MIRTypedBoundName],
+    parameters: &[MIRTypedBoundName],
     body: &[MIRBlock],
     scopes: &[MIRScope],
     _return_type: &TypeInstance,
@@ -523,7 +525,18 @@ fn generate_decl_function(
         label: function_label,
     });
 
-    let mut offset_from_bp = 0u32;
+
+    //generate load parameters
+    let mut args_stack_offset = -8 as isize;
+    for param in parameters {
+        let type_size = param.typename.size(type_db);
+        let position = args_stack_offset - (type_size as isize);
+        bytecode.push(AssemblyInstruction::LoadAddress { 
+            bytes: type_size as u8, 
+            mode: AsmLoadStoreMode::Relative { offset: position as i32 }
+        });
+        args_stack_offset = position;
+    }
 
     let scope_byte_layout = scopes
         .iter()
@@ -540,11 +553,12 @@ fn generate_decl_function(
             largest_scope = sum;
         }
     }
-    println!("Largest scope is {largest_scope}");
+    
     bytecode.push(AssemblyInstruction::StackOffset {
         bytes: largest_scope,
     });
-    offset_from_bp += largest_scope;
+
+    let mut offset_from_bp  = largest_scope;
 
     //find the blocks that genuinely participate in some interesting control flow stuff
     let mut target_blocks = HashSet::new();
@@ -566,11 +580,12 @@ fn generate_decl_function(
     }
 
     for block in body {
-        generate_function_decl_block(&scope_byte_layout, block, &target_blocks, bytecode, type_db, &mut offset_from_bp);
+        generate_function_decl_block(&parameters, &scope_byte_layout, block, &target_blocks, bytecode, type_db, &mut offset_from_bp);
     }
 }
 
 fn generate_function_decl_block(
+    parameters: &[MIRTypedBoundName],
     scope_byte_layout: &[HashMap<String, ByteRange>], 
     block: &MIRBlock, 
     target_blocks: &HashSet<BlockId>, 
@@ -588,7 +603,6 @@ fn generate_function_decl_block(
                 path, expression, ..
             } if path.len() == 1 => {
                 let var_name = path.first().unwrap();
-                println!("storing var {}", var_name);
                 let range = scope.get(var_name).unwrap();
                 let size = generate_expr(type_db, expression, bytecode, scope, *offset_from_bp);
                 *offset_from_bp = size.offset_from_bp;
@@ -609,6 +623,12 @@ fn generate_function_decl_block(
             } => todo!("Function calls not implemented"),
         }
     }
+    generate_func_block_finish(parameters, block, type_db, bytecode, scope, offset_from_bp);
+}
+
+fn generate_func_block_finish(
+    parameters: &[MIRTypedBoundName],
+    block: &MIRBlock, type_db: &TypeDatabase, bytecode: &mut Vec<AssemblyInstruction>, scope: &HashMap<String, ByteRange>, offset_from_bp: &mut u32) {
     match &block.finish {
         MIRBlockFinal::If(true_expr, true_branch, false_branch, ..) => {
             let hirexpr = HIRExpr::Trivial(true_expr.clone(), None);
@@ -634,11 +654,17 @@ fn generate_function_decl_block(
             let generated_expr = generate_expr(type_db, expr, bytecode, scope, *offset_from_bp);
             *offset_from_bp = generated_expr.offset_from_bp;
 
+            let mut args_size = 0i32;
+
+            for param in parameters {
+                args_size += param.typename.size(type_db) as i32;
+            }
+         
             //destroy stack
             bytecode.push(AssemblyInstruction::StoreAddress {
                 bytes: generated_expr.pushed_size as u8,
                 mode: AsmLoadStoreMode::Relative {
-                    offset: -8 - generated_expr.pushed_size as i32,
+                    offset: -8 - args_size - generated_expr.pushed_size as i32,
                 }, //-8 - 4 for i32 would result in -12
             });
             bytecode.push(AssemblyInstruction::StackOffset { bytes: 0 });
@@ -697,8 +723,7 @@ mod test {
         compiler::freyr_gen::generate_freyr,
         freyr::{
             asm::{
-                asm_printer,
-                assembler::{as_freyr_instructions, resolve},
+                assembler::{as_freyr_program, resolve}, asm_printer,
             },
             vm::{
                 memory::Memory,
@@ -707,7 +732,6 @@ mod test {
         },
         semantic::{
             mir::{hir_to_mir, MIRTopLevelNode},
-            mir_printer,
             type_checker::check_type,
         },
         types::{type_db::TypeDatabase, type_errors::TypeErrors},
@@ -729,7 +753,7 @@ mod test {
         let ast = AST::Root(parser.parse_ast());
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         let mir = hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db);
-        println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
+        //println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
         let errors = check_type(&mir, &analysis_result.type_db, &analysis_result.globals);
         TestContext {
             mir,
@@ -748,8 +772,7 @@ mod test {
         asm_printer::print(&generated_asm);
 
         let resolved = resolve(&generated_asm);
-
-        let as_instructions = as_freyr_instructions(&resolved);
+        let as_instructions = as_freyr_program(&resolved);
 
         let (mut memory, mut registers) = runner::prepare_vm();
 
@@ -792,6 +815,7 @@ def main():
         assert_eq!(result_value, 15);
     }
 
+
     #[test]
     fn function_call_test() {
         let src = "
@@ -799,13 +823,11 @@ def half(x: i32) -> i32:
     return x / 2
 
 def main():
-    x : i32 = 15
+    x : i32 = 99
     result : i32 = half(x)
 ";
-
         let (memory, registers) = run_test(src);
-
-        let result_value = memory.native_read::<i32>(registers.bp + 4);
-        assert_eq!(result_value, 15);
+        let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
+        assert_eq!(result_value, 49);
     }
 }

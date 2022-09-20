@@ -120,6 +120,5 @@ pub enum AssemblyInstruction {
         offset: u32,
     },
     JumpFromStack,
-    Exit,
     Return,
 }

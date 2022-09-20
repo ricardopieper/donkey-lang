@@ -15,7 +15,7 @@ mod types;
 use crate::ast::lexer;
 use crate::ast::parser;
 use crate::compiler::freyr_gen::generate_freyr;
-use crate::freyr::asm::assembler::as_freyr_instructions;
+use crate::freyr::asm::assembler::as_freyr_program;
 use crate::freyr::asm::assembler::resolve;
 use crate::semantic::hir_printer::print_hir;
 use std::env;
@@ -39,7 +39,7 @@ use crate::semantic::type_checker::check_type;
 use crate::types::type_errors::TypeErrorPrinter;
 
 use freyr::asm::asm_instructions::AssemblyInstruction;
-use freyr::vm::instructions::Instruction;
+use freyr::asm::assembler::FreyrProgram;
 use tracy_client::frame_name;
 use tracy_client::Client;
 
@@ -91,7 +91,7 @@ fn main() {
             .unwrap_or_else(|_| panic!("Could not read file {}", args[2]));
         let parsed = crate::freyr::asm::assembler::parse_asm(input.as_str());
         let resolved = crate::freyr::asm::assembler::resolve(&parsed);
-        let vm_instructions = crate::freyr::asm::assembler::as_freyr_instructions(&resolved);
+        let program = crate::freyr::asm::assembler::as_freyr_program(&resolved);
 
         let out_file = if args.len() <= 3 {
             "out"
@@ -99,7 +99,7 @@ fn main() {
             args[3].as_str()
         };
 
-        write_instructions(out_file, vm_instructions);
+        write_program(out_file, &program);
 
         {
             let instruction_layout = LayoutHelper::new();
@@ -122,7 +122,7 @@ fn main() {
     if args[1] == "compile" {
         let generated_asm = compile(&args[2]);
         let resolved = resolve(&generated_asm);
-        let as_instructions = as_freyr_instructions(&resolved);
+        let program = as_freyr_program(&resolved);
 
         let out_file = if args.len() <= 3 {
             "out"
@@ -130,23 +130,24 @@ fn main() {
             args[3].as_str()
         };
 
-        write_instructions(out_file, as_instructions);
+        write_program(out_file, &program);
     }
     else {
         let generated_asm = compile(&args[1]);
         let resolved = resolve(&generated_asm);
-        let as_instructions = as_freyr_instructions(&resolved);
+        let program = as_freyr_program(&resolved);
        
         let (mut memory, mut registers) = runner::prepare_vm();
 
-        runner::run(&as_instructions, &mut memory, &mut registers);
+        runner::run(&program, &mut memory, &mut registers);
     }
 }
 
-fn write_instructions(out_file: &str, vm_instructions: Vec<Instruction>) {
+fn write_program(out_file: &str, program: &FreyrProgram) {
     let mut file = File::create(out_file).unwrap();
     let instruction_layout = LayoutHelper::new();
-    for ins in vm_instructions {
+    file.write_all(&(program.entry_point as u32).to_le_bytes()).unwrap();
+    for ins in program.instructions.iter() {
         let encoded = instruction_layout.encode_instruction(&ins);
         let bytes = encoded.to_le_bytes();
         file.write_all(&bytes).unwrap();

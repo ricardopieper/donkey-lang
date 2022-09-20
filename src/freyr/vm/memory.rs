@@ -207,7 +207,7 @@ impl Memory {
 
     fn read_normal(&self, address: u32, len: u32) -> (&[u8], bool, u32, u32) {
         let page = self.get_page(address).as_ref();
-        assert!(page.is_some(), "Read from unallocated page");
+        assert!(page.is_some(), "Read from unallocated page {address}");
         let index = (address & 0x0000_ffff) as usize;
 
         (

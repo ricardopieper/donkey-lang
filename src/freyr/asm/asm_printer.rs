@@ -29,10 +29,10 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                     AsmLoadStoreMode::StackPop => print!("{bytes}"),
                     AsmLoadStoreMode::Relative { offset } => {
                         print!("_rel{bytes_str}{ops_indent}");
-                        if *offset > 0 {
+                        if *offset >= 0 {
                             println!("bp+{offset}");
                         } else {
-                            println!("bp-{offset}");
+                            println!("bp{offset}");
                         }
                     }
                     AsmLoadStoreMode::Immediate { absolute_address } => {
@@ -55,10 +55,10 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                     AsmLoadStoreMode::StackPop => print!("{bytes}"),
                     AsmLoadStoreMode::Relative { offset } => {
                         print!("_rel{bytes_str}{ops_indent}");
-                        if *offset > 0 {
+                        if *offset >= 0 {
                             println!("bp+{offset}");
                         } else {
-                            println!("bp-{offset}");
+                            println!("bp{offset}");
                         }
                     }
                     AsmLoadStoreMode::Immediate { absolute_address } => {
@@ -252,7 +252,6 @@ pub fn print(instructions: &[AssemblyInstruction]) {
             AssemblyInstruction::JumpFromStack => {
                 println!("jmp_stack");
             }
-            AssemblyInstruction::Exit => println!("exit"),
             AssemblyInstruction::Return => println!("return"),
         }
     }

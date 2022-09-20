@@ -1,5 +1,5 @@
 [package]
-name = "pony"
+name = "donkey-lang"
 version = "0.1.0"
 authors = ["Ricardo Pieper <ricardopieper@live.com>"]
 edition = "2021"
@@ -14,7 +14,7 @@ time-test = "0.2.3"
 tracy-client = "0.13.2"
 
 [dev-dependencies]
-pretty_assertions = "1.1.0"
+pretty_assertions = "1.3.0"
 
 [profile.release]
 debug = true

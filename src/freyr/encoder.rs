@@ -381,7 +381,6 @@ impl LayoutHelper {
                 .encode("source", u32::from(source.get_bit_pattern()))
                 .encode("offset", *offset)
                 .make(),
-            Instruction::Exit => self.begin_encode("exit").make(),
             Instruction::Return => self.begin_encode("return").make(),
         }
     }

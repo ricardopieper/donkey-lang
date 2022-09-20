@@ -139,7 +139,7 @@ Some values stored in the stack are reused, so we cannot pop them
 
 Calling convention:
 1 - push argument values to the stack before calling function
-2 - call operator stores the return address in the stack as: address of the call operator + 4 bytes
+2 - call operation stores the return address in the stack as: ${address of the call operator + 4 bytes}
 3 - values on the stack after a function call is considered the result
 
 
@@ -158,9 +158,9 @@ Return:
     jumps to that ip
 
 When a call is made, the stack looks like: 
-    - function return value (reserved) (pushed by the function itself)
-    - function arguments (pushed by the function itself)
-    - return bp (pushed by the function itself)
+    - function return value (reserved) (pushed by the caller itself)
+    - function arguments (pushed by the caller itself)
+    - return bp (pushed by the caller itself)
     - return ip (pushed by the call instruction)
 
 When a function gets called:
@@ -856,20 +856,6 @@ jmp #{label}
       0 = offset from operand
       1 = offset popped from stack
     operand: instruction offset (max 26 bits, can address 128mb of code)
-
-
-
-EXIT
-
-Finishes the program immediately.
-
-
-Syntax:
-exit
-
-{opr}{n}       1   0   0   1   1  ...
-              | opr              | unused              
-
 
 
 SPECIAL

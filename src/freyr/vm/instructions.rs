@@ -403,7 +403,6 @@ pub enum Instruction {
         source: AddressJumpAddressSource,
         offset: u32,
     },
-    Exit,
     Return,
 }
 
@@ -811,10 +810,6 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
         part!(26 bits, "offset", "instruction offset")
     ));
 
-    table.add(layout!(
-        0b10010 "exit",
-        unused!(27 bits)
-    ));
 
     validate_instruction_sizes(&table);
 

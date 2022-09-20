@@ -2,7 +2,7 @@ use crate::semantic::hir::{
     HIRExpr, HIRType, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, TypedTrivialHIRExpr, HIR,
 };
 use crate::semantic::name_registry::NameRegistry;
-use crate::types::type_db::{Type, TypeDatabase, TypeId, TypeInstance};
+use crate::types::type_db::{TypeConstructor, TypeDatabase, TypeId, TypeInstance};
 use crate::types::type_errors::{
     BinaryOperatorNotFound, CallToNonCallableType, FieldOrMethodNotFound,
     InsufficientTypeInformationForArray, TypeErrors, TypeNotFound, UnaryOperatorNotFound,
@@ -18,11 +18,11 @@ pub fn instantiate_type(
     typedef: &HIRType,
     errors: &mut TypeErrors,
 ) -> Option<TypeInstance> {
-    fn type_to_instance(type_data: &Type, typedef: &HIRType) -> TypeInstance {
+    fn type_to_instance(type_data: &TypeConstructor, typedef: &HIRType) -> TypeInstance {
         match type_data {
-            Type::Simple(Either::Right(id)) => TypeInstance::Simple(*id),
-            Type::Simple(Either::Left(generic)) => panic!("as_type() method shouldn't return a generic parameter {}", generic.0),
-            Type::Generic(_, _) => panic!("Type in MIR is {:?} but type is generic {:?}, bug in the compiler or code is just wrong?", typedef, type_data),
+            TypeConstructor::Simple(Either::Right(id)) => TypeInstance::Simple(*id),
+            TypeConstructor::Simple(Either::Left(generic)) => panic!("as_type() method shouldn't return a generic parameter {}", generic.0),
+            TypeConstructor::Generic(_, _) => panic!("Type in MIR is {:?} but type is generic {:?}, bug in the compiler or code is just wrong?", typedef, type_data),
             //Type::Function(_, _) => panic!("Function types shouldn't be recorded in the database, either this is a bug, or this decision was revised and needs adjusting. {:?}", type_data),
         }
     }
@@ -116,7 +116,7 @@ impl<'a> TypeResolution<'a> {
 }
 
 fn resolve_type<'a>(
-    type_partially_filled: &Type,
+    type_partially_filled: &TypeConstructor,
     type_db: &TypeDatabase,
     type_resolution: &TypeResolution<'a>,
 ) -> TypeInstance {
@@ -128,8 +128,8 @@ fn resolve_type<'a>(
     */
 
     let type_instance: TypeInstance = match type_partially_filled {
-        Type::Simple(Either::Right(type_id)) => TypeInstance::Simple(*type_id),
-        Type::Simple(Either::Left(gen_param)) => {
+        TypeConstructor::Simple(Either::Right(type_id)) => TypeInstance::Simple(*type_id),
+        TypeConstructor::Simple(Either::Left(gen_param)) => {
             /*
             Finally we have gen_param, which will have a type called TItem.
             It's a generic parameter, and we can't look it up in the type database.
@@ -193,7 +193,7 @@ fn resolve_type<'a>(
                 .unwrap()
                 .clone();
         }
-        Type::Generic(type_id, type_args) => {
+        TypeConstructor::Generic(type_id, type_args) => {
             let all_args_resolved = type_args
                 .iter()
                 .map(|type_arg| {

@@ -82,8 +82,26 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
             let arg = splitted[1].parse().unwrap();
             AssemblyInstruction::StackOffset { bytes: arg }
         }
-        ["push", "imm", size] => {
-            let bytes = size.parse::<u8>().unwrap() / 8;
+        ["push", "reg"] => {
+            let register = match splitted[1].as_str() {
+                "bp" => AsmControlRegister::Base,
+                "ip" => AsmControlRegister::Instruction,
+                "sp" => AsmControlRegister::Stack,
+                _ => panic!(
+                    "control register not found, invalid instruction: {splitted:?} at line {line}"
+                ),
+            };
+
+            AssemblyInstruction::PushRegister { register }
+        }
+        ["push", rest @ ..] => {
+
+            let bytes = match rest {
+                ["imm"] => 4,
+                ["imm", size] => size.parse::<u8>().unwrap() / 8,
+                _ => panic!("Unrecognized push instruction {rest:?}")
+            };
+
             let immediate: u16 = splitted[1].parse().unwrap();
             let left_shift = splitted.len() > 2 && splitted[2].contains("<<");
 
@@ -98,11 +116,19 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                 immediate: immediate.to_le_bytes(),
                 shift_size,
             }
-        }
+        },
         ["storeaddr", rest @ ..] => {
             let (bytes, lsm) = match rest {
                 ["rel", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
+                    assert!(splitted[1].contains("bp"), "Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
+                    assert!(!(!splitted[1].contains('+') && !splitted[1].contains('-')), "Please say whether the offset in storeaddr is positive or negative at line {line}");
+                    let remove_bp = splitted[1].replace("bp", "");
+                    let offset = remove_bp.parse().unwrap();
+                    (bytes, AsmLoadStoreMode::Relative { offset })
+                }
+                ["rel"] => {
+                    let bytes = 4;
                     assert!(splitted[1].contains("bp"), "Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
                     assert!(!(!splitted[1].contains('+') && !splitted[1].contains('-')), "Please say whether the offset in storeaddr is positive or negative at line {line}");
                     let remove_bp = splitted[1].replace("bp", "");
@@ -139,6 +165,14 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     let offset = remove_bp.parse().unwrap();
                     (bytes, AsmLoadStoreMode::Relative { offset })
                 }
+                ["rel"] => {
+                    let bytes = 4u8;
+                    assert!(splitted[1].contains("bp"), "Please say BP in the offset for storeaddr to make it clear where you're storing data at line {line}");
+                    assert!(!(!splitted[1].contains('+') && !splitted[1].contains('-')), "Please say whether the offset in storeaddr is positive or negative at line {line}");
+                    let remove_bp = splitted[1].replace("bp", "");
+                    let offset = remove_bp.parse().unwrap();
+                    (bytes, AsmLoadStoreMode::Relative { offset })
+                }
                 ["imm", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     let address = splitted[1].parse::<u32>().unwrap();
@@ -169,6 +203,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     (Some(imm_2bytes), bytes)
                 }
                 [size] => (None, size.parse::<u8>().unwrap() / 8),
+                [] => (None, 4),
                 _ => panic!("Failed to parse instruction: {mnems_str:?}"),
             };
 
@@ -202,7 +237,8 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     let imm_2bytes: [u8; 2] = immediate.try_into().unwrap();
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     (Some(imm_2bytes), bytes)
-                }
+                },
+                [] => (None, 4),
                 [size] => (None, size.parse::<u8>().unwrap() / 8),
                 _ => panic!("Failed to parse instruction: {mnems_str:?}"),
             };
@@ -238,18 +274,6 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
 
             AssemblyInstruction::PopRegister { register }
         }
-        ["push", "reg"] => {
-            let register = match splitted[1].as_str() {
-                "bp" => AsmControlRegister::Base,
-                "ip" => AsmControlRegister::Instruction,
-                "sp" => AsmControlRegister::Stack,
-                _ => panic!(
-                    "control register not found, invalid instruction: {splitted:?} at line {line}"
-                ),
-            };
-
-            AssemblyInstruction::PushRegister { register }
-        }
         ["pop", size] => {
             let bytes = size.parse::<u8>().unwrap() / 8;
             AssemblyInstruction::PopBytes { bytes }
@@ -270,7 +294,6 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
             label: Some(splitted[1].to_string()),
         },
         ["jmp", "stack"] => AssemblyInstruction::UnresolvedJump { label: None },
-        ["exit"] => AssemblyInstruction::Exit,
         ["return"] => AssemblyInstruction::Return,
         _ => {
             panic!("Freyr assembly instruction not recognized at line {line}: {mnems_str:?}")
@@ -319,7 +342,12 @@ pub fn parse_asm(asm: &str) -> Vec<AssemblyInstruction> {
     parsed.flatten().collect()
 }
 
-pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction> {
+pub struct AsmProgram {
+    pub instructions: Vec<AssemblyInstruction>,
+    pub symbol_table: std::collections::HashMap::<String, u32>
+}
+
+pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
     let mut label_offsets = std::collections::HashMap::<String, u32>::new();
     let mut resolved_instructions = vec![];
 
@@ -334,6 +362,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
             }
         }
     }
+   
     //now we know where labels point to
     for instruction in instructions {
         match instruction {
@@ -390,7 +419,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> Vec<AssemblyInstruction>
         }
     }
 
-    resolved_instructions
+    AsmProgram { instructions: resolved_instructions, symbol_table: label_offsets }
 }
 
 fn load_store(ls: AsmLoadStoreMode) -> (LoadStoreAddressingMode, u32) {
@@ -476,9 +505,16 @@ fn control_register(sign: AsmControlRegister) -> ControlRegister {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreyrProgram { 
+    pub instructions: Vec<Instruction>,
+    pub entry_point: usize
+}
+
 #[allow(clippy::too_many_lines)]
-pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instruction> {
-    instructions
+pub fn as_freyr_program(program: &AsmProgram) -> FreyrProgram {
+    let instructions = program
+        .instructions
         .iter()
         .map(|x| match x {
             AssemblyInstruction::StackOffset { bytes } => {
@@ -610,7 +646,6 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 source: AddressJumpAddressSource::PopFromStack,
                 offset: 0,
             },
-            AssemblyInstruction::Exit => Instruction::Exit,
             AssemblyInstruction::UnresolvedJumpIfZero { label: _ } => {
                 panic!("Unresolved jz reached ASM compiler!")
             }
@@ -621,7 +656,14 @@ pub fn as_freyr_instructions(instructions: &[AssemblyInstruction]) -> Vec<Instru
                 panic!("Unresolved jmp reached ASM compiler!")
             }
         })
-        .collect()
+        .collect();
+    
+    let entry_point = *program.symbol_table.get("FUNC_main")
+        .or(program.symbol_table.get("main"))
+        .unwrap_or(&0_u32) as usize;
+    
+    FreyrProgram { instructions, entry_point }
+
 }
 
 #[cfg(test)]
@@ -667,7 +709,6 @@ main:
     jnz main
     jz_stack
     jz main
-    exit
     return
 ";
 
@@ -762,7 +803,6 @@ main:
             AssemblyInstruction::UnresolvedJumpIfZero {
                 label: Some("main".to_string()),
             },
-            AssemblyInstruction::Exit,
             AssemblyInstruction::Return,
         ];
 
@@ -804,6 +844,6 @@ another:
             AssemblyInstruction::Return,
         ];
 
-        assert_eq!(result, expected);
+        assert_eq!(result.instructions, expected);
     }
 }

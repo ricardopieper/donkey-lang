@@ -209,12 +209,9 @@ macro_rules! expect_colon_newline {
 
 macro_rules! indented {
     ($parser:expr, $indented_parsing:block) => {{
-        println!("indent++");
         $parser.increment_expected_indent();
         let returned = $indented_parsing;
         $parser.decrement_expected_indent();
-        println!("indent--");
-
         returned
     }};
 }

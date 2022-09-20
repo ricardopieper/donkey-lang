@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::ast::lexer::Operator;
 
 use either::Either;
@@ -18,6 +20,67 @@ impl TypeInstance {
         };
         *id
     }
+
+    fn compute_size(&self, type_db: &TypeDatabase) -> usize {
+        match self {
+            TypeInstance::Simple(s) => {
+                let type_record = type_db.find(*s);
+                if let Some(size) = type_record.rep_size {
+                    return size;
+                }
+                //this is a struct with no generic args, sum the size of the fields
+                let mut size = 0usize;
+                for field in type_record.fields.iter() {
+                    let type_resolved = field.field_type.create_instance(type_db, None);
+                    let field_size = type_resolved.size(type_db);
+                    size += field_size;
+                }
+                return size;
+                
+            },
+            TypeInstance::Generic(id, params) => {
+                let type_record = type_db.find(*id);
+                if let Some(size) = type_record.rep_size {
+                    return size;
+                }
+                let positional_type_args = &type_record.type_args;
+
+                if positional_type_args.len() != params.len() {
+                    panic!("Type {typename} has {num_type_args} type arguments, but {num_passed_args} were passed", 
+                        typename = type_record.name,
+                        num_type_args = positional_type_args.len(),
+                        num_passed_args = params.len())
+                }
+
+                let mut type_substitution = std::collections::HashMap::new();
+
+                for (name, type_instance) in positional_type_args.iter().zip(params) {
+                    type_substitution.insert(name.0.to_string(), type_instance.clone());
+                }
+
+                //this is a struct with no generic args, sum the size of the fields
+                let mut size = 0usize;
+                for field in type_record.fields.iter() {
+                    let type_resolved = field.field_type.create_instance(type_db, Some(&type_substitution));
+                    let field_size = type_resolved.size(type_db);
+                    size += field_size;
+                }
+                return size;
+
+            },
+            TypeInstance::Function(_, _) => std::mem::size_of::<u32>(), //this is a ptr
+        }
+    }
+
+    pub fn size(&self, type_db: &TypeDatabase) -> usize {
+        let computed = self.compute_size(type_db);
+        if computed > 255 {
+            let name = self.as_string(type_db);
+            eprintln!("WARNING: Type {name} has size {computed}, compiler will probably generate bad code because push instructions have a max size of 255");
+        }
+        return computed;
+    }
+
     pub fn as_string(&self, type_db: &TypeDatabase) -> String {
         match self {
             TypeInstance::Simple(id) => type_db.get_name(*id).into(),
@@ -69,10 +132,49 @@ pub enum TypeSign {
 //this is type information we store during compilation.
 //It can be a fully resolved type, trivially convertible to TypeInstance, but in some cases there are generic params.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type {
+pub enum TypeConstructor {
     Simple(Either<GenericParameter, TypeId>),
-    Generic(TypeId, Vec<Type>), //on generics, the base root type has to be known
+    Generic(TypeId, Vec<TypeConstructor>), //on generics, the base root type has to be known
     //Function(Vec<Type>, Box<Type>), //on functions, both return or args can use generics
+}
+/**
+ 
+struct SomeType<T1, T2> {
+    field1: T1
+    field2: T2
+}
+
+struct SomeOtherType {
+    field1: SomeType<i32, i32>
+}
+
+struct SomeOtherTypeInt<T> {
+    field1: SomeType<i32, T>
+}
+
+ */
+impl TypeConstructor {
+
+     //Expects that all generic parameters are already given
+     pub fn create_instance(&self, type_db: &TypeDatabase, type_args_opt: Option<&HashMap<String, TypeInstance>>) -> TypeInstance {
+        match self {
+            TypeConstructor::Simple(generic_or_id) => match generic_or_id {
+                Either::Left(generic) => {
+                    let arg = type_args_opt.and_then(|type_args| type_args.get(&generic.0));
+                    match arg {
+                        Some(found_type) => found_type.clone(),
+                        None => panic!("Missing generic argument for {}", generic.0),
+                    }
+                }
+                Either::Right(s) => TypeInstance::Simple(*s),
+            },
+            TypeConstructor::Generic(s, generic_arguments) => {
+                let generics = generic_arguments.iter()
+                    .map(|x| x.create_instance(type_db, type_args_opt));
+                TypeInstance::Generic(*s, generics.collect())
+            },
+        }
+    }
 }
 
 //@TODO must implement a way to perform generic substitution on every type instance...
@@ -80,14 +182,14 @@ pub enum Type {
 pub struct FunctionSignature {
     pub name: String,
     pub type_args: Vec<GenericParameter>,
-    pub args: Vec<Type>,
-    pub return_type: Type,
+    pub args: Vec<TypeConstructor>,
+    pub return_type: TypeConstructor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeField {
     pub name: String,
-    pub field_type: Type,
+    pub field_type: TypeConstructor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,7 +200,8 @@ pub struct TypeRecord {
     pub id: TypeId,
     pub kind: TypeKind,
     pub sign: TypeSign,
-    pub size: usize,
+    //Size of native types, such as numbers, ptrs, etc
+    pub rep_size: Option<usize>,
     pub name: String,
     //Type args are just Generic parameters, in the future we can add type bounds, in which we would add a Type enum here as well
     pub type_args: Vec<GenericParameter>,
@@ -115,15 +218,15 @@ pub struct TypeRecord {
 }
 
 impl TypeRecord {
-    pub fn as_type(&self) -> Type {
+    pub fn as_type(&self) -> TypeConstructor {
         if self.type_args.is_empty() {
-            Type::Simple(Either::Right(self.id))
+            TypeConstructor::Simple(Either::Right(self.id))
         } else {
-            return Type::Generic(
+            return TypeConstructor::Generic(
                 self.id,
                 self.type_args
                     .iter()
-                    .map(|x| Type::Simple(Either::Left(x.clone())))
+                    .map(|x| TypeConstructor::Simple(Either::Left(x.clone())))
                     .collect::<Vec<_>>(),
             );
         }
@@ -153,7 +256,7 @@ impl Default for TypeRecord {
             id: TypeId(0),
             kind: TypeKind::Primitive,
             sign: TypeSign::Unsigned,
-            size: 0,
+            rep_size: None,
             name: String::new(),
             allowed_casts: vec![],
             rhs_binary_ops: vec![],
@@ -177,10 +280,27 @@ pub struct SpecialTypes {
     pub bool: TypeInstance,
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericTypeInstance {
+    pub base_type: TypeId,
+    pub rep_size: usize,
+    //these fields inform type capabilities, i.e. operators it can deal with, fields and functions it has if its a struct, types it can be casted to, etc
+    pub allowed_casts: Vec<TypeInstance>,
+    //operator, rhs_type, result_type, for now cannot be generic
+    pub rhs_binary_ops: Vec<(Operator, TypeInstance, TypeInstance)>,
+    //operator, result_type, for now cannot be generic
+    pub unary_ops: Vec<(Operator, TypeInstance)>,
+    //fields (name, type)
+    pub fields: Vec<TypeField>,
+    //method (name, args, return type)
+    pub methods: Vec<FunctionSignature>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDatabase {
     pub types: Vec<TypeRecord>,
-    pub special_types: SpecialTypes,
+    pub special_types: SpecialTypes
 }
 
 impl TypeDatabase {
@@ -202,13 +322,13 @@ impl TypeDatabase {
         item
     }
 
-    pub fn add(&mut self, kind: TypeKind, sign: TypeSign, name: &str, size: usize) -> TypeId {
+    pub fn add(&mut self, kind: TypeKind, sign: TypeSign, name: &str, rep_size: Option<usize>) -> TypeId {
         let next_id = TypeId(self.types.len());
         self.types.push(TypeRecord {
             id: next_id,
             kind,
             name: name.into(),
-            size,
+            rep_size,
             sign,
             ..TypeRecord::default()
         });
@@ -233,7 +353,7 @@ impl TypeDatabase {
         kind: TypeKind,
         name: &str,
         type_args: Vec<GenericParameter>,
-        size: usize,
+        rep_size: Option<usize>,
     ) -> TypeId {
         let next_id = TypeId(self.types.len());
 
@@ -241,7 +361,7 @@ impl TypeDatabase {
             id: next_id,
             kind,
             name: name.into(),
-            size,
+            rep_size,
             type_args,
             ..TypeRecord::default()
         });
@@ -320,7 +440,7 @@ impl TypeDatabase {
     }
 
     fn register_primitive_number(&mut self, name: &str, size: usize, sign: TypeSign) -> TypeId {
-        let type_id = self.add(TypeKind::Primitive, sign, name, size);
+        let type_id = self.add(TypeKind::Primitive, sign, name, Some(size));
         self.add_binary_operator(
             type_id,
             Operator::Plus,
@@ -371,11 +491,19 @@ impl TypeDatabase {
         record.methods.push(signature);
     }
 
-    pub fn add_field(&mut self, type_id: TypeId, name: &str, field_type: TypeId) {
+    /*pub fn add_field(&mut self, type_id: TypeId, name: &str, field_type: TypeConstructor) {
         let record = self.types.get_mut(type_id.0).unwrap();
         record.fields.push(TypeField {
             name: name.to_string(),
-            field_type: Type::Simple(Either::Right(field_type)),
+            field_type,
+        });
+    }*/
+
+    pub fn add_simple_field(&mut self, type_id: TypeId, name: &str, field_type: TypeId) {
+        let record = self.types.get_mut(type_id.0).unwrap();
+        record.fields.push(TypeField {
+            name: name.to_string(),
+            field_type: TypeConstructor::Simple(Either::Right(field_type)),
         });
     }
     
@@ -387,7 +515,7 @@ impl TypeDatabase {
             TypeKind::Primitive,
             TypeSign::Unsigned,
             "Void",
-            mem::size_of::<()>(),
+            Some(mem::size_of::<()>()),
         );
         self.special_types.void = TypeInstance::Simple(void_type);
 
@@ -395,13 +523,13 @@ impl TypeDatabase {
             TypeKind::Primitive,
             TypeSign::Unsigned,
             "None",
-            mem::size_of::<()>(),
+            Some(mem::size_of::<()>()),
         );
         self.special_types.bool = TypeInstance::Simple(self.add(
             TypeKind::Primitive,
             TypeSign::Unsigned,
             "bool",
-            mem::size_of::<bool>(),
+            Some(mem::size_of::<bool>()),
         ));
 
         let i32_type =
@@ -433,11 +561,11 @@ impl TypeDatabase {
         ));
 
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
-        self.add_generic(
+        let ptr_type = self.add_generic(
             TypeKind::Primitive,
             "ptr",
             vec![GenericParameter("TPtr".into())],
-            mem::size_of::<usize>(),
+            Some(mem::size_of::<usize>()),
         );
 
         //ptr + len
@@ -445,15 +573,20 @@ impl TypeDatabase {
             TypeKind::Struct,
             TypeSign::Unsigned,
             "str",
-            mem::size_of::<usize>() + mem::size_of::<i32>(),
+            None,
         );
+ 
+        self.add_simple_field(str_type, "ptr", ptr_type);
+        self.add_simple_field(str_type, "len", u32_type);
+
+
         self.add_method(
             str_type,
             FunctionSignature {
                 name: "as_i32".to_string(),
                 type_args: vec![],
-                args: vec![Type::Simple(Either::Right(str_type))],
-                return_type: Type::Simple(Either::Right(i32_type)),
+                args: vec![TypeConstructor::Simple(Either::Right(str_type))],
+                return_type: TypeConstructor::Simple(Either::Right(i32_type)),
             },
         );
 
@@ -462,7 +595,7 @@ impl TypeDatabase {
             TypeKind::Struct,
             "array",
             vec![GenericParameter("TItem".into())],
-            mem::size_of::<usize>() + mem::size_of::<u32>(),
+            Some(mem::size_of::<usize>() + mem::size_of::<u32>()),
         );
 
         self.add_method(
@@ -470,12 +603,12 @@ impl TypeDatabase {
             FunctionSignature {
                 name: "__index__".to_string(),
                 type_args: vec![],
-                args: vec![Type::Simple(Either::Right(u32_type))],
-                return_type: Type::Simple(Either::Left(GenericParameter("TItem".into()))),
+                args: vec![TypeConstructor::Simple(Either::Right(u32_type))],
+                return_type: TypeConstructor::Simple(Either::Left(GenericParameter("TItem".into()))),
             },
         );
 
         //u32_type
-        self.add_field(arr_type, "length", u32_type);
+        self.add_simple_field(arr_type, "length", u32_type);
     }
 }

@@ -1,7 +1,7 @@
-pony
+Donkey lang
 ==========
 
-Pony is a python-like, interpreted (?), statically typed programming language.
+Donkey is a python-like, interpreted (?), statically typed programming language.
 
 Most of the parsing code was copied from my Horse interpreter at github.com/ricardopieper/horse repository. 
 
@@ -32,12 +32,14 @@ allocate memory manually, take pointers, defend against None (nullptr), etc. I'l
 
 So yes, it's gonna be a statically typed, but interpreted language.
 
-It's called pony because my previous attempt at writing an interpreter was named horse, and for the following reasons:
+It's called Donkey because my previous attempt at writing an interpreter was named horse, and for the following reasons:
 
- - It will have a smaller VM, or someday even no VM at all (maybe i'll write llvm IR and compile that), just like a pony is, in general, smaller than a grown-up, adult, full-featured horse. Jokes aside, it's interesting to have a working interpreter to allow things like compile-time evaluation by just running the code.
+ - It will have a smaller VM, or someday even no VM at all (maybe i'll write llvm IR and compile that), just like a donkey is, in general, smaller than a grown-up, adult, full-featured horse. Jokes aside, it's interesting to have a working interpreter to allow things like compile-time evaluation by just running the code.
 
- - Ponies's bodies stay closer to the ground, or in other words, "lower in the air" than horses, the same way pony will be a lower level, closer to the metal language. Doesn't mean it will be a low-level language though.
+ - Donkey's bodies stay closer to the ground, or in other words, "lower in the air" than horses, the same way donkey will be a lower level, closer to the metal language. Doesn't mean it will be a low-level language though.
 
+ - I wanted to name it "pony" but there is an actual programming language with that name. 
+ - 
 Having said that, it's probably gonna be a much larger effort than Horse.
 
 
