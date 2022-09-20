@@ -1,4 +1,4 @@
-use crate::freyr::{
+use crate::donkey_vm::{
     asm::asm_instructions::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
     vm::instructions::{
         AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation,
@@ -296,7 +296,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
         ["jmp", "stack"] => AssemblyInstruction::UnresolvedJump { label: None },
         ["return"] => AssemblyInstruction::Return,
         _ => {
-            panic!("Freyr assembly instruction not recognized at line {line}: {mnems_str:?}")
+            panic!("Donkey assembly instruction not recognized at line {line}: {mnems_str:?}")
         }
     })
 }
@@ -506,13 +506,13 @@ fn control_register(sign: AsmControlRegister) -> ControlRegister {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FreyrProgram { 
+pub struct DonkeyProgram { 
     pub instructions: Vec<Instruction>,
     pub entry_point: usize
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn as_freyr_program(program: &AsmProgram) -> FreyrProgram {
+pub fn as_donkey_vm_program(program: &AsmProgram) -> DonkeyProgram {
     let instructions = program
         .instructions
         .iter()
@@ -662,7 +662,7 @@ pub fn as_freyr_program(program: &AsmProgram) -> FreyrProgram {
         .or(program.symbol_table.get("main"))
         .unwrap_or(&0_u32) as usize;
     
-    FreyrProgram { instructions, entry_point }
+    DonkeyProgram { instructions, entry_point }
 
 }
 
@@ -672,7 +672,7 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::freyr::asm::{
+    use crate::donkey_vm::asm::{
         asm_instructions::{AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction},
         assembler::{parse_asm, resolve},
     };

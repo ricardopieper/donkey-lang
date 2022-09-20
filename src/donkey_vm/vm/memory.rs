@@ -251,7 +251,7 @@ impl Memory {
         if end_index > PAGE_SIZE {
             //stack overflow detection
             let end_address = address + data.len() as u32;
-            assert!(!(address >= self.stack_start && end_address >= self.heap_start), "Freyr VM stack overflow detected");
+            assert!(!(address >= self.stack_start && end_address >= self.heap_start), "Donkey VM stack overflow detected");
 
             //first we write to the current page
             let bytes_until_fill_page = PAGE_SIZE - index;

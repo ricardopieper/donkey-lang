@@ -410,7 +410,7 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::freyr::{encoder::LayoutHelper, vm::instructions::{AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation, ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes, OperationMode, ShiftDirection, SignFlag}};
+    use crate::donkey_vm::{encoder::LayoutHelper, vm::instructions::{AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation, ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes, OperationMode, ShiftDirection, SignFlag}};
 
     #[test]
     fn encode_decode_push_immediate32_lshift16() {

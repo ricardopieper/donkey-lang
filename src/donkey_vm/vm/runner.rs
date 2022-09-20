@@ -1,7 +1,7 @@
 use core::panic;
 use std::fmt::Display;
 
-use crate::freyr::{vm::instructions::AddressJumpAddressSource, asm::assembler::FreyrProgram};
+use crate::donkey_vm::{vm::instructions::AddressJumpAddressSource, asm::assembler::DonkeyProgram};
 
 use super::{
     instructions::{
@@ -140,7 +140,7 @@ pub fn stacked_binop_compare<T>(
         CompareOperation::GreaterThanOrEquals => lhs >= rhs,
     };
     println!(
-        "Freyr: Comparing {lhs} and {rhs} result == {result} storing at {sp}",
+        "Donkey: Comparing {lhs} and {rhs} result == {result} storing at {sp}",
         sp = reg.sp
     );
     memory.write(reg.sp, if result { &[1u8] } else { &[0u8] });
@@ -159,7 +159,7 @@ pub fn immediate_integer_compare<T>(
     reg.sp -= std::mem::size_of::<T>() as u32;
     let lhs = memory.native_read::<T>(reg.sp);
     let rhs = T::from_bytes(&operand);
-    println!("Freyr: Comparing {lhs} and {rhs}");
+    println!("Donkey: Comparing {lhs} and {rhs}");
     let result = match operation {
         CompareOperation::Equals => lhs == rhs,
         CompareOperation::NotEquals => lhs != rhs,
@@ -777,7 +777,7 @@ pub fn prepare_vm() -> (Memory, ControlRegisterValues) {
     (mem, registers)
 }
 
-pub fn run(code: &FreyrProgram, memory: &mut Memory, registers: &mut ControlRegisterValues) {
+pub fn run(code: &DonkeyProgram, memory: &mut Memory, registers: &mut ControlRegisterValues) {
     registers.ip = code.entry_point;
     let code_len = code.instructions.len();
     loop {
@@ -807,17 +807,17 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::freyr::{
-        asm::assembler::{as_freyr_program, parse_asm, resolve, FreyrProgram},
+    use crate::donkey_vm::{
+        asm::assembler::{as_donkey_vm_program, parse_asm, resolve, DonkeyProgram},
         vm::{memory::Memory, runner::{execute, print_stack}},
     };
 
     use super::{run, ControlRegisterValues, prepare_vm};
 
-    fn assemble(code: &str) -> FreyrProgram {
+    fn assemble(code: &str) -> DonkeyProgram {
         let parsed = parse_asm(code);
         let resolved = resolve(&parsed); 
-        as_freyr_program(&resolved)
+        as_donkey_vm_program(&resolved)
     }
 
     fn run_code(code: &str) -> (Memory, ControlRegisterValues) {

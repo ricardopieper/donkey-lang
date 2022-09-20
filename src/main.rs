@@ -8,15 +8,15 @@
 mod ast;
 mod commons;
 mod compiler;
-mod freyr;
+mod donkey_vm;
 mod semantic;
 mod types;
 
 use crate::ast::lexer;
 use crate::ast::parser;
-use crate::compiler::freyr_gen::generate_freyr;
-use crate::freyr::asm::assembler::as_freyr_program;
-use crate::freyr::asm::assembler::resolve;
+use crate::compiler::donkey_backend::generate_donkey_vm;
+use crate::donkey_vm::asm::assembler::as_donkey_vm_program;
+use crate::donkey_vm::asm::assembler::resolve;
 use crate::semantic::hir_printer::print_hir;
 use std::env;
 use std::fs;
@@ -25,9 +25,9 @@ use std::io::Read;
 use std::io::Write;
 use std::time::Instant;
 
-use crate::freyr::encoder::LayoutHelper;
-use crate::freyr::vm::memory::Memory;
-use crate::freyr::vm::runner;
+use crate::donkey_vm::encoder::LayoutHelper;
+use crate::donkey_vm::vm::memory::Memory;
+use crate::donkey_vm::vm::runner;
 
 #[allow(unused_imports)] #[macro_use]
 extern crate time_test;
@@ -38,8 +38,8 @@ use crate::semantic::type_checker::check_type;
 
 use crate::types::type_errors::TypeErrorPrinter;
 
-use freyr::asm::asm_instructions::AssemblyInstruction;
-use freyr::asm::assembler::FreyrProgram;
+use donkey_vm::asm::asm_instructions::AssemblyInstruction;
+use donkey_vm::asm::assembler::DonkeyProgram;
 use tracy_client::frame_name;
 use tracy_client::Client;
 
@@ -89,9 +89,9 @@ fn main() {
     if args[1] == "asm" {
         let input = fs::read_to_string(args[2].clone())
             .unwrap_or_else(|_| panic!("Could not read file {}", args[2]));
-        let parsed = crate::freyr::asm::assembler::parse_asm(input.as_str());
-        let resolved = crate::freyr::asm::assembler::resolve(&parsed);
-        let program = crate::freyr::asm::assembler::as_freyr_program(&resolved);
+        let parsed = crate::donkey_vm::asm::assembler::parse_asm(input.as_str());
+        let resolved = crate::donkey_vm::asm::assembler::resolve(&parsed);
+        let program = crate::donkey_vm::asm::assembler::as_donkey_vm_program(&resolved);
 
         let out_file = if args.len() <= 3 {
             "out"
@@ -122,7 +122,7 @@ fn main() {
     if args[1] == "compile" {
         let generated_asm = compile(&args[2]);
         let resolved = resolve(&generated_asm);
-        let program = as_freyr_program(&resolved);
+        let program = as_donkey_vm_program(&resolved);
 
         let out_file = if args.len() <= 3 {
             "out"
@@ -135,7 +135,7 @@ fn main() {
     else {
         let generated_asm = compile(&args[1]);
         let resolved = resolve(&generated_asm);
-        let program = as_freyr_program(&resolved);
+        let program = as_donkey_vm_program(&resolved);
        
         let (mut memory, mut registers) = runner::prepare_vm();
 
@@ -143,7 +143,7 @@ fn main() {
     }
 }
 
-fn write_program(out_file: &str, program: &FreyrProgram) {
+fn write_program(out_file: &str, program: &DonkeyProgram) {
     let mut file = File::create(out_file).unwrap();
     let instruction_layout = LayoutHelper::new();
     file.write_all(&(program.entry_point as u32).to_le_bytes()).unwrap();
@@ -169,6 +169,6 @@ fn compile(file_name: &str) -> Vec<AssemblyInstruction> {
         let printer = TypeErrorPrinter::new(&errors, &result.type_db);
         println!("{}", printer);
     }
-    generate_freyr(&result.type_db, &mir)
+    generate_donkey_vm(&result.type_db, &mir)
     
 }

@@ -1,5 +1,5 @@
 use crate::ast::lexer::Operator;
-use crate::freyr::asm::asm_instructions::{
+use crate::donkey_vm::asm::asm_instructions::{
     AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp,
     AsmIntegerCompareBinaryOp, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction,
 };
@@ -11,7 +11,7 @@ use crate::types::type_db::{TypeDatabase, TypeInstance, TypeSign};
 use core::panic;
 use std::collections::{HashMap, HashSet};
 
-pub struct FreyrEmitter {
+pub struct DonkeyEmitter {
     pub assembly: Vec<AssemblyInstruction>,
 }
 
@@ -547,7 +547,7 @@ fn generate_decl_function(
     for sbl in &scope_byte_layout {
         let sum: u32 = sbl
             .values()
-            .map(crate::compiler::freyr_gen::ByteRange::size)
+            .map(crate::compiler::donkey_backend::ByteRange::size)
             .sum();
         if sum > largest_scope {
             largest_scope = sum;
@@ -680,7 +680,7 @@ fn generate_func_block_finish(
 fn generate_for_top_lvl(
     type_db: &TypeDatabase,
     node: &MIRTopLevelNode,
-    emitter: &mut FreyrEmitter,
+    emitter: &mut DonkeyEmitter,
 ) {
     match node {
         MIRTopLevelNode::DeclareFunction {
@@ -705,11 +705,11 @@ fn generate_for_top_lvl(
     }
 }
 
-pub fn generate_freyr(
+pub fn generate_donkey_vm(
     type_db: &TypeDatabase,
     mir_top_level_nodes: &[MIRTopLevelNode],
 ) -> Vec<AssemblyInstruction> {
-    let mut emitter = FreyrEmitter { assembly: vec![] };
+    let mut emitter = DonkeyEmitter { assembly: vec![] };
     for mir_node in mir_top_level_nodes {
         generate_for_top_lvl(type_db, mir_node, &mut emitter);
     }
@@ -720,10 +720,10 @@ pub fn generate_freyr(
 mod test {
     use crate::{
         ast::parser::{Parser, AST},
-        compiler::freyr_gen::generate_freyr,
-        freyr::{
+        compiler::donkey_backend::generate_donkey_vm,
+        donkey_vm::{
             asm::{
-                assembler::{as_freyr_program, resolve}, asm_printer,
+                assembler::{as_donkey_vm_program, resolve}, asm_printer,
             },
             vm::{
                 memory::Memory,
@@ -767,12 +767,12 @@ mod test {
         let prepared = prepare(source);
         assert_eq!(prepared.type_errors.count(), 0);
 
-        let generated_asm = generate_freyr(&prepared.database, &prepared.mir);
+        let generated_asm = generate_donkey_vm(&prepared.database, &prepared.mir);
 
         asm_printer::print(&generated_asm);
 
         let resolved = resolve(&generated_asm);
-        let as_instructions = as_freyr_program(&resolved);
+        let as_instructions = as_donkey_vm_program(&resolved);
 
         let (mut memory, mut registers) = runner::prepare_vm();
 

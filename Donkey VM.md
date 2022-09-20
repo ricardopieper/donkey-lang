@@ -1,13 +1,7 @@
-Freyr VM
+Donkey VM
 ========
 
-This file describes an early draft of the Freyr VM.
-
-We're still on the horse theme with this name. Freyr is, apparently, the god of horses in norse mythology. I looked it up in some random website and found it, and I won't ever look it up again in fear that this is wrong. The name is cool nad that's what it's gonna be.
-
-I hope the name is actually hard or weird enough to pronounce such that people will avoid using it in production. It`s not a real risk though, since this language and VM are only useful for study.
-
-For now Freyr is not gonna be so lightweight, we will have tons of instructions for whatever we need.
+This file describes an early draft of the Donkey VM.
 
 It's stack based, so no general-purpose registers. However, internally the VM will store some internal state, like the instruction pointer, function base address pointer, stack pointer, and so on as necessary. They will be acessible in the bytecode and can be changed, though it's not so straightforward.
 
@@ -19,7 +13,7 @@ The VM itself might have 2 dedicated allocations for each region, or do whatever
 
 Pointer arithmetic should work.
 
-We try to assume the least things about the OS or environment we are running with. It would be nice if Freyr ran on WASM, so we will make our own allocatos, and they might not be that efficient or fast.
+We try to assume the least things about the OS or environment we are running with. It would be nice if Donkey ran on WASM, so we will make our own allocatos, and they might not be that efficient or fast.
 
 
 Memory Management

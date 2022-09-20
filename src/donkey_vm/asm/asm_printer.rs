@@ -1,4 +1,4 @@
-use crate::freyr::asm::{
+use crate::donkey_vm::asm::{
     self,
     asm_instructions::{
         AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp, AsmLoadStoreMode,
