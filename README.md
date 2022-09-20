@@ -7,8 +7,8 @@ Most of the parsing code was copied from my Horse interpreter at github.com/rica
 
 This interpreter is not production-ready nor it will ever be. This is for my study only.
 
-I still can't run any code, as I'm still writing the type inference and type checking steps.
-
+I can barely run some code, call functions, and have a more or less functioning VM and assembler. It's all a mess
+since i'm just studying it and don't know how to properly represent things like types in memory. 
 
 Syntax will be based on python but the VM will be far more lightweight. Preferably in the future we won't have a VM. We wont have classes, just structs and impls like Rust. I will try to implement some trait-like system as well, so there will be syntax for that. While the syntax looks like python, it doesn't follow Python's object model or most of the language's built-in type naming. When it does it's coincidental. I'm not a fan of the lambda syntax in Python, so I might change that, preferably using more or less the same syntax as regular function definitions.
 
