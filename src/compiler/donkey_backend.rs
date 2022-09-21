@@ -40,8 +40,10 @@ fn build_write_scope_byte_layout(
             found_var.push((var.name.clone(), var.typename.size(type_db)));
         }
 
-        current_index = scope.inherit.0;
-        if current_index == 0 {
+       
+        if current_index != 0 {
+            current_index = scope.inherit.0;
+        } else {
             break;
         }
     }
@@ -202,6 +204,7 @@ fn generate_trivial_expr(
         }
         TrivialHIRExpr::Variable(var) => {
             //emit a loadaddr_relY bp+X where Y = size in bits, X = start of the value
+            //println!("Vars in scope: {scope:?}");
             let var_range = scope.get(var).unwrap_or_else(|| panic!("expected {var}"));
             bytecode.push(AssemblyInstruction::LoadAddress {
                 bytes: var_range.size() as u8,
@@ -543,6 +546,8 @@ fn generate_decl_function(
         .map(|scope| build_write_scope_byte_layout(scope, scopes, type_db))
         .collect::<Vec<_>>();
 
+    println!("Scope byte layout built: {scope_byte_layout:#?}");
+
     let mut largest_scope = 0;
     for sbl in &scope_byte_layout {
         let sum: u32 = sbl
@@ -592,7 +597,11 @@ fn generate_function_decl_block(
     bytecode: &mut Vec<AssemblyInstruction>, 
     type_db: &TypeDatabase, 
     offset_from_bp: &mut u32) {
+    
+   // println!("block: {block:?} {scope_byte_layout:#?}");
+
     let scope = &scope_byte_layout[block.scope.0];
+
     if target_blocks.contains(&BlockId(block.index)) {
         let label = format!("LBL_{}", block.index);
         bytecode.push(AssemblyInstruction::Label { label });
@@ -753,7 +762,7 @@ mod test {
         let ast = AST::Root(parser.parse_ast());
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         let mir = hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db);
-        //println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
+        println!("{}", crate::semantic::mir_printer::print_mir(&mir, &analysis_result.type_db));
         let errors = check_type(&mir, &analysis_result.type_db, &analysis_result.globals);
         TestContext {
             mir,
@@ -829,5 +838,24 @@ def main():
         let (memory, registers) = run_test(src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
         assert_eq!(result_value, 49);
+    }
+
+    #[test]
+    fn function_call_test2() {
+        let src = "
+def random() -> i32:
+    return 33
+
+def half(x: i32) -> i32:
+    val: i32 = x / 2
+    return val * random()
+
+def main():
+    x : i32 = 10
+    result : i32 = half(x)
+";
+        let (memory, registers) = run_test(src);
+        let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
+        assert_eq!(result_value, 165);
     }
 }

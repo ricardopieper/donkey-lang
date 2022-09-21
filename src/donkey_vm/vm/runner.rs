@@ -783,17 +783,17 @@ pub fn run(code: &DonkeyProgram, memory: &mut Memory, registers: &mut ControlReg
     loop {
         let inst = &code.instructions[registers.ip];
 
-       println!(
+        /*println!(
             "Executing instruction {inst:?} ip = {ip} sp = {sp} bp = {bp}",
             ip = registers.ip,
             sp = registers.sp,
             bp = registers.bp
-        );
+        );*/
         
         if execute(inst, memory, registers) {
             break;
         }
-        print_stack(memory, &registers);
+        //print_stack(memory, &registers);
         
         if registers.ip >= code_len {
             break;

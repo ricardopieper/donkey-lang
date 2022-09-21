@@ -1,4 +1,4 @@
-.main:
+main:
     stackoffset     16 
     push_imm32      15
     storeaddr_rel32 bp+0
@@ -23,6 +23,7 @@
     loadaddr_rel32  bp+4    
     sums32                  
     storeaddr_rel32 bp+12
+    return
 
 some_function:
     loadaddr_rel32  bp-16   

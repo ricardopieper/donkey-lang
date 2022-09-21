@@ -1,10 +1,12 @@
+use std::{fs::File, io::{Write, Read}};
+
 use crate::donkey_vm::{
     asm::asm_instructions::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
     vm::instructions::{
         AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation,
         ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes,
         OperationMode, SignFlag,
-    },
+    }, encoder::LayoutHelper,
 };
 
 use super::asm_instructions::{
@@ -509,6 +511,41 @@ fn control_register(sign: AsmControlRegister) -> ControlRegister {
 pub struct DonkeyProgram { 
     pub instructions: Vec<Instruction>,
     pub entry_point: usize
+}
+
+impl DonkeyProgram {
+
+    pub fn write_program(&self, out_file: &str) {
+        let mut file = File::create(out_file).unwrap();
+        let instruction_layout = LayoutHelper::new();
+        file.write_all(&(self.entry_point as u32).to_le_bytes())
+            .unwrap();
+        for ins in self.instructions.iter() {
+            let encoded = instruction_layout.encode_instruction(&ins);
+            let bytes = encoded.to_le_bytes();
+            file.write_all(&bytes).unwrap();
+        }
+    }
+
+    pub fn read_program(in_file: &str) -> DonkeyProgram {
+        let instruction_layout = LayoutHelper::new();
+
+        let mut file = File::open(in_file).unwrap();
+        let mut all_bytes = vec![];
+        file.read_to_end(&mut all_bytes).unwrap();
+        let entry_point = u32::from_le_bytes(all_bytes[0..4].try_into().unwrap()) as usize;
+        let mut instructions = vec![];
+       for i in (4..all_bytes.len()).step_by(4) {
+            let instruction_bytes = &all_bytes[i..=(i + 3)];
+            let instruction_as_u32 = u32::from_le_bytes(
+                instruction_bytes.try_into().expect("could not get 4 bytes"),
+            );
+
+            let decoded = instruction_layout.begin_decode(instruction_as_u32).decode();
+            instructions.push(decoded);
+        }
+        DonkeyProgram { instructions, entry_point }
+    }
 }
 
 #[allow(clippy::too_many_lines)]

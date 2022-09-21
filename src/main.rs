@@ -20,16 +20,13 @@ use crate::donkey_vm::asm::assembler::resolve;
 use crate::semantic::hir_printer::print_hir;
 use std::env;
 use std::fs;
-use std::fs::File;
-use std::io::Read;
-use std::io::Write;
 use std::time::Instant;
 
-use crate::donkey_vm::encoder::LayoutHelper;
 use crate::donkey_vm::vm::memory::Memory;
 use crate::donkey_vm::vm::runner;
 
-#[allow(unused_imports)] #[macro_use]
+#[allow(unused_imports)]
+#[macro_use]
 extern crate time_test;
 
 use crate::semantic::mir::hir_to_mir;
@@ -84,12 +81,11 @@ fn main() {
 
         println!("Throughput: {tp}MB/s");
         return;
-    }
-
-    if args[1] == "asm" {
+    } else if args[1] == "asm" {
         let input = fs::read_to_string(args[2].clone())
             .unwrap_or_else(|_| panic!("Could not read file {}", args[2]));
         let parsed = crate::donkey_vm::asm::assembler::parse_asm(input.as_str());
+        
         let resolved = crate::donkey_vm::asm::assembler::resolve(&parsed);
         let program = crate::donkey_vm::asm::assembler::as_donkey_vm_program(&resolved);
 
@@ -99,27 +95,17 @@ fn main() {
             args[3].as_str()
         };
 
-        write_program(out_file, &program);
+        program.write_program(out_file);
 
-        {
-            let instruction_layout = LayoutHelper::new();
+        let program_decoded = DonkeyProgram::read_program(out_file);
 
-            let mut file = File::open(out_file).unwrap();
-            let mut all_bytes = vec![];
-            file.read_to_end(&mut all_bytes).unwrap();
+        assert_eq!(program, program_decoded);
 
-            for i in (0..all_bytes.len()).step_by(4) {
-                let instruction_bytes = &all_bytes[i..=(i + 3)];
-                let instruction_as_u32 = u32::from_le_bytes(
-                    instruction_bytes.try_into().expect("could not get 4 bytes"),
-                );
-                let decoded = instruction_layout.begin_decode(instruction_as_u32).decode();
-                println!("{:?}", decoded);
-            }
-        }
-    } 
-    
-    if args[1] == "compile" {
+        let (mut memory, mut registers) = runner::prepare_vm();
+
+        runner::run(&program_decoded, &mut memory, &mut registers)
+
+    } else if args[1] == "compile" {
         let generated_asm = compile(&args[2]);
         let resolved = resolve(&generated_asm);
         let program = as_donkey_vm_program(&resolved);
@@ -130,29 +116,18 @@ fn main() {
             args[3].as_str()
         };
 
-        write_program(out_file, &program);
-    }
-    else {
+        program.write_program(out_file);
+    } else {
         let generated_asm = compile(&args[1]);
         let resolved = resolve(&generated_asm);
         let program = as_donkey_vm_program(&resolved);
-       
+
         let (mut memory, mut registers) = runner::prepare_vm();
 
         runner::run(&program, &mut memory, &mut registers);
     }
 }
 
-fn write_program(out_file: &str, program: &DonkeyProgram) {
-    let mut file = File::create(out_file).unwrap();
-    let instruction_layout = LayoutHelper::new();
-    file.write_all(&(program.entry_point as u32).to_le_bytes()).unwrap();
-    for ins in program.instructions.iter() {
-        let encoded = instruction_layout.encode_instruction(&ins);
-        let bytes = encoded.to_le_bytes();
-        file.write_all(&bytes).unwrap();
-    }
-}
 
 fn compile(file_name: &str) -> Vec<AssemblyInstruction> {
     let input = fs::read_to_string(file_name)
@@ -170,5 +145,4 @@ fn compile(file_name: &str) -> Vec<AssemblyInstruction> {
         println!("{}", printer);
     }
     generate_donkey_vm(&result.type_db, &mir)
-    
 }
