@@ -27,11 +27,13 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
     let after_make_declarations_mir = hir.clone();
     undeclared_vars::detect_undeclared_vars_and_redeclarations(&globals, &hir);
 
-    //println!("Before type inference:\n{}", print_hir(&hir, &type_db));
+    println!("Before type inference:\n{}", crate::semantic::hir_printer::print_hir(&hir, &type_db));
 
     let mut errors = TypeErrors::new();
 
     hir = type_inference::infer_types(&mut globals, &type_db, &hir, &mut errors);
+
+    println!("After type inference:\n{}", crate::semantic::hir_printer::print_hir(&hir, &type_db));
 
     AnalysisResult {
         initial_mir,

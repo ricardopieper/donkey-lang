@@ -66,10 +66,12 @@ pub fn stacked_binop_arith<T>(
     operation: ArithmeticOperation,
 ) where
     T: NativeNumericType<T>
+        + std::fmt::Display
         + std::ops::Add<T, Output = T>
         + std::ops::Div<T, Output = T>
         + std::ops::Mul<T, Output = T>
-        + std::ops::Sub<T, Output = T>,
+        + std::ops::Sub<T, Output = T>
+        + std::ops::Rem<T, Output = T>,
     [(); std::mem::size_of::<T>()]:,
 {
     reg.sp -= std::mem::size_of::<T>() as u32;
@@ -82,6 +84,10 @@ pub fn stacked_binop_arith<T>(
         ArithmeticOperation::Subtract => (lhs - rhs).to_bytes(),
         ArithmeticOperation::Multiply => (lhs * rhs).to_bytes(),
         ArithmeticOperation::Divide => (lhs / rhs).to_bytes(),
+        ArithmeticOperation::Mod => {
+            println!("Mod {lhs} {rhs}");
+            (lhs % rhs).to_bytes()
+        }
         ArithmeticOperation::Power => todo!(),
     };
 
@@ -100,6 +106,7 @@ pub fn immediate_integer_arith<T>(
         + std::ops::Div<T, Output = T>
         + std::ops::Mul<T, Output = T>
         + std::ops::Sub<T, Output = T>
+        + std::ops::Rem<T, Output = T>
         + std::fmt::Debug,
     [(); std::mem::size_of::<T>()]:,
 {
@@ -111,6 +118,7 @@ pub fn immediate_integer_arith<T>(
         ArithmeticOperation::Subtract => (lhs - rhs).to_bytes(),
         ArithmeticOperation::Multiply => (lhs * rhs).to_bytes(),
         ArithmeticOperation::Divide => (lhs / rhs).to_bytes(),
+        ArithmeticOperation::Mod => (lhs % rhs).to_bytes(),
         ArithmeticOperation::Power => todo!(),
     };
 

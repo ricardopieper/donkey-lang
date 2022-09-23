@@ -465,6 +465,12 @@ impl TypeDatabase {
             TypeInstance::Simple(type_id),
             TypeInstance::Simple(type_id),
         );
+        self.add_binary_operator(
+            type_id,
+            Operator::Mod,
+            TypeInstance::Simple(type_id),
+            TypeInstance::Simple(type_id),
+        );
 
         let bool_id = self.find_by_name("bool").unwrap().id;
         self.add_binary_operator(

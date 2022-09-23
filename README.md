@@ -198,8 +198,8 @@ that type. Casting to the type should be possible but syntax is yet to be define
 Pending typechecks:
 
  - Member access in exprs are valid
- - item arrays are all the same type as the first one
- - Binary operators are valid/exist for the lhs and rhs types
+ - If statement reads from bool value
+ - Item arrays are all the same type as the first one
  - All type errors during type inference
 
 Pending type inference improvements:

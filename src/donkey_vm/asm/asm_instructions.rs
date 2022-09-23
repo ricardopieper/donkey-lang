@@ -12,6 +12,7 @@ pub enum AsmArithmeticBinaryOp {
     Multiply,
     Divide,
     Power,
+    Mod
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -43,6 +44,9 @@ pub enum AsmControlRegister {
     Stack,
     Instruction,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Annotation { pub annotation: String }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssemblyInstruction {

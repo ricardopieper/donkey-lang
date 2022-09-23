@@ -470,6 +470,7 @@ fn arith_op(op: AsmArithmeticBinaryOp) -> ArithmeticOperation {
         AsmArithmeticBinaryOp::Subtract => ArithmeticOperation::Subtract,
         AsmArithmeticBinaryOp::Divide => ArithmeticOperation::Divide,
         AsmArithmeticBinaryOp::Power => ArithmeticOperation::Power,
+        AsmArithmeticBinaryOp::Mod => ArithmeticOperation::Mod,
     }
 }
 

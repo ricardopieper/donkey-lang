@@ -16,6 +16,7 @@ pub fn operator_str(op: lexer::Operator) -> String {
         Operator::GreaterEquals => ">=".into(),
         Operator::LessEquals => "<=".into(),
         Operator::Less => "<".into(),
+        Operator::Mod => "%".into(),
         _ => "operator_str doesn't implement this operator".into(),
     }
 }

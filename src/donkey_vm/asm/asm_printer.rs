@@ -6,16 +6,16 @@ use crate::donkey_vm::asm::{
     },
 };
 
-use super::asm_instructions::AssemblyInstruction;
+use super::asm_instructions::{AssemblyInstruction, Annotation};
 
 #[allow(dead_code, clippy::too_many_lines)] //sometimes useful in debugging
-pub fn print(instructions: &[AssemblyInstruction]) {
+pub fn print<'a, T>(instructions: T) where T: IntoIterator<Item = (&'a AssemblyInstruction, &'a Option<Annotation>)> {
     let ops_indent = "\t\t";
     for inst in instructions {
         print!("\t");
-        match inst {
+        match &inst.0 {
             AssemblyInstruction::StackOffset { bytes } => {
-                println!("stackoffset{ops_indent}{bytes}", bytes = bytes);
+                print!("stackoffset{ops_indent}{bytes}", bytes = bytes);
             }
             AssemblyInstruction::LoadAddress { bytes, mode } => {
                 print!("loadaddr");
@@ -30,13 +30,13 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                     AsmLoadStoreMode::Relative { offset } => {
                         print!("_rel{bytes_str}{ops_indent}");
                         if *offset >= 0 {
-                            println!("bp+{offset}");
+                            print!("bp+{offset}");
                         } else {
-                            println!("bp{offset}");
+                            print!("bp{offset}");
                         }
                     }
                     AsmLoadStoreMode::Immediate { absolute_address } => {
-                        println!(
+                        print!(
                             "_imm{bytes}{ops_indent}{absolute_address}",
                             bytes = bytes * 8
                         );
@@ -56,13 +56,13 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                     AsmLoadStoreMode::Relative { offset } => {
                         print!("_rel{bytes_str}{ops_indent}");
                         if *offset >= 0 {
-                            println!("bp+{offset}");
+                            print!("bp+{offset}");
                         } else {
-                            println!("bp{offset}");
+                            print!("bp{offset}");
                         }
                     }
                     AsmLoadStoreMode::Immediate { absolute_address } => {
-                        println!("_imm{bytes_str}{ops_indent}{absolute_address}");
+                        print!("_imm{bytes_str}{ops_indent}{absolute_address}");
                     }
                 }
             }
@@ -78,12 +78,12 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                 };
 
                 if *shift_size > 0 {
-                    println!(
+                    print!(
                         "push_imm{bytes_str}{ops_indent}{immediate} <<{shift_size}",
                         immediate = u16::from_le_bytes(*immediate)
                     );
                 } else {
-                    println!(
+                    print!(
                         "push_imm{bytes_str}{ops_indent}{immediate}",
                         immediate = u16::from_le_bytes(*immediate)
                     );
@@ -113,13 +113,13 @@ pub fn print(instructions: &[AssemblyInstruction]) {
 
                 match immediate {
                     Some(imm) => {
-                        println!(
+                        print!(
                             "{op}{s}_imm{bytes_str}{ops_indent}{immediate}",
                             immediate = u16::from_le_bytes(*imm)
                         );
                     }
                     None => {
-                        println!("{op}{s}{bytes_str}");
+                        print!("{op}{s}{bytes_str}");
                     }
                 }
             }
@@ -141,6 +141,7 @@ pub fn print(instructions: &[AssemblyInstruction]) {
                     AsmArithmeticBinaryOp::Multiply => "mul",
                     AsmArithmeticBinaryOp::Divide => "div",
                     AsmArithmeticBinaryOp::Power => "pow",
+                    AsmArithmeticBinaryOp::Mod => "mod",
                 };
                 let s = match sign {
                     AsmSignFlag::Signed => "s",
@@ -149,13 +150,13 @@ pub fn print(instructions: &[AssemblyInstruction]) {
 
                 match immediate {
                     Some(imm) => {
-                        println!(
+                        print!(
                             "{op}{s}_imm{bytes_str}{ops_indent}{immediate}",
                             immediate = u16::from_le_bytes(*imm)
                         );
                     }
                     None => {
-                        println!("{op}{s}{bytes_str}");
+                        print!("{op}{s}{bytes_str}");
                     }
                 }
             }
@@ -186,73 +187,77 @@ pub fn print(instructions: &[AssemblyInstruction]) {
 
                 match immediate {
                     Some(imm) => {
-                        println!(
+                        print!(
                             "{op}{s}_imm{bytes_str}{ops_indent}{immediate}",
                             immediate = u16::from_le_bytes(*imm)
                         );
                     }
                     None => {
-                        println!("{op}{s}{bytes_str}");
+                        print!("{op}{s}{bytes_str}");
                     }
                 }
             }
             AssemblyInstruction::PopRegister { register } => match register {
-                AsmControlRegister::Base => println!("pop_reg{ops_indent}\tbp"),
-                AsmControlRegister::Stack => println!("pop_reg{ops_indent}\tsp"),
-                AsmControlRegister::Instruction => println!("pop_reg{ops_indent}\tip"),
+                AsmControlRegister::Base => print!("pop_reg{ops_indent}\tbp"),
+                AsmControlRegister::Stack => print!("pop_reg{ops_indent}\tsp"),
+                AsmControlRegister::Instruction => print!("pop_reg{ops_indent}\tip"),
             },
             AssemblyInstruction::PushRegister { register } => match register {
-                AsmControlRegister::Base => println!("push_reg{ops_indent}bp"),
-                AsmControlRegister::Stack => println!("push_reg{ops_indent}sp"),
-                AsmControlRegister::Instruction => println!("push_reg{ops_indent}ip"),
+                AsmControlRegister::Base => print!("push_reg{ops_indent}bp"),
+                AsmControlRegister::Stack => print!("push_reg{ops_indent}sp"),
+                AsmControlRegister::Instruction => print!("push_reg{ops_indent}ip"),
             },
             AssemblyInstruction::PopBytes { bytes } => {
-                println!("pop{ops_indent}\t{bytes}");
+                print!("pop{ops_indent}\t{bytes}");
             }
             AssemblyInstruction::Label { label } => {
-                println!("\n{label}:");
+                print!("\n{label}:");
             }
             AssemblyInstruction::UnresolvedCall { label } => match label {
-                Some(label) => println!("call{ops_indent}\t{label}"),
-                None => println!("call_stack"),
+                Some(label) => print!("call{ops_indent}\t{label}"),
+                None => print!("call_stack"),
             },
             AssemblyInstruction::UnresolvedJumpIfZero { label } => match label {
-                Some(label) => println!("jz{ops_indent}\t{label}"),
-                None => println!("jz_stack"),
+                Some(label) => print!("jz{ops_indent}\t{label}"),
+                None => print!("jz_stack"),
             },
             AssemblyInstruction::UnresolvedJumpIfNotZero { label } => match label {
-                Some(label) => println!("jnz{ops_indent}\t{label}"),
-                None => println!("jnz_stack"),
+                Some(label) => print!("jnz{ops_indent}\t{label}"),
+                None => print!("jnz_stack"),
             },
             AssemblyInstruction::UnresolvedJump { label } => match label {
-                Some(label) => println!("jmp{ops_indent}\t{label}"),
-                None => println!("jmp_stack"),
+                Some(label) => print!("jmp{ops_indent}\t{label}"),
+                None => print!("jmp_stack"),
             },
             AssemblyInstruction::Call { offset } => {
-                println!("call{ops_indent}\t{offset}");
+                print!("call{ops_indent}\t{offset}");
             }
             AssemblyInstruction::CallFromStack => {
-                println!("call_stack");
+                print!("call_stack");
             }
             AssemblyInstruction::JumpIfZero { offset } => {
-                println!("jz{ops_indent}\t{offset}");
+                print!("jz{ops_indent}\t{offset}");
             }
             AssemblyInstruction::JumpIfZeroFromStack => {
-                println!("jz_stack");
+                print!("jz_stack");
             }
             AssemblyInstruction::JumpIfNotZero { offset } => {
-                println!("jnz{ops_indent}\t{offset}");
+                print!("jnz{ops_indent}\t{offset}");
             }
             AssemblyInstruction::JumpIfNotZeroFromStack => {
-                println!("jnz_stack");
+                print!("jnz_stack");
             }
             AssemblyInstruction::Jump { offset } => {
-                println!("jmp{ops_indent}\t{offset}");
+                print!("jmp{ops_indent}\t{offset}");
             }
             AssemblyInstruction::JumpFromStack => {
-                println!("jmp_stack");
+                print!("jmp_stack");
             }
-            AssemblyInstruction::Return => println!("return"),
+            AssemblyInstruction::Return => print!("return"),
+        }
+        match &inst.1 {
+            Some(annotation) => println!("\t\t{}", annotation.annotation),
+            None => println!(),
         }
     }
 }

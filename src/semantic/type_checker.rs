@@ -2,6 +2,7 @@ use super::hir::{HIRAstMetadata, HIRExpr, HIRExprMetadata, TrivialHIRExpr};
 use crate::ast::parser::AST;
 use crate::types::type_db::TypeDatabase;
 use crate::types::type_db::TypeInstance;
+use crate::types::type_errors::IfStatementNotBoolean;
 use crate::types::type_errors::{AssignContext, CallToNonCallableType, FunctionCallArgumentCountMismatch, FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch};
 
 use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode};
@@ -137,6 +138,30 @@ fn all_assignments_correct_type(
         }
     }
 }
+
+
+fn if_statement_exprs_read_from_bool_variable(
+    function_name: &str,
+    body: &[MIRBlock],
+    type_db: &TypeDatabase,
+    type_errors: &mut TypeErrors,
+) {
+    for body_node in body {
+        match &body_node.finish {
+            MIRBlockFinal::If(expr, _, _, _) => {
+                let expr_type = expr.1.expect_resolved();
+                if expr_type != &type_db.special_types.bool {
+                    type_errors.if_statement_unexpected_type.push(IfStatementNotBoolean {
+                        on_function: function_name.to_string(),
+                        actual_type: expr_type.clone()
+                    })
+                }
+            },
+            _ => {}
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionName {
@@ -293,6 +318,7 @@ fn type_check_function(
         type_db,
         type_errors,
     );
+    if_statement_exprs_read_from_bool_variable(function_name, body, type_db, type_errors);
 }
 
 pub fn check_type(

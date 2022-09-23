@@ -242,6 +242,46 @@ impl TypeErrorDisplay for InsufficientTypeInformationForArray {
     }
 }
 
+pub struct IfStatementNotBoolean {
+    pub on_function: String,
+    pub actual_type: TypeInstance
+}
+
+impl TypeErrorDisplay for IfStatementNotBoolean {
+    fn fmt_err(
+        &self,
+        type_db: &TypeDatabase,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "In function {on_function}, if statement expects boolean expression, but actual type is {actual_type}",
+            on_function = self.on_function,
+            actual_type = self.actual_type.as_string(type_db)
+        )
+    }
+}
+
+pub struct TypeInferenceFailure {
+    pub on_function: String,
+    pub variable: String
+}
+
+impl TypeErrorDisplay for TypeInferenceFailure {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeDatabase,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "In function {on_function}, type inference failed for variable {variable}",
+            on_function = self.on_function,
+            variable = self.variable,
+        )
+    }
+}
+
 macro_rules! make_type_errors {
     ($($field:ident : $typename:ty), *) => {
 
@@ -313,5 +353,7 @@ make_type_errors!(
     binary_op_not_found: Vec<BinaryOperatorNotFound>,
     unary_op_not_found: Vec<UnaryOperatorNotFound>,
     field_or_method_not_found: Vec<FieldOrMethodNotFound>,
-    insufficient_array_type_info: Vec<InsufficientTypeInformationForArray>
+    insufficient_array_type_info: Vec<InsufficientTypeInformationForArray>,
+    if_statement_unexpected_type: Vec<IfStatementNotBoolean>,
+    type_inference_failure: Vec<TypeInferenceFailure>
 );

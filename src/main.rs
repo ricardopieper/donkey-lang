@@ -15,6 +15,7 @@ mod types;
 use crate::ast::lexer;
 use crate::ast::parser;
 use crate::compiler::donkey_backend::generate_donkey_vm;
+use crate::donkey_vm::asm::asm_printer;
 use crate::donkey_vm::asm::assembler::as_donkey_vm_program;
 use crate::donkey_vm::asm::assembler::resolve;
 use crate::semantic::hir_printer::print_hir;
@@ -35,12 +36,13 @@ use crate::semantic::type_checker::check_type;
 
 use crate::types::type_errors::TypeErrorPrinter;
 
-use donkey_vm::asm::asm_instructions::AssemblyInstruction;
+use compiler::donkey_backend::DonkeyEmitter;
 use donkey_vm::asm::assembler::DonkeyProgram;
 use tracy_client::frame_name;
 use tracy_client::Client;
 
 fn main() {
+    println!("{}", 11i32 / 2i32);
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -107,7 +109,7 @@ fn main() {
 
     } else if args[1] == "compile" {
         let generated_asm = compile(&args[2]);
-        let resolved = resolve(&generated_asm);
+        let resolved = resolve(&generated_asm.assembly);
         let program = as_donkey_vm_program(&resolved);
 
         let out_file = if args.len() <= 3 {
@@ -119,7 +121,12 @@ fn main() {
         program.write_program(out_file);
     } else {
         let generated_asm = compile(&args[1]);
-        let resolved = resolve(&generated_asm);
+
+        if let Some(arg) = args.get(2) && arg == "print_asm" {
+            asm_printer::print(generated_asm.iter_annotated());
+        }
+
+        let resolved = resolve(&generated_asm.assembly);
         let program = as_donkey_vm_program(&resolved);
 
         let (mut memory, mut registers) = runner::prepare_vm();
@@ -129,7 +136,7 @@ fn main() {
 }
 
 
-fn compile(file_name: &str) -> Vec<AssemblyInstruction> {
+fn compile(file_name: &str) -> DonkeyEmitter {
     let input = fs::read_to_string(file_name)
         .unwrap_or_else(|_| panic!("Could not read file {}", file_name));
     let tokens = lexer::tokenize(input.as_str());

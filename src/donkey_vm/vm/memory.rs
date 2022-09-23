@@ -43,7 +43,7 @@ macro_rules! impl_native_read {
                 <$type>::from_le_bytes(data)
             }
             fn to_bytes(&self) -> [u8; std::mem::size_of::<$type>()] {
-                self.to_le_bytes().try_into().unwrap()
+                self.to_le_bytes()
             }
         }
     };

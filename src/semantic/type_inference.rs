@@ -6,7 +6,7 @@ use crate::types::type_db::{TypeConstructor, TypeDatabase, TypeId, TypeInstance}
 use crate::types::type_errors::{
     BinaryOperatorNotFound, CallToNonCallableType, FieldOrMethodNotFound,
     InsufficientTypeInformationForArray, TypeErrors, TypeNotFound, UnaryOperatorNotFound,
-    UnexpectedTypeFound,
+    UnexpectedTypeFound, TypeInferenceFailure,
 };
 use either::Either;
 
@@ -247,7 +247,13 @@ pub fn compute_and_infer_expr_type(
     match expression {
         HIRExpr::Trivial(TypedTrivialHIRExpr(TrivialHIRExpr::Variable(var), _), meta) => {
             match decls_in_scope.get(var) {
-                HIRTypeDef::PendingInference => panic!("Expr type inference bug: tried to resolve a type of variable {} in expression, but variable still needs type inference. If the variable was declared before, it should have been inferred before.", &var),
+                HIRTypeDef::PendingInference => {
+                    errors.type_inference_failure.push(TypeInferenceFailure {
+                        on_function: on_function.to_string(),
+                        variable: var.to_string()
+                    });
+                    (expression.clone(), None)
+                },
                 HIRTypeDef::Unresolved(mir_type) => {
                     let instantiated_type = instantiate_type(on_function, type_db, &mir_type, errors);
 
@@ -852,10 +858,11 @@ fn infer_types_in_variable_declaration(
             );
         }
         None => {
+            let expr_type = typed_expr.get_expr_type().clone();
             //HIRExpr type is probably pending or unresolved
             decls_in_scope.insert(
                 variable_name.to_string(),
-                typed_expr.get_expr_type().clone(),
+                expr_type,
             );
         }
     }
@@ -887,7 +894,6 @@ fn infer_variable_types_in_functions(
     for p in parameters {
         decls_in_scope.insert(p.name.clone(), p.typename.clone());
     }
-
     //We should add the function itself in the scope, to allow recursion!
     //Luckily the function itself is already on the globals!
     decls_in_scope.include(globals);

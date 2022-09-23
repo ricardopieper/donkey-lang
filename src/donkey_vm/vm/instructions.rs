@@ -179,6 +179,7 @@ pub enum ArithmeticOperation {
     Multiply = 0b010,
     Divide = 0b011,
     Power = 0b100,
+    Mod = 0b101,
 }
 
 impl From<u8> for ArithmeticOperation {
@@ -189,6 +190,7 @@ impl From<u8> for ArithmeticOperation {
             0b010 => Self::Multiply,
             0b011 => Self::Divide,
             0b100 => Self::Power,
+            0b101 => Self::Mod,
             _ => panic!("Cannot convert {u} to ArithmeticOperation"),
         }
     }
@@ -202,6 +204,7 @@ impl ArithmeticOperation {
             ArithmeticOperation::Multiply => 0b010,
             ArithmeticOperation::Divide => 0b011,
             ArithmeticOperation::Power => 0b100,
+            ArithmeticOperation::Mod => 0b101,
         }
     }
 }
