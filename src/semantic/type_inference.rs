@@ -6,7 +6,7 @@ use crate::types::type_db::{TypeConstructor, TypeDatabase, TypeId, TypeInstance}
 use crate::types::type_errors::{
     BinaryOperatorNotFound, CallToNonCallableType, FieldOrMethodNotFound,
     InsufficientTypeInformationForArray, TypeErrors, TypeNotFound, UnaryOperatorNotFound,
-    UnexpectedTypeFound, TypeInferenceFailure,
+    UnexpectedTypeFound, TypeInferenceFailure
 };
 use either::Either;
 
@@ -245,7 +245,11 @@ pub fn compute_and_infer_expr_type(
 ) -> HIRExpr {
     match expression {
         HIRExpr::Trivial(TrivialHIRExpr::Variable(var), _, meta) => {
-            match decls_in_scope.get(var) {
+            let decl_type = decls_in_scope.get(var);
+            if let None = decl_type {
+                panic!("Variable {} not found, function: {}", var, on_function);
+            }
+            match decl_type.unwrap() {
                 HIRTypeDef::PendingInference => {
                     errors.type_inference_failure.push(TypeInferenceFailure {
                         on_function: on_function.to_string(),
@@ -307,6 +311,62 @@ pub fn compute_and_infer_expr_type(
             compute_infer_array(array_items, type_hint, errors, on_function, expression, type_db, meta, decls_in_scope)
         },
         HIRExpr::Cast(..) => todo!("Casts haven't been figured out yet"),
+        HIRExpr::MethodCall(obj, method_name, params, _, meta) => {
+            compute_infer_method_call(on_function, type_db, decls_in_scope, obj, errors, method_name, params, meta, expression)
+        },
+    }
+}
+
+fn compute_infer_method_call(on_function: &str, type_db: &TypeDatabase, decls_in_scope: &NameRegistry, obj: &Box<HIRExpr>, errors: &mut TypeErrors, method_name: &String, params: &Vec<HIRExpr>, meta: &Option<crate::ast::parser::Expr>, expression: &HIRExpr) -> HIRExpr {
+    //compute type of obj
+    //find method_name in type of obj
+    let objexpr = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, obj, None, errors);
+    let typeof_obj = objexpr.expect_resolved();
+    let (type_id, generics) = match typeof_obj {
+        TypeInstance::Generic(type_id, generics) => (type_id, generics.clone()),
+        TypeInstance::Simple(type_id) => (type_id, vec![]),
+        TypeInstance::Function(..) => panic!("Member access on functions is not possble") //@TODO make a type error 
+    };
+    let type_data = type_db.find(*type_id);
+    let type_res = TypeResolution::new(Some(*type_id), &generics);
+    //we'll find the method call here by name
+    let method = type_data.methods
+        .iter()
+        .find(|signature| signature.name == *method_name);
+    if let Some(signature) = method {
+        //if function signature has type parameters
+        //we have to replace them but for now forget about it
+        //we don't have syntax to call functions with their own type params
+        assert!(signature.type_args.is_empty(), "Function type args not supported yet");
+        
+        //Now we have to resolve each element in the type signature.
+        //Remember that &generics will contain an i32 if we have a __index__(u32): TItem call on arr<i32>
+        //arg is a simple type
+        //In this case, return_type is generic, specifically Type::Simple(Either::Left(GenericParam("TItem")))
+        let return_type = resolve_type(
+            &signature.return_type, //this will be  Type::Simple(Either::Left(GenericParam("TItem")))
+            type_db, //just the type database
+            &type_res//typeof array, and i32
+        );
+
+        let args = params.iter().map(|x|
+            compute_and_infer_expr_type(
+                on_function, type_db, decls_in_scope,
+                &x, None, errors)).collect();
+
+        return HIRExpr::MethodCall(
+            objexpr.into(),
+            method_name.to_string(),
+            args,
+            HIRTypeDef::Resolved(return_type),
+            meta.clone()
+        );
+    } else {
+        errors.field_or_method_not_found.push(FieldOrMethodNotFound { 
+            on_function: on_function.to_string(), 
+            object_type: typeof_obj.clone(), 
+            field_or_method: method_name.to_string() });
+        return expression.clone()
     }
 }
 
@@ -490,6 +550,7 @@ fn compute_infer_function_call(
     on_function: &str, type_db: &TypeDatabase, 
     decls_in_scope: &NameRegistry, meta: &Option<crate::ast::parser::Expr>,
     errors: &mut TypeErrors, expression: &HIRExpr) -> HIRExpr {
+    
     let HIRExpr::Trivial(TrivialHIRExpr::Variable(var), .., fcall_meta) = &fun_expr else {
         panic!("Functions should be bound to a name! This is a bug in the type inference phase or HIR expression reduction phase.");
     };
@@ -499,8 +560,12 @@ fn compute_infer_function_call(
             on_function, type_db, decls_in_scope,
             &x, None, errors)
     }).collect::<Vec<_>>();
+    let decl_type = decls_in_scope.get(var);
+    if let None = decl_type {
+        panic!("Variable {} not found, function: {}", var, on_function);
+    }
     //we have to find the function declaration
-    match decls_in_scope.get(var) {
+    match decl_type.unwrap() {
         HIRTypeDef::PendingInference => {
             //previous type inference failed for this variable, just continue
             expression.clone()
@@ -519,7 +584,7 @@ fn compute_infer_function_call(
                 HIRExpr::FunctionCall(
                     HIRExpr::Trivial(
                         TrivialHIRExpr::Variable(var.clone()),
-                        HIRTypeDef::Resolved(type_instance.clone()),
+                        HIRTypeDef::Resolved((*type_instance).clone()),
                         fcall_meta.clone()
                     ).into(),
                     fun_params,

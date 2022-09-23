@@ -1,5 +1,5 @@
 use crate::semantic::hir::{HIR, ast_to_hir};
-use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
+use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars, type_checker};
 use crate::types::type_db::TypeDatabase;
 use crate::{ast::parser::{AST}, types::type_errors::TypeErrors};
 
@@ -16,7 +16,7 @@ pub struct AnalysisResult {
 
 pub fn do_analysis(ast: &AST) -> AnalysisResult {
     let mut hir = vec![];
-    ast_to_hir(ast, 0, &mut hir);
+    ast_to_hir(ast, &mut hir);
 
     let initial_mir = hir.clone();
     let type_db = TypeDatabase::new();
@@ -90,15 +90,7 @@ def my_function() -> i32:
 
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", result);
-        //1 + 2 / 3.2 + func(1, 5);
-        /*
-        $0 : i32 = 1 + 2
-        $1 : i32 = func(1, 5)
-        $2 : f32 = 3.2 + $1
-        $3 : <erro> = $0 + $2
 
-
-        */
         let expected = "
 def my_function() -> i32:
     x : f64 = 1.0
@@ -134,9 +126,7 @@ def my_function(arg1: i32, arg2: i32) -> i32:
 
         let expected = "
 def my_function(arg1: i32, arg2: i32) -> i32:
-    $0 : i32 = arg1 * arg2
-    $1 : i32 = arg2 - arg1
-    return $0 / $1";
+    return arg1 * arg2 / arg2 - arg1";
 
         assert_eq!(expected.trim(), result.trim());
     }
@@ -184,8 +174,7 @@ def main(args: array<str>):
         println!("{}", final_result);
         let expected = "
 def main(args: array<str>) -> Void:
-    $0 : fn (u32) -> str = args.__index__
-    my_var : str = $0(0)
+    my_var : str = args.__index__(0)
     print(my_var)";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -203,16 +192,7 @@ def my_function() -> i32:
 
         let expected = "
 def my_function() -> i32:
-    $0 : f32 = 16.0 / 4.0
-    $1 : f32 = 2.0 * 2.1
-    $2 : f32 = $0 + $1
-    $3 : f32 = sqrt_f32($2)
-    $4 : f32 = $3 / 2.0
-    $5 : f32 = $4 * 4.0
-    $6 : f32 = 1.3 + $5
-    $7 : f32 = pow_f32(2.0, 2.0)
-    $8 : f32 = 3.0 * $7
-    x : f32 = $6 + $8
+    x : f32 = 1.3 + sqrt_f32(16.0 / 4.0 + 2.0 * 2.1) / 2.0 * 4.0 + 3.0 * pow_f32(2.0, 2.0)
 ";
 
         assert_eq!(expected.trim(), result.trim());
@@ -244,7 +224,8 @@ def main() -> Void:
     fn infer_defined_function_generic_param() {
         let analyzed = hir("
 def id(x: array<str>) -> str:
-    return x[0]
+    first_item = x[0]
+    return first_item
 
 def main():
     my_var = id(1)
@@ -254,8 +235,8 @@ def main():
         println!("{}", final_result);
         let expected = "
 def id(x: array<str>) -> str:
-    $0 : fn (u32) -> str = x.__index__
-    return $0(0)
+    first_item : str = x.__index__(0)
+    return first_item
 def main() -> Void:
     my_var : str = id(1)
     print(my_var)";
@@ -278,8 +259,7 @@ def main():
         println!("{}", final_result);
         let expected = "
 def id(x: array<str>) -> str:
-    $0 : fn (u32) -> str = x.__index__
-    return $0(0)
+    return x.__index__(0)
 def main() -> Void:
     my_func : fn (array<str>) -> str = id
     my_var : str = my_func(1)
@@ -335,7 +315,7 @@ def main(x: i32) -> i32:
         });
         let err = result.unwrap_err();
         let as_str = err.downcast_ref::<String>().unwrap();
-        assert_eq!(as_str, "Could not find a name for y");
+        assert_eq!(as_str, "Variable y not found, function: main");
     }
 
     #[test]
@@ -367,8 +347,7 @@ def main(x: i32) -> i32:
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
-    $0 : bool = x == 0
-    if $0:
+    if x == 0:
         return 1
     else:
         return 2";
@@ -393,12 +372,10 @@ def main(x: i32) -> i32:
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
-    $0 : bool = x == 0
-    if $0:
+    if x == 0:
         return 1
     else:
-        $1 : bool = x == 2
-        if $1:
+        if x == 2:
             return 2
         else:
             return x";
@@ -423,12 +400,10 @@ def main(x: i32) -> i32:
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
-    $0 : bool = x == 0
-    if $0:
+    if x == 0:
         print(x)
     else:
-        $1 : bool = x == 2
-        if $1:
+        if x == 2:
             return 2
         else:
             return x";
@@ -494,8 +469,7 @@ def main() -> i32:
 def main() -> i32:
     if True:
         x : i32 = 1
-        $0 : bool = 1 == 1
-        if $0:
+        if 1 == 1:
             x = x + 3
             return x
         else:
@@ -504,8 +478,7 @@ def main() -> i32:
         print(\"nice\")
     else:
         y : i32 = 3
-        $0 : bool = 2 == 2
-        if $0:
+        if 2 == 2:
             y = y + 1
             print(y)
         else:

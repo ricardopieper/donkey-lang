@@ -51,19 +51,10 @@ impl NameRegistry {
         }
     }
 
-    pub fn get(&self, name: &str) -> HIRTypeDef {
+    pub fn get(&self, name: &str) -> Option<&HIRTypeDef> {
         return self
             .names
             .get(name)
-            .unwrap_or_else(|| panic!("Could not find a name for {}", name))
-            .clone();
-    }
-
-    pub fn get_ref(&self, name: &str) -> &HIRTypeDef {
-        return self
-            .names
-            .get(name)
-            .unwrap_or_else(|| panic!("Could not find a name for {}", name));
     }
 
     pub fn get_names(&self) -> impl Iterator<Item = &String> {

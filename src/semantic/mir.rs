@@ -713,11 +713,6 @@ def main(x: i32) -> i32:
         z : i32
     defscope 4:
         inheritscope 3
-    defscope 5:
-        inheritscope 4
-        $0 : i32
-    defscope 6:
-        inheritscope 5
     defblock 0:
         usescope 0
         gotoblock 1
@@ -734,14 +729,7 @@ def main(x: i32) -> i32:
         gotoblock 4
     defblock 4:
         usescope 4
-        gotoblock 5
-    defblock 5:
-        usescope 5
-        $0 = y + z
-        gotoblock 6
-    defblock 6:
-        usescope 6
-        return x / $0
+        return x / y + z
         ";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -851,13 +839,8 @@ def main() -> Void:
         inheritscope 1
     defscope 3:
         inheritscope 2
-        $0 : bool
     defscope 4:
-        inheritscope 3
-    defscope 5:
-        inheritscope 4
-    defscope 6:
-        inheritscope 4
+        inheritscope 2
     defblock 0:
         usescope 0
         gotoblock 1
@@ -867,23 +850,16 @@ def main() -> Void:
         gotoblock 2
     defblock 2:
         usescope 2
-        gotoblock 3
+        if y == 1:
+            gotoblock 3
+        else:
+            gotoblock 4
     defblock 3:
         usescope 3
-        $0 = y == 1
+        print(y)
         gotoblock 4
     defblock 4:
         usescope 4
-        if $0:
-            gotoblock 5
-        else:
-            gotoblock 6
-    defblock 5:
-        usescope 5
-        print(y)
-        gotoblock 6
-    defblock 6:
-        usescope 6
         return
         ";
 
@@ -1068,13 +1044,8 @@ def main() -> i32:
         inheritscope 1
     defscope 3:
         inheritscope 2
-        $0 : bool
     defscope 4:
-        inheritscope 3
-    defscope 5:
-        inheritscope 4
-    defscope 6:
-        inheritscope 4
+        inheritscope 2
     defblock 0:
         usescope 0
         gotoblock 1
@@ -1084,23 +1055,16 @@ def main() -> i32:
         gotoblock 2
     defblock 2:
         usescope 2
-        gotoblock 3
+        if x == 0:
+            gotoblock 3
+        else:
+            gotoblock 4
     defblock 3:
         usescope 3
-        $0 = x == 0
+        x = x + 1
         gotoblock 4
     defblock 4:
         usescope 4
-        if $0:
-            gotoblock 5
-        else:
-            gotoblock 6
-    defblock 5:
-        usescope 5
-        x = x + 1
-        gotoblock 6
-    defblock 6:
-        usescope 6
         print(x)
         return";
 
@@ -1131,15 +1095,10 @@ def main() -> i32:
         inheritscope 1
     defscope 3:
         inheritscope 2
-        $0 : bool
     defscope 4:
-        inheritscope 3
+        inheritscope 2
     defscope 5:
-        inheritscope 4
-    defscope 6:
-        inheritscope 4
-    defscope 7:
-        inheritscope 4
+        inheritscope 2
     defblock 0:
         usescope 0
         gotoblock 1
@@ -1149,27 +1108,20 @@ def main() -> i32:
         gotoblock 2
     defblock 2:
         usescope 2
-        gotoblock 3
+        if x == 0:
+            gotoblock 3
+        else:
+            gotoblock 5
     defblock 3:
         usescope 3
-        $0 = x == 0
+        print(1)
         gotoblock 4
     defblock 4:
         usescope 4
-        if $0:
-            gotoblock 5
-        else:
-            gotoblock 7
-    defblock 5:
-        usescope 5
-        print(1)
-        gotoblock 6
-    defblock 6:
-        usescope 6
         print(x)
         return
-    defblock 7:
-        usescope 7
+    defblock 5:
+        usescope 5
         return x";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -1199,15 +1151,10 @@ def main() -> i32:
         inheritscope 1
     defscope 3:
         inheritscope 2
-        $0 : bool
     defscope 4:
-        inheritscope 3
+        inheritscope 2
     defscope 5:
-        inheritscope 4
-    defscope 6:
-        inheritscope 4
-    defscope 7:
-        inheritscope 4
+        inheritscope 2
     defblock 0:
         usescope 0
         gotoblock 1
@@ -1217,29 +1164,23 @@ def main() -> i32:
         gotoblock 2
     defblock 2:
         usescope 2
-        gotoblock 3
+        if x == 0:
+            gotoblock 3
+        else:
+            gotoblock 5
     defblock 3:
         usescope 3
-        $0 = x == 0
+        x = x + 1
         gotoblock 4
     defblock 4:
         usescope 4
-        if $0:
-            gotoblock 5
-        else:
-            gotoblock 7
-    defblock 5:
-        usescope 5
-        x = x + 1
-        gotoblock 6
-    defblock 6:
-        usescope 6
         print(x)
         return
-    defblock 7:
-        usescope 7
+    defblock 5:
+        usescope 5
         x = 2
-        gotoblock 6";
+        gotoblock 4
+        ";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -1357,35 +1298,25 @@ def main() -> i32:
         inheritscope 2
     defscope 4:
         inheritscope 3
-        $0 : bool
     defscope 5:
-        inheritscope 4
+        inheritscope 3
     defscope 6:
-        inheritscope 5
-    defscope 7:
-        inheritscope 5
-    defscope 8:
         inheritscope 0
-    defscope 9:
-        inheritscope 5
+    defscope 7:
+        inheritscope 3
         y : i32
+    defscope 8:
+        inheritscope 7
+    defscope 9:
+        inheritscope 8
     defscope 10:
-        inheritscope 9
-    defscope 11:
-        inheritscope 10
-        $0 : bool
-    defscope 12:
-        inheritscope 11
-    defscope 13:
-        inheritscope 12
-    defscope 14:
-        inheritscope 12
+        inheritscope 8
     defblock 0:
         usescope 0
         if True:
             gotoblock 1
         else:
-            gotoblock 8
+            gotoblock 6
     defblock 1:
         usescope 1
         gotoblock 2
@@ -1395,50 +1326,36 @@ def main() -> i32:
         gotoblock 3
     defblock 3:
         usescope 3
-        gotoblock 4
+        if 1 == 1:
+            gotoblock 4
+        else:
+            gotoblock 5
     defblock 4:
         usescope 4
-        $0 = 1 == 1
-        gotoblock 5
-    defblock 5:
-        usescope 5
-        if $0:
-            gotoblock 6
-        else:
-            gotoblock 7
-    defblock 6:
-        usescope 6
         x = x + 3
         return x
-    defblock 7:
-        usescope 7
+    defblock 5:
+        usescope 5
         x = x + 1
         return x
+    defblock 6:
+        usescope 6
+        gotoblock 7
+    defblock 7:
+        usescope 7
+        y = 3
+        gotoblock 8
     defblock 8:
         usescope 8
-        gotoblock 9
+        if 2 == 2:
+            gotoblock 9
+        else:
+            gotoblock 10
     defblock 9:
         usescope 9
-        y = 3
-        gotoblock 10
+        return y + 1
     defblock 10:
         usescope 10
-        gotoblock 11
-    defblock 11:
-        usescope 11
-        $0 = 2 == 2
-        gotoblock 12
-    defblock 12:
-        usescope 12
-        if $0:
-            gotoblock 13
-        else:
-            gotoblock 14
-    defblock 13:
-        usescope 13
-        return y + 1
-    defblock 14:
-        usescope 14
         return 4 * y";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -1481,39 +1398,29 @@ def main() -> i32:
         inheritscope 2
     defscope 4:
         inheritscope 3
-        $0 : bool
     defscope 5:
-        inheritscope 4
+        inheritscope 3
     defscope 6:
-        inheritscope 5
+        inheritscope 3
     defscope 7:
-        inheritscope 5
-    defscope 8:
-        inheritscope 5
-    defscope 9:
         inheritscope 0
-    defscope 10:
-        inheritscope 5
+    defscope 8:
+        inheritscope 3
         y : i32
+    defscope 9:
+        inheritscope 8
+    defscope 10:
+        inheritscope 9
     defscope 11:
-        inheritscope 10
+        inheritscope 9
     defscope 12:
-        inheritscope 11
-        $0 : bool
-    defscope 13:
-        inheritscope 12
-    defscope 14:
-        inheritscope 13
-    defscope 15:
-        inheritscope 13
-    defscope 16:
-        inheritscope 13
+        inheritscope 9
     defblock 0:
         usescope 0
         if True:
             gotoblock 1
         else:
-            gotoblock 9
+            gotoblock 7
     defblock 1:
         usescope 1
         gotoblock 2
@@ -1523,60 +1430,46 @@ def main() -> i32:
         gotoblock 3
     defblock 3:
         usescope 3
-        gotoblock 4
+        if 1 == 1:
+            gotoblock 4
+        else:
+            gotoblock 5
     defblock 4:
         usescope 4
-        $0 = 1 == 1
-        gotoblock 5
-    defblock 5:
-        usescope 5
-        if $0:
-            gotoblock 6
-        else:
-            gotoblock 7
-    defblock 6:
-        usescope 6
         x = x + 3
         return x
-    defblock 7:
-        usescope 7
+    defblock 5:
+        usescope 5
         x = x + 1
         print(x)
+        gotoblock 6
+    defblock 6:
+        usescope 6
+        print(\"nice\")
+        return
+    defblock 7:
+        usescope 7
         gotoblock 8
     defblock 8:
         usescope 8
-        print(\"nice\")
-        return
+        y = 3
+        gotoblock 9
     defblock 9:
         usescope 9
-        gotoblock 10
+        if 2 == 2:
+            gotoblock 10
+        else:
+            gotoblock 12
     defblock 10:
         usescope 10
-        y = 3
+        y = y + 1
+        print(y)
         gotoblock 11
     defblock 11:
         usescope 11
-        gotoblock 12
+        return
     defblock 12:
         usescope 12
-        $0 = 2 == 2
-        gotoblock 13
-    defblock 13:
-        usescope 13
-        if $0:
-            gotoblock 14
-        else:
-            gotoblock 16
-    defblock 14:
-        usescope 14
-        y = y + 1
-        print(y)
-        gotoblock 15
-    defblock 15:
-        usescope 15
-        return
-    defblock 16:
-        usescope 16
         return 4 * y";
 
         assert_eq!(expected.trim(), final_result.trim());

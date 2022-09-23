@@ -28,7 +28,7 @@ fn find_variable_and_get_type<'block, 'scope>(
     }
 
     //try find in the global scope
-    return names.get_ref(name).expect_resolved();
+    return names.get(name).unwrap().expect_resolved();
 }
 
 fn check_function_arguments(
@@ -178,6 +178,7 @@ fn get_actual_function_name_with_details(
     meta_ast: &HIRAstMetadata,
     meta_expr: &HIRExprMetadata,
 ) -> FunctionName {
+    println!("GET FUNC NAME: {function_name}, {meta_expr:#?}");
     if meta_ast.is_none() && meta_expr.is_none() {
         return FunctionName::Function(function_name.to_string());
     }
@@ -318,6 +319,7 @@ fn type_check_function(
         type_db,
         type_errors,
     );
+    
     if_statement_exprs_read_from_bool_variable(function_name, body, type_db, type_errors);
 }
 

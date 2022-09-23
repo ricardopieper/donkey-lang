@@ -44,6 +44,15 @@ pub fn expr_str(expr: &HIRExpr) -> String {
                 .join(", ");
             format!("{}({})", expr_str(f), args_str)
         }
+        HIRExpr::MethodCall(obj, name, params, ..) => {
+            let args_str = params
+                .iter()
+                .map(expr_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}.{}({})", expr_str(obj), name, args_str)
+        },
+
         HIRExpr::BinaryOperation(var, op, var2, ..) => format!(
             "{} {} {}",
             expr_str(var),

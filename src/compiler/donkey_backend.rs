@@ -318,6 +318,7 @@ fn generate_expr(
         HIRExpr::UnaryExpression(_, _, _, _) => todo!("unary expression not implemented"),
         HIRExpr::MemberAccess(_, _, _, _) => todo!("member access not implemented"),
         HIRExpr::Array(_, _, _) => todo!("arrays not implemented"),
+        HIRExpr::MethodCall(_, _, _, _, _) => todo!("method call not implemented"),
     }
 }
 
