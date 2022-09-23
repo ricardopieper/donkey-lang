@@ -1,4 +1,4 @@
-use super::hir::{HIR, HIRAstMetadata, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, TypedTrivialHIRExpr};
+use super::hir::{HIR, HIRAstMetadata, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr};
 
 use crate::ast::parser::{AST, Expr};
 
@@ -61,7 +61,7 @@ pub enum MIRBlockNode {
         stored in a map. The HIR expr reduction extracts it out to a variable.
         */
         function: String,
-        args: Vec<TypedTrivialHIRExpr>,
+        args: Vec<HIRExpr>,
         meta_ast: Option<AST>,
     },
 }
@@ -94,7 +94,7 @@ pub struct MIRScope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockFinal {
     //expression, true, else, meta
-    If(TypedTrivialHIRExpr, BlockId, BlockId, HIRAstMetadata),
+    If(HIRExpr, BlockId, BlockId, HIRAstMetadata),
     GotoBlock(BlockId),
     Return(HIRExpr, HIRAstMetadata),
     EmptyReturn,
@@ -188,7 +188,7 @@ impl MIRFunctionEmitter {
 
     fn finish_with_branch(
         &mut self,
-        condition: TypedTrivialHIRExpr,
+        condition: HIRExpr,
         true_branch: BlockId,
         false_branch: BlockId,
         meta_ast: HIRAstMetadata,
@@ -311,8 +311,8 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 args,
                 meta,
             } => {
-                match &function.0 {
-                    TrivialHIRExpr::Variable(var) => {
+                match &function {
+                    HIRExpr::Trivial(TrivialHIRExpr::Variable(var), ..) => {
                         emitter.emit(MIRBlockNode::FunctionCall {
                             function: var.clone(),
                             args: args.clone(),
@@ -323,7 +323,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 };
             }
             HIR::If(condition, true_branch_hir, false_branch_hir, ast) => {
-                let HIRTypeDef::Resolved(_actual_condition_type) = &condition.1 else {
+                let HIRTypeDef::Resolved(_actual_condition_type) = &condition.get_expr_type() else {
                     panic!("Unresolved condition type reached MIR, this might be a type inference bug");
                 };
 

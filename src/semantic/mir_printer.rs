@@ -1,4 +1,4 @@
-use crate::semantic::hir_printer::{expr_str, trivial_expr_str};
+use crate::semantic::hir_printer::{expr_str};
 use crate::types::type_db::TypeDatabase;
 
 use super::mir::MIRBlock;
@@ -26,7 +26,7 @@ fn print_mir_block(block: &MIRBlock, _type_db: &TypeDatabase) -> String {
             MIRBlockNode::FunctionCall { function, args, .. } => {
                 let args_str = args
                     .iter()
-                    .map(trivial_expr_str)
+                    .map(expr_str)
                     .collect::<Vec<_>>()
                     .join(", ");
                 buffer.push_str(&format!("        {}({})\n", function, args_str));
@@ -42,7 +42,7 @@ fn print_mir_block(block: &MIRBlock, _type_db: &TypeDatabase) -> String {
         else:
             gotoblock {}
 ",
-                trivial_expr_str(condition), //if condition:
+                expr_str(condition), //if condition:
                 true_branch.0,               //gotoblock 0
                 false_branch.0
             )); //gotoblock 1

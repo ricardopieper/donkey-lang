@@ -149,7 +149,7 @@ fn if_statement_exprs_read_from_bool_variable(
     for body_node in body {
         match &body_node.finish {
             MIRBlockFinal::If(expr, _, _, _) => {
-                let expr_type = expr.1.expect_resolved();
+                let expr_type = expr.expect_resolved();
                 if expr_type != &type_db.special_types.bool {
                     type_errors.if_statement_unexpected_type.push(IfStatementNotBoolean {
                         on_function: function_name.to_string(),
@@ -231,26 +231,26 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         continue; //other cases handled elsewhere
                     };
                     //if it is a function call, check that the arguments match (return type and arguments passed)
-                    let TypeInstance::Function(func_args_types, func_return_type) = call_expr.1.expect_resolved() else {
+                    let TypeInstance::Function(func_args_types, func_return_type) = call_expr.expect_resolved() else {
                         type_errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
-                            actual_type: call_expr.1.expect_resolved().clone()
+                            actual_type: call_expr.expect_resolved().clone()
                         });
                         continue;
                     };
-
-                    let TrivialHIRExpr::Variable(called_function) = &call_expr.0 else {
-                        panic!("Cannot call function that is not named: anonymous functions not supported yet");
+                    
+                    let HIRExpr::Trivial(TrivialHIRExpr::Variable(called_function), ..) = &**call_expr else {
+                        panic!("Cannot call function that is not named: anonymous functions not supported yet")
                     };
 
                     assert!(!(return_type.expect_resolved() != func_return_type.as_ref()), "Return type of function is {func_return_type:#?} but expression return type is {return_type:#?}. This should not happen. This is a type inference bug, and something is inconsistent!");
 
                     let passed_types = args
                         .iter()
-                        .map(|x| x.1.expect_resolved().clone())
+                        .map(|x| x.expect_resolved().clone())
                         .collect::<Vec<_>>();
                     let actual_function_name = get_actual_function_name_with_details(
-                        called_function,
+                        &called_function,
                         meta_ast,
                         expr_metadata,
                     );
@@ -273,7 +273,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         TypeInstance::Function(argument_types, _) => {
                             let passed = args
                                 .iter()
-                                .map(|x| x.1.expect_resolved().clone())
+                                .map(|x| x.expect_resolved().clone())
                                 .collect::<Vec<_>>();
                             let actual_function_name =
                                 get_actual_function_name_with_details(function, meta_ast, &None);

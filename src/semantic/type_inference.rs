@@ -1,5 +1,5 @@
 use crate::semantic::hir::{
-    HIRExpr, HIRType, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, TypedTrivialHIRExpr, HIR,
+    HIRExpr, HIRType, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, HIR,
 };
 use crate::semantic::name_registry::NameRegistry;
 use crate::types::type_db::{TypeConstructor, TypeDatabase, TypeId, TypeInstance};
@@ -235,7 +235,6 @@ fn make_resolved_or_unresolved_typedef(
     }
 }
 
-//maybe add a type hint here for empty arrays in assigns
 pub fn compute_and_infer_expr_type(
     on_function: &str,
     type_db: &TypeDatabase,
@@ -243,44 +242,38 @@ pub fn compute_and_infer_expr_type(
     expression: &HIRExpr,
     type_hint: Option<TypeInstance>,
     errors: &mut TypeErrors,
-) -> (HIRExpr, Option<TypeInstance>) {
+) -> HIRExpr {
     match expression {
-        HIRExpr::Trivial(TypedTrivialHIRExpr(TrivialHIRExpr::Variable(var), _), meta) => {
+        HIRExpr::Trivial(TrivialHIRExpr::Variable(var), _, meta) => {
             match decls_in_scope.get(var) {
                 HIRTypeDef::PendingInference => {
                     errors.type_inference_failure.push(TypeInferenceFailure {
                         on_function: on_function.to_string(),
                         variable: var.to_string()
                     });
-                    (expression.clone(), None)
+                    expression.clone()
                 },
                 HIRTypeDef::Unresolved(mir_type) => {
                     let instantiated_type = instantiate_type(on_function, type_db, &mir_type, errors);
 
-                    let expr = HIRExpr::Trivial(
-                        TypedTrivialHIRExpr(
-                            TrivialHIRExpr::Variable(var.clone()),
-                            make_resolved_or_unresolved_typedef(&mir_type, &instantiated_type)
-                        ),
+                    HIRExpr::Trivial(
+                        TrivialHIRExpr::Variable(var.clone()),
+                        make_resolved_or_unresolved_typedef(&mir_type, &instantiated_type),
                         meta.clone()
-                    );
-                    (expr, instantiated_type)
+                    )
                 },
                 HIRTypeDef::Resolved(resolved) => {
-                    let expr = HIRExpr::Trivial(
-                        TypedTrivialHIRExpr(
-                            TrivialHIRExpr::Variable(var.clone()),
-                            HIRTypeDef::Resolved(resolved.clone())
-                        ),
+                    HIRExpr::Trivial(
+                        TrivialHIRExpr::Variable(var.clone()),
+                        HIRTypeDef::Resolved(resolved.clone()),
                         meta.clone()
-                    );
-                    (expr, Some(resolved))
+                    )
                 },
             }
         }
-        HIRExpr::Trivial(trivial_expr, meta) => {
+        HIRExpr::Trivial(trivial_expr, _, meta) => {
             //@TODO maybe use a type hint here to resolve to u32, u64, etc whenever needed, as in index accessors
-            let typename = match trivial_expr.0 {
+            let typename = match trivial_expr {
                 TrivialHIRExpr::IntegerValue(_) => "i32",
                 TrivialHIRExpr::FloatValue(_) => "f32",
                 TrivialHIRExpr::StringValue(_) => "str",
@@ -290,12 +283,10 @@ pub fn compute_and_infer_expr_type(
             };
             let type_rec = type_db.expect_find_by_name(typename);
             let type_instance = TypeInstance::Simple(type_rec.id);
-            let expr = HIRExpr::Trivial(TypedTrivialHIRExpr(
-                trivial_expr.0.clone(),
-                HIRTypeDef::Resolved(type_instance.clone())
-            ), meta.clone());
-
-            (expr, Some(type_instance))
+            HIRExpr::Trivial(
+                trivial_expr.clone(),
+                HIRTypeDef::Resolved(type_instance.clone()),
+                meta.clone())
         }
         HIRExpr::BinaryOperation(lhs, op, rhs, _, meta) => {
             compute_infer_binop(on_function, type_db, decls_in_scope, lhs, meta, errors, rhs, *op)
@@ -319,41 +310,39 @@ pub fn compute_and_infer_expr_type(
     }
 }
 
-fn compute_infer_array(array_items: &[TypedTrivialHIRExpr], type_hint: Option<TypeInstance>, errors: &mut TypeErrors, on_function: &str, expression: &HIRExpr, type_db: &TypeDatabase, meta: &Option<crate::ast::parser::Expr>, decls_in_scope: &NameRegistry) -> (HIRExpr, Option<TypeInstance>) {
+fn compute_infer_array(array_items: &[HIRExpr], type_hint: Option<TypeInstance>, errors: &mut TypeErrors, on_function: &str, expression: &HIRExpr, type_db: &TypeDatabase, meta: &Option<crate::ast::parser::Expr>, decls_in_scope: &NameRegistry) -> HIRExpr {
     if array_items.is_empty() && type_hint.is_none() {
         errors.insufficient_array_type_info.push(InsufficientTypeInformationForArray { on_function: on_function.to_string() });
-        return (expression.clone(), None);
+        return expression.clone();
     }
     //array type:
     let array_type = type_db.expect_find_by_name("array");
     if array_items.is_empty() {
         //guaranteed to have some value, if no items and no hint then this wuould've ended earlier
         //hint when correct already is generic(array, [i32])
-        let hint = type_hint.unwrap();
 
-        (HIRExpr::Array(vec![], HIRTypeDef::Resolved(hint.clone()), meta.clone()), Some(hint))
+        HIRExpr::Array(vec![], HIRTypeDef::Resolved(type_hint.unwrap().into()), meta.clone())
     } else {
-        let items_typed = array_items.iter().map(|x| {
-            let (expr, type_def) = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, &HIRExpr::Trivial(x.clone(), meta.clone()), None, errors);
-            (expr.expect_trivial(), type_def)
+        let all_exprs = array_items.iter().map(|x| {
+            compute_and_infer_expr_type(on_function, type_db, decls_in_scope, x, None, errors)
         }).collect::<Vec<_>>();
 
-        let all_exprs = items_typed.iter().map(|(expr, _)| expr.clone()).collect::<Vec<_>>();
-        let first_typed_item = items_typed.iter().find(|(_expr, typedef)| typedef.is_some());
+        let first_typed_item = all_exprs.iter().find(|expr|expr.get_expr_type().get_type().is_some());
 
-        if let Some((_expr, first_item_type)) = first_typed_item {
-            let array_type_generic_replaced = TypeInstance::Generic(array_type.id, vec![first_item_type.clone().unwrap()]);
-            (HIRExpr::Array(all_exprs, HIRTypeDef::Resolved(array_type_generic_replaced.clone()), meta.clone()), Some(array_type_generic_replaced))
+        if let Some(expr) = first_typed_item {
+            let first_item_type = expr.expect_resolved();
+            let array_type_generic_replaced = TypeInstance::Generic(array_type.id, vec![first_item_type.clone()]);
+            HIRExpr::Array(all_exprs, HIRTypeDef::Resolved(array_type_generic_replaced.clone()), meta.clone())
         } else {
             //array has items but all of them failed type inference lmao
             //no choice but to give up and return a fully unresolved array
             //hint does not matter much
-            (expression.clone(), None)
+            expression.clone()
         }
     }
 }
 
-fn compute_infer_member_access(on_function: &str, type_db: &TypeDatabase, decls_in_scope: &NameRegistry, obj: &TypedTrivialHIRExpr, meta: &Option<crate::ast::parser::Expr>, errors: &mut TypeErrors, name: &str) -> (HIRExpr, Option<TypeInstance>) {
+fn compute_infer_member_access(on_function: &str, type_db: &TypeDatabase, decls_in_scope: &NameRegistry, obj: &HIRExpr, meta: &Option<crate::ast::parser::Expr>, errors: &mut TypeErrors, name: &str) -> HIRExpr {
     //Let me guide you through the process of resolving a method call.
     /*
             Suppose we have:
@@ -379,146 +368,142 @@ fn compute_infer_member_access(on_function: &str, type_db: &TypeDatabase, decls_
             Therefore we are matching on MIRExpr::MemberAccess(TrivialHIRExpr::Variable("arr"), "__index__") 
 
             */
-    let (obj_expr, typeof_obj) = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, &HIRExpr::Trivial(obj.clone(), meta.clone()), None, errors);
-    match typeof_obj {
-        Some(found_type_obj) => {
-            let (type_id, generics) = match &found_type_obj {
-                TypeInstance::Generic(type_id, generics) => (type_id, generics.clone()),
-                TypeInstance::Simple(type_id) => (type_id, vec![]),
-                TypeInstance::Function(..) => panic!("Member access on functions isn't defined, maybe we could have cool things in the future, like some metaprogramming/run time type info stuff")
-            };
+    let obj_expr = 
+        compute_and_infer_expr_type(on_function, type_db, decls_in_scope, obj, None, errors);
 
-            let type_data = type_db.find(*type_id);
-            let type_res = TypeResolution::new(Some(*type_id), &generics);
-            
-            //we'll find the method call here by name
-            let method = type_data.methods
-                .iter()
-                .find(|signature| signature.name == *name);
-            if let Some(signature) = method {
-                //if function signature has type parameters
-                //we have to replace them but for now forget about it
-                //we don't have syntax to call functions with their own type params
-                assert!(signature.type_args.is_empty(), "Function type args not supported yet");
+    let typeof_obj = obj_expr.expect_resolved();
 
-                //Now we have to resolve each element in the type signature.
-                //Remember that &generics will contain an i32 if we have a __index__(u32): TItem call on arr<i32>
-                //arg is a simple type
-                let results = signature.args.iter().map(|arg| {
-                    resolve_type(
-                        arg,
-                        type_db,
-                        &type_res)
-                }).collect::<Vec<_>>();
-                //In this case, return_type is generic, specifically Type::Simple(Either::Left(GenericParam("TItem")))
-                let return_type = resolve_type(
-                    &signature.return_type, //this will be  Type::Simple(Either::Left(GenericParam("TItem")))
-                    type_db, //just the type database
-                    &type_res//typeof array, and i32
-                );
-                let member_access_expr = HIRExpr::MemberAccess(
-                    obj_expr.expect_trivial(),
-                    name.to_string(),
-                    HIRTypeDef::Resolved(TypeInstance::Function(results.clone(), Box::new(return_type.clone()))),
-                    meta.clone()
-                );
-                //Continue reading the comments on resolve_type.
-                return (member_access_expr, Some(TypeInstance::Function(results, Box::new(return_type))));
-            }
-            let field = type_data.fields
-                .iter()
-                .find(|field| field.name == *name);
-            if let Some(field) = field {
-                let resolved_type = resolve_type(&field.field_type,
-                    type_db,
-                    &type_res);
-                let member_access_expr = HIRExpr::MemberAccess(
-                    obj_expr.expect_trivial(),
-                    name.to_string(),
-                    HIRTypeDef::Resolved(resolved_type.clone()),
-                    meta.clone()
-                );
-                (member_access_expr, Some(resolved_type))
-            } else {
-                errors.field_or_method_not_found.push(FieldOrMethodNotFound {
-                    on_function: on_function.to_string(),
-                    object_type: found_type_obj.clone(),
-                    field_or_method: name.to_string()
-                });
-                (HIRExpr::MemberAccess(obj_expr.expect_trivial(), name.to_string(), HIRTypeDef::PendingInference, meta.clone()), None)
-            }
-        },
-        None => {
-            //error on obj has been already reported
-            (HIRExpr::MemberAccess(obj_expr.expect_trivial(), name.to_string(), HIRTypeDef::PendingInference, meta.clone()), None)
-        },
+   
+    let (type_id, generics) = match typeof_obj {
+        TypeInstance::Generic(type_id, generics) => (type_id, generics.clone()),
+        TypeInstance::Simple(type_id) => (type_id, vec![]),
+        TypeInstance::Function(..) => panic!("Member access on functions is not possble") //@TODO make a type error 
+    };
+
+    let type_data = type_db.find(*type_id);
+    let type_res = TypeResolution::new(Some(*type_id), &generics);
+    
+    //we'll find the method call here by name
+    let method = type_data.methods
+        .iter()
+        .find(|signature| signature.name == *name);
+    if let Some(signature) = method {
+        //if function signature has type parameters
+        //we have to replace them but for now forget about it
+        //we don't have syntax to call functions with their own type params
+        assert!(signature.type_args.is_empty(), "Function type args not supported yet");
+
+        //Now we have to resolve each element in the type signature.
+        //Remember that &generics will contain an i32 if we have a __index__(u32): TItem call on arr<i32>
+        //arg is a simple type
+        let results = signature.args.iter().map(|arg| {
+            resolve_type(
+                arg,
+                type_db,
+                &type_res)
+        }).collect::<Vec<_>>();
+        //In this case, return_type is generic, specifically Type::Simple(Either::Left(GenericParam("TItem")))
+        let return_type = resolve_type(
+            &signature.return_type, //this will be  Type::Simple(Either::Left(GenericParam("TItem")))
+            type_db, //just the type database
+            &type_res//typeof array, and i32
+        );
+        return HIRExpr::MemberAccess(
+            obj_expr.into(),
+            name.to_string(),
+            HIRTypeDef::Resolved(TypeInstance::Function(results, Box::new(return_type))),
+            meta.clone()
+        );
     }
+    let field = type_data.fields
+        .iter()
+        .find(|field| field.name == *name);
+    if let Some(field) = field {
+        let resolved_type = resolve_type(&field.field_type,
+            type_db,
+            &type_res);
+        HIRExpr::MemberAccess(
+            obj_expr.into(),
+            name.to_string(),
+            HIRTypeDef::Resolved(resolved_type),
+            meta.clone()
+        )
+    } else {
+        errors.field_or_method_not_found.push(FieldOrMethodNotFound {
+            on_function: on_function.to_string(),
+            object_type: typeof_obj.clone(),
+            field_or_method: name.to_string()
+        });
+        HIRExpr::MemberAccess(obj_expr.into(), name.to_string(), HIRTypeDef::PendingInference, meta.clone())
+    }
+       
 }
 
-fn compute_infer_unary_expr(on_function: &str, type_db: &TypeDatabase, decls_in_scope: &NameRegistry, rhs: &TypedTrivialHIRExpr, meta: &Option<crate::ast::parser::Expr>, errors: &mut TypeErrors, op: crate::ast::lexer::Operator) -> (HIRExpr, Option<TypeInstance>) {
-    let (rhs_expr, rhs_type)  = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, &HIRExpr::Trivial(rhs.clone(), meta.clone()), None, errors);
+fn compute_infer_unary_expr(on_function: &str, type_db: &TypeDatabase, decls_in_scope: &NameRegistry, 
+    rhs: &HIRExpr, meta: &Option<crate::ast::parser::Expr>, errors: &mut TypeErrors, op: crate::ast::lexer::Operator) -> HIRExpr {
+    let rhs_expr = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, rhs, None, errors);
+    let rhs_type = rhs_expr.expect_resolved();
     //multiplying, subtracting, etc functions not supported... what does that even mean?
-    if let Some(function @ TypeInstance::Function(..)) = rhs_type {
+    if let function @ TypeInstance::Function(..) = rhs_type {
         errors.unexpected_types.push(UnexpectedTypeFound {
             on_function: on_function.to_string(),
-            type_def: function,
+            type_def: function.clone(),
         });
-        let expr = HIRExpr::UnaryExpression(
+        return HIRExpr::UnaryExpression(
             op,
-            rhs_expr.expect_trivial(),
+            rhs_expr.into(),
             HIRTypeDef::PendingInference,
             meta.clone()
         );
-        return (expr, None);
     };
-    if let Some(rhs_found_type) = rhs_type {
-            let unary_operators = type_db.get_unary_operations(&rhs_found_type);
-            //let rhs_type_record = type_db.find(rhs_id).unwrap();
+    
+    let unary_operators = type_db.get_unary_operations(&rhs_type);
+    //let rhs_type_record = type_db.find(rhs_id).unwrap();
 
-            for (operator, result_type) in unary_operators {
-                if *operator == op {
-                    return (HIRExpr::UnaryExpression(
-                        op,
-                        rhs_expr.expect_trivial(),
-                        HIRTypeDef::Resolved(result_type.clone()),
-                        meta.clone()
-                    ), Some(result_type.clone()))
-                }
-            }
+    for (operator, result_type) in unary_operators {
+        if *operator == op {
+            return HIRExpr::UnaryExpression(
+                op,
+                rhs_expr.into(),
+                HIRTypeDef::Resolved(result_type.clone()),
+                meta.clone()
+            );
+        }
+    }
 
-            errors.unary_op_not_found.push(UnaryOperatorNotFound {
-                on_function: on_function.to_string(),
-                rhs: rhs_found_type.clone(),
-                operator: op
-            });
-
-    };
-    let expr = HIRExpr::UnaryExpression(
+    errors.unary_op_not_found.push(UnaryOperatorNotFound {
+        on_function: on_function.to_string(),
+        rhs: rhs_type.clone(),
+        operator: op
+    });
+    
+    HIRExpr::UnaryExpression(
         op,
-        rhs_expr.expect_trivial(),
+        rhs_expr.into(),
         HIRTypeDef::PendingInference,
         meta.clone()
-    );
-    (expr, None)
+    )
 }
 
-fn compute_infer_function_call(fun_expr: &TypedTrivialHIRExpr, fun_params: &[TypedTrivialHIRExpr], on_function: &str, type_db: &TypeDatabase, decls_in_scope: &NameRegistry, meta: &Option<crate::ast::parser::Expr>, errors: &mut TypeErrors, expression: &HIRExpr) -> (HIRExpr, Option<TypeInstance>) {
-    let TrivialHIRExpr::Variable(var) = &fun_expr.0 else {
+fn compute_infer_function_call(
+    fun_expr: &HIRExpr, fun_params: &[HIRExpr], 
+    on_function: &str, type_db: &TypeDatabase, 
+    decls_in_scope: &NameRegistry, meta: &Option<crate::ast::parser::Expr>,
+    errors: &mut TypeErrors, expression: &HIRExpr) -> HIRExpr {
+    let HIRExpr::Trivial(TrivialHIRExpr::Variable(var), .., fcall_meta) = &fun_expr else {
         panic!("Functions should be bound to a name! This is a bug in the type inference phase or HIR expression reduction phase.");
     };
     //infer parameter types
     let fun_params = fun_params.iter().map(|x| {
-        let (fun_p_expr, _) = compute_and_infer_expr_type(
+        compute_and_infer_expr_type(
             on_function, type_db, decls_in_scope,
-            &HIRExpr::Trivial(x.clone(), meta.clone()), None, errors);
-
-        fun_p_expr.expect_trivial()
+            &x, None, errors)
     }).collect::<Vec<_>>();
     //we have to find the function declaration
     match decls_in_scope.get(var) {
         HIRTypeDef::PendingInference => {
             //previous type inference failed for this variable, just continue
-            (expression.clone(), None)
+            expression.clone()
         },
         HIRTypeDef::Unresolved(mir_type) => {
             /*match mir_type {
@@ -531,109 +516,105 @@ fn compute_infer_function_call(fun_expr: &TypedTrivialHIRExpr, fun_params: &[Typ
         },
         HIRTypeDef::Resolved(resolved) => 
             if let type_instance @ TypeInstance::Function(_params, return_type) = &resolved {
-                (HIRExpr::FunctionCall(
-                    TypedTrivialHIRExpr(
+                HIRExpr::FunctionCall(
+                    HIRExpr::Trivial(
                         TrivialHIRExpr::Variable(var.clone()),
-                        HIRTypeDef::Resolved(type_instance.clone())
-                    ),
+                        HIRTypeDef::Resolved(type_instance.clone()),
+                        fcall_meta.clone()
+                    ).into(),
                     fun_params,
                     HIRTypeDef::Resolved(*return_type.clone()),
                     meta.clone()
-                ), Some(*return_type.clone()))
+                )
             } else {
                 //type is fully resolved but all wrong
                 errors.call_non_callable.push(CallToNonCallableType {
                     on_function: on_function.to_string(),
                     actual_type: resolved.clone(),
                 });
-                (HIRExpr::FunctionCall(
-                    TypedTrivialHIRExpr(
+                HIRExpr::FunctionCall(
+                    HIRExpr::Trivial(
                         TrivialHIRExpr::Variable(var.clone()),
-                        HIRTypeDef::Resolved(resolved.clone())
-                    ),
+                        HIRTypeDef::Resolved(resolved.clone()),
+                        fcall_meta.clone()
+                    ).into(),
                     fun_params,
                     HIRTypeDef::Resolved(resolved.clone()),
                     meta.clone()
-                ), None)
+                )
             }
     }
 }
 
-fn compute_infer_binop(on_function: &str, type_db: &TypeDatabase, decls_in_scope: &NameRegistry, lhs: &TypedTrivialHIRExpr, meta: &Option<crate::ast::parser::Expr>, errors: &mut TypeErrors, rhs: &TypedTrivialHIRExpr, op: crate::ast::lexer::Operator) -> (HIRExpr, Option<TypeInstance>) {
-    let (lhs_expr, lhs_type) = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, &HIRExpr::Trivial(lhs.clone(), meta.clone()), None, errors);
-    let (rhs_expr, rhs_type) = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, &HIRExpr::Trivial(rhs.clone(), meta.clone()), None, errors);
+fn compute_infer_binop(on_function: &str, type_db: &TypeDatabase, decls_in_scope: &NameRegistry, 
+    lhs: &HIRExpr, meta: &Option<crate::ast::parser::Expr>, errors: &mut TypeErrors, 
+    rhs: &HIRExpr, op: crate::ast::lexer::Operator) -> HIRExpr {
+    let lhs_expr = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, lhs, None, errors);
+    let rhs_expr = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, rhs, None, errors);
+    
+    let lhs_type = lhs_expr.expect_resolved();
+    let rhs_type = rhs_expr.expect_resolved();
+    
     {
         let mut type_error_found = false;
 
-        if let Some(function @ TypeInstance::Function(..)) = &lhs_type {
+        if let t @ TypeInstance::Function(..) = lhs_type {
             errors.unexpected_types.push(UnexpectedTypeFound {
                 on_function: on_function.to_string(),
-                type_def: function.clone()
+                type_def: t.clone()
             });
             type_error_found = true;
         };
-        if let Some(function @ TypeInstance::Function(..)) = &rhs_type {
+        if let t @ TypeInstance::Function(..) = rhs_type {
             errors.unexpected_types.push(UnexpectedTypeFound {
                 on_function: on_function.to_string(),
-                type_def: function.clone()
+                type_def: t.clone()
             });
             type_error_found = true;
         };
 
         if type_error_found {
             let expr = HIRExpr::BinaryOperation(
-                lhs_expr.expect_trivial(),
+                lhs_expr.into(),
                 op,
-                rhs_expr.expect_trivial(),
+                rhs_expr.into(),
                 HIRTypeDef::PendingInference,
                 meta.clone()
             );
 
-            return (expr, None)
+            return expr
         }
     }
-    match &lhs_type {
-        Some(lhs_found_type) => {
-            let binary_operators = type_db.get_binary_operations(lhs_found_type);
+ 
+    let binary_operators = type_db.get_binary_operations(lhs_type);
 
-            match &rhs_type {
-                Some(rhs_found_type) =>  {
-                    for (operator, rhs_supported, result_type) in binary_operators {
-                        if *operator == op && rhs_supported == rhs_found_type {
-                            let expr = HIRExpr::BinaryOperation(
-                                lhs_expr.expect_trivial(),
-                                op,
-                                rhs_expr.expect_trivial(),
-                                HIRTypeDef::Resolved(result_type.clone()),
-                                meta.clone()
-                            );
-
-                            return (expr, Some(result_type.clone()))
-                        }
-                    }
-
-                    //operator not found, add binary op not found error
-                    errors.binary_op_not_found.push(BinaryOperatorNotFound {
-                        on_function: on_function.to_string(),
-                        lhs: lhs_found_type.clone(),
-                        rhs: rhs_found_type.clone(),
-                        operator: op
-                    });
-
-                }
-                None => {}
-            }
+    for (operator, rhs_supported, result_type) in binary_operators {
+        if *operator == op && rhs_supported == rhs_type {
+            return HIRExpr::BinaryOperation(
+                lhs_expr.into(),
+                op,
+                rhs_expr.into(),
+                HIRTypeDef::Resolved(result_type.clone()),
+                meta.clone()
+            );
         }
-        None => {},
     }
-    let expr = HIRExpr::BinaryOperation(
-        lhs_expr.expect_trivial(),
+
+    //operator not found, add binary op not found error
+    errors.binary_op_not_found.push(BinaryOperatorNotFound {
+        on_function: on_function.to_string(),
+        lhs: lhs_type.clone(),
+        rhs: rhs_type.clone(),
+        operator: op
+    });
+  
+    return HIRExpr::BinaryOperation(
+        lhs_expr.into(),
         op,
-        rhs_expr.expect_trivial(),
+        rhs_expr.into(),
         HIRTypeDef::PendingInference,
         meta.clone()
     );
-    (expr, None)
 }
 
 fn infer_types_in_body(
@@ -722,10 +703,10 @@ fn infer_types_in_return(
     errors: &mut TypeErrors,
     meta: &Option<crate::ast::parser::AST>,
 ) -> HIR {
-    let (typed_expr, type_def) =
+    let typed_expr =
         compute_and_infer_expr_type(on_function, type_db, decls_in_scope, expr, None, errors);
-    let hir_type_def = type_def.map_or_else(|| HIRTypeDef::PendingInference, HIRTypeDef::Resolved);
-    HIR::Return(typed_expr, hir_type_def, meta.clone())
+    let typeof_expr = typed_expr.get_expr_type().clone();
+    HIR::Return(typed_expr, typeof_expr, meta.clone())
 }
 
 fn infer_types_in_if_statement_and_blocks(
@@ -735,7 +716,7 @@ fn infer_types_in_if_statement_and_blocks(
     true_branch: &[HIR],
     errors: &mut TypeErrors,
     false_branch: &[HIR],
-    condition: &TypedTrivialHIRExpr,
+    condition: &HIRExpr,
     meta: &Option<crate::ast::parser::AST>,
 ) -> HIR {
     let true_branch_inferred = infer_types_in_body(
@@ -752,16 +733,16 @@ fn infer_types_in_if_statement_and_blocks(
         false_branch,
         errors,
     );
-    let (condition_expr, _) = compute_and_infer_expr_type(
+    let condition_expr = compute_and_infer_expr_type(
         on_function,
         type_db,
         decls_in_scope,
-        &HIRExpr::Trivial(condition.clone(), None),
+        &condition,
         None,
         errors,
     );
     HIR::If(
-        condition_expr.expect_trivial(),
+        condition_expr,
         true_branch_inferred,
         false_branch_inferred,
         meta.clone(),
@@ -769,8 +750,8 @@ fn infer_types_in_if_statement_and_blocks(
 }
 
 fn infer_types_in_fcall(
-    function: &TypedTrivialHIRExpr,
-    args: &[TypedTrivialHIRExpr],
+    function: &HIRExpr,
+    args: &[HIRExpr],
     on_function: &str,
     type_db: &TypeDatabase,
     decls_in_scope: &mut NameRegistry,
@@ -782,15 +763,14 @@ fn infer_types_in_fcall(
         args: args
             .iter()
             .map(|expr| {
-                let (typed_expr, _) = compute_and_infer_expr_type(
+                compute_and_infer_expr_type(
                     on_function,
                     type_db,
                     decls_in_scope,
-                    &HIRExpr::Trivial(expr.clone(), None),
+                    expr,
                     None,
                     errors,
-                );
-                typed_expr.expect_trivial()
+                )
             })
             .collect::<Vec<_>>(),
         meta: meta.clone(),
@@ -807,7 +787,7 @@ fn infer_types_in_assignment(
     meta_ast: &Option<crate::ast::parser::AST>,
     meta_expr: &Option<crate::ast::parser::Expr>,
 ) -> HIR {
-    let (typed_expr, _) = compute_and_infer_expr_type(
+    let typed_expr = compute_and_infer_expr_type(
         on_function,
         type_db,
         decls_in_scope,
@@ -841,7 +821,7 @@ fn infer_types_in_variable_declaration(
         }
         HIRTypeDef::Resolved(type_resolved) => Some(type_resolved.clone()),
     };
-    let (typed_expr, typedef) = compute_and_infer_expr_type(
+    let typed_expr = compute_and_infer_expr_type(
         on_function,
         type_db,
         decls_in_scope,
@@ -849,12 +829,13 @@ fn infer_types_in_variable_declaration(
         hint.clone(),
         errors,
     );
+    let typedef = typed_expr.get_expr_type().get_type();
     match &typedef {
         Some(found_type) => {
             //do not ignore the type the user declared
             decls_in_scope.insert(
                 variable_name.to_string(),
-                HIRTypeDef::Resolved(found_type.clone()),
+                HIRTypeDef::Resolved((*found_type).clone()),
             );
         }
         None => {
@@ -868,7 +849,7 @@ fn infer_types_in_variable_declaration(
     }
     let hint_typedef = match hint {
         None => match typedef {
-            Some(type_from_expression) => HIRTypeDef::Resolved(type_from_expression),
+            Some(type_from_expression) => HIRTypeDef::Resolved(type_from_expression.clone()),
             None => HIRTypeDef::PendingInference,
         },
         Some(type_resolved) => HIRTypeDef::Resolved(type_resolved),

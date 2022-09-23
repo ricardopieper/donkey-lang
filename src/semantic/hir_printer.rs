@@ -1,6 +1,6 @@
 use crate::ast::lexer;
 
-use crate::semantic::hir::{HIR, HIRExpr, HIRType, HIRTypeDef, TrivialHIRExpr, TypedTrivialHIRExpr};
+use crate::semantic::hir::{HIR, HIRExpr, HIRType, HIRTypeDef, TrivialHIRExpr};
 use crate::types::type_db::TypeDatabase;
 use lexer::Operator;
 
@@ -21,8 +21,8 @@ pub fn operator_str(op: lexer::Operator) -> String {
     }
 }
 
-pub fn trivial_expr_str(expr: &TypedTrivialHIRExpr) -> String {
-    match &expr.0 {
+fn trivial_expr_str(expr: &TrivialHIRExpr) -> String {
+    match &expr {
         TrivialHIRExpr::Variable(s) => s.clone(),
         TrivialHIRExpr::FloatValue(f) => format!("{:?}", f.0),
         TrivialHIRExpr::IntegerValue(i) => format!("{}", i),
@@ -39,31 +39,31 @@ pub fn expr_str(expr: &HIRExpr) -> String {
         HIRExpr::FunctionCall(f, params, ..) => {
             let args_str = params
                 .iter()
-                .map(trivial_expr_str)
+                .map(expr_str)
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{}({})", trivial_expr_str(f), args_str)
+            format!("{}({})", expr_str(f), args_str)
         }
         HIRExpr::BinaryOperation(var, op, var2, ..) => format!(
             "{} {} {}",
-            trivial_expr_str(var),
+            expr_str(var),
             operator_str(*op),
-            trivial_expr_str(var2)
+            expr_str(var2)
         ),
 
         HIRExpr::Array(items, ..) => {
             let args_str = items
                 .iter()
-                .map(trivial_expr_str)
+                .map(expr_str)
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{}]", args_str)
         }
         HIRExpr::UnaryExpression(op, expr, ..) => {
-            format!("{}{}", operator_str(*op), trivial_expr_str(expr))
+            format!("{}{}", operator_str(*op), expr_str(expr))
         }
         HIRExpr::MemberAccess(obj, elem, ..) => {
-            format!("{}.{}", trivial_expr_str(obj), elem)
+            format!("{}.{}", expr_str(obj), elem)
         }
         HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".to_string(),
     }
@@ -173,14 +173,14 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
         HIR::FunctionCall { function, args, .. } => {
             let args_str = args
                 .iter()
-                .map(trivial_expr_str)
+                .map(expr_str)
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            format!("{}{}({})\n", indent, trivial_expr_str(function), args_str)
+            format!("{}{}({})\n", indent, expr_str(function), args_str)
         }
         HIR::If(condition, true_body, false_body, ..) => {
-            let condition_str = trivial_expr_str(condition);
+            let condition_str = expr_str(condition);
             let mut ifdecl = format!("{}if {}:\n", indent, condition_str);
             let indent_block = format!("{}    ", indent);
             for statement in true_body {

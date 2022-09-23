@@ -1,48 +1,39 @@
-use crate::semantic::hir::{HIR, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, TypedTrivialHIRExpr};
+use crate::semantic::hir::{HIR, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr};
 
 use std::collections::HashSet;
 
 use super::name_registry::NameRegistry;
 
-fn check_trivial_expr(
-    declarations_found: &HashSet<String>,
-    function_name: &str,
-    expr: &TypedTrivialHIRExpr,
-) {
-    if let TrivialHIRExpr::Variable(v) = &expr.0 {
-        assert!(declarations_found.get(v).is_some(), "Variable {v} not found, function: {function_name}");
-    }
-}
-
 fn check_expr(declarations_found: &HashSet<String>, function_name: &str, expr: &HIRExpr) {
     match expr {
-        HIRExpr::Trivial(e, ..) => {
-            check_trivial_expr(declarations_found, function_name, e);
+        HIRExpr::Trivial(TrivialHIRExpr::Variable(v), ..) => {
+            assert!(declarations_found.get(v).is_some(), "Variable {v} not found, function: {function_name}");
         }
         HIRExpr::BinaryOperation(lhs, _, rhs, ..) => {
-            check_trivial_expr(declarations_found, function_name, lhs);
-            check_trivial_expr(declarations_found, function_name, rhs);
+            check_expr(declarations_found, function_name, lhs);
+            check_expr(declarations_found, function_name, rhs);
         }
         HIRExpr::FunctionCall(func_expr, args, ..) => {
-            check_trivial_expr(declarations_found, function_name, func_expr);
+            check_expr(declarations_found, function_name, func_expr);
             for fun_arg in args {
-                check_trivial_expr(declarations_found, function_name, fun_arg);
+                check_expr(declarations_found, function_name, fun_arg);
             }
         }
         HIRExpr::UnaryExpression(_, unary_expr, ..) => {
-            check_trivial_expr(declarations_found, function_name, unary_expr);
+            check_expr(declarations_found, function_name, unary_expr);
         }
         HIRExpr::MemberAccess(member_expr, ..) => {
-            check_trivial_expr(declarations_found, function_name, member_expr);
+            check_expr(declarations_found, function_name, member_expr);
         }
         HIRExpr::Array(item_exprs, ..) => {
             for array_item in item_exprs {
-                check_trivial_expr(declarations_found, function_name, array_item);
+                check_expr(declarations_found, function_name, array_item);
             }
         }
         HIRExpr::Cast(expr, _typedef, ..) => {
-            check_trivial_expr(declarations_found, function_name, expr);
-        }
+            check_expr(declarations_found, function_name, expr);
+        }, 
+        _ => {}
     }
 }
 
@@ -70,13 +61,13 @@ fn detect_decl_errors_in_body(
                 check_expr(
                     declarations_found,
                     function_name,
-                    &HIRExpr::Trivial(function.clone(), None),
+                    function,
                 );
                 for fun_arg in args {
                     check_expr(
                         declarations_found,
                         function_name,
-                        &HIRExpr::Trivial(fun_arg.clone(), None),
+                        fun_arg,
                     );
                 }
             }

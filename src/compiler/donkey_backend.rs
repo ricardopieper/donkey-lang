@@ -3,14 +3,13 @@ use crate::donkey_vm::asm::asm_instructions::{
     AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp,
     AsmIntegerCompareBinaryOp, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction, Annotation,
 };
-use crate::semantic::hir::{HIRExpr, TrivialHIRExpr, TypedTrivialHIRExpr};
+use crate::semantic::hir::{HIRExpr, TrivialHIRExpr};
 use crate::semantic::mir::{
     BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, MIRTypedBoundName,
 };
 use crate::types::type_db::{TypeDatabase, TypeInstance, TypeSign};
 use core::panic;
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
 
 pub struct DonkeyEmitter {
     pub assembly: Vec<AssemblyInstruction>,
@@ -133,13 +132,13 @@ pub fn encode_u64(raw: i128) -> [[u8; 2]; 4] {
 
 fn generate_trivial_expr(
     type_db: &TypeDatabase,
-    expression: &TypedTrivialHIRExpr,
+    expression: &TrivialHIRExpr,
+    trivial_type: &TypeInstance,
     bytecode: &mut DonkeyEmitter,
     scope: &HashMap<String, ByteRange>,
 ) -> u32 {
-    let trivial_type = expression.1.expect_resolved();
     let size = trivial_type.size(type_db) as u8;
-    match &expression.0 {
+    match &expression {
         TrivialHIRExpr::IntegerValue(v) => {
             if size == 4 {
                 let (lower, upper) = if trivial_type == &type_db.special_types.i32 {
@@ -273,9 +272,9 @@ struct ExprGenerated {
     offset_from_bp: u32,
 }
 
-fn generate_function_jump_lbl(expr: &TypedTrivialHIRExpr) -> String {
-    match &expr.0 {
-        TrivialHIRExpr::Variable(var_name) => format!("FUNC_{}", var_name),
+fn generate_function_jump_lbl(expr: &HIRExpr) -> String {
+    match &expr {
+        HIRExpr::Trivial(TrivialHIRExpr::Variable(var_name),..) => format!("FUNC_{}", var_name),
         _ => {
             panic!(
                 "Not callable, this is a bug in the type checker: {:?}",
@@ -293,8 +292,8 @@ fn generate_expr(
     offset_from_bp: u32,
 ) -> ExprGenerated {
     match expression {
-        HIRExpr::Trivial(trivial_expr, ..) => {
-            let pushed_size = generate_trivial_expr(type_db, trivial_expr, bytecode, scope);
+        HIRExpr::Trivial(trivial_expr, typedef, ..) => {
+            let pushed_size = generate_trivial_expr(type_db, trivial_expr, typedef.expect_resolved(), bytecode, scope);
             ExprGenerated {
                 pushed_size,
                 offset_from_bp: offset_from_bp + pushed_size,
@@ -326,9 +325,9 @@ fn generate_function_call_code(type_db: &TypeDatabase,
     return_type: &crate::semantic::hir::HIRTypeDef, 
     offset_from_bp: u32,
     bytecode: &mut DonkeyEmitter,
-    args: &[TypedTrivialHIRExpr], 
+    args: &[HIRExpr], 
     scope: &HashMap<String, ByteRange>, 
-    function_expr: &TypedTrivialHIRExpr) -> ExprGenerated {
+    function_expr: &HIRExpr) -> ExprGenerated {
     //push to stack some space for the return value of the function
     let resolved_return_type = return_type.expect_resolved();
     let return_size = resolved_return_type.size(type_db);
@@ -341,7 +340,7 @@ fn generate_function_call_code(type_db: &TypeDatabase,
     for arg in args.iter() {
         let expr_gen_result = generate_expr(
             type_db,
-            &HIRExpr::Trivial(arg.clone(), None),
+            arg,
             bytecode,
             scope,
             offset_from_bp_arg,
@@ -425,11 +424,11 @@ fn generate_function_call_code(type_db: &TypeDatabase,
     }
 }
 
-fn generate_compare_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &TypedTrivialHIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
-    generate_trivial_expr(type_db, rhs, bytecode, scope);
-    generate_trivial_expr(type_db, lhs, bytecode, scope);
-    //since both expr are the same type, we take the lhs type size and sign
-    let lhs_type = lhs.1.expect_resolved();
+fn generate_compare_binexpr_code(type_db: &TypeDatabase, rhs: &HIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
+    let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
+    let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
+   //since both expr are the same type, we take the lhs type size and sign
+    let lhs_type = lhs.expect_resolved();
     let lhs_size = lhs_type.size(type_db);
     let type_db_record = type_db.find(lhs_type.expect_simple());
     println!("Comparison of types {}", type_db_record.name);
@@ -464,15 +463,15 @@ fn generate_compare_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIREx
     let pushed_size = boolean_type.rep_size.unwrap() as u32;
     ExprGenerated {
         pushed_size,
-        offset_from_bp: offset_from_bp + pushed_size,
+        offset_from_bp: lhs_gen.offset_from_bp + pushed_size,
     }
 }
 
-fn generate_bitwise_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &TypedTrivialHIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
-    generate_trivial_expr(type_db, rhs, bytecode, scope);
-    generate_trivial_expr(type_db, lhs, bytecode, scope);
+fn generate_bitwise_binexpr_code(type_db: &TypeDatabase, rhs: &HIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
+    let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
+    let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
     //since both expr are the same type, we take the lhs type size and sign
-    let lhs_type = lhs.1.expect_resolved();
+    let lhs_type = lhs.expect_resolved();
     let type_db_record = type_db.find(lhs_type.expect_simple());
     let bitwise_op = match op {
         Operator::And => AsmIntegerBitwiseBinaryOp::And,
@@ -499,15 +498,16 @@ fn generate_bitwise_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIREx
     let pushed_size = lhs_type.size(type_db) as u32;
     ExprGenerated {
         pushed_size,
-        offset_from_bp: offset_from_bp + pushed_size,
+        offset_from_bp: lhs_gen.offset_from_bp + pushed_size,
     }
 }
 
-fn generate_arith_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &TypedTrivialHIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
-    generate_trivial_expr(type_db, rhs, bytecode, scope);
-    generate_trivial_expr(type_db, lhs, bytecode, scope);
+fn generate_arith_binexpr_code(type_db: &TypeDatabase, rhs: &HIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
+    let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
+    let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
+   
     //since both expr are the same type, we take the lhs type size and sign
-    let lhs_type = lhs.1.expect_resolved();
+    let lhs_type = lhs.expect_resolved();
     let lhs_size = lhs_type.size(type_db);
     let type_db_record = type_db.find(lhs_type.expect_simple());
     let arith_op = match op {
@@ -539,7 +539,7 @@ fn generate_arith_binexpr_code(type_db: &TypeDatabase, rhs: &TypedTrivialHIRExpr
     let pushed_size = lhs_size as u32;
     ExprGenerated {
         pushed_size,
-        offset_from_bp: offset_from_bp + pushed_size,
+        offset_from_bp: lhs_gen.offset_from_bp + pushed_size,
     }
 }
 
@@ -672,9 +672,8 @@ fn generate_func_block_finish(
     bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, offset_from_bp: &mut u32) {
     match &block.finish {
         MIRBlockFinal::If(true_expr, true_branch, false_branch, ..) => {
-            let hirexpr = HIRExpr::Trivial(true_expr.clone(), None);
             let generated_expr =
-                generate_expr(type_db, &hirexpr, bytecode, scope, *offset_from_bp);
+                generate_expr(type_db, &true_expr, bytecode, scope, *offset_from_bp);
             *offset_from_bp = generated_expr.offset_from_bp;
             //generate a jz to the false branch
             //assert that the true branch is just the next one
