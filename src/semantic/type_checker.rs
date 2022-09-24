@@ -231,6 +231,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     let HIRExpr::FunctionCall(call_expr, args, return_type, expr_metadata) = expression else {
                         continue; //other cases handled elsewhere
                     };
+                    
                     //if it is a function call, check that the arguments match (return type and arguments passed)
                     let TypeInstance::Function(func_args_types, func_return_type) = call_expr.expect_resolved() else {
                         type_errors.call_non_callable.push(CallToNonCallableType {
