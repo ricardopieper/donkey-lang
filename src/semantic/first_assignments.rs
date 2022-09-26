@@ -2,7 +2,7 @@ use crate::semantic::hir::{HIR, HIRTypedBoundName};
 
 use std::collections::HashSet;
 
-use super::hir::HIRTypeDefState;
+use super::hir::HIRTypeDef;
 
 fn make_first_assignments_in_body(
     body: &[HIR],
@@ -28,7 +28,7 @@ fn make_first_assignments_in_body(
                     declarations_found.insert(var.clone());
                     HIR::Declare {
                         var: var.clone(),
-                        typedef: HIRTypeDefState::pending(),
+                        typedef: HIRTypeDef::PendingInference,
                         expression: expression.clone(),
                         meta_ast: meta_ast.clone(),
                         meta_expr: meta_expr.clone(),

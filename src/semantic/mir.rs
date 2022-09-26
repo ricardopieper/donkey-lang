@@ -258,7 +258,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 meta_ast,
                 meta_expr,
             } => {
-                let actual_type = typedef.typedef_state.expect_resolved();
+                let actual_type = typedef.expect_resolved();
 
                 //we need to finalize the block we currently are,
                 //define a new scope inheriting the current one,

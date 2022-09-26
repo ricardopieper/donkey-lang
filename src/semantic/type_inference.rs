@@ -9,21 +9,8 @@ use crate::types::type_errors::{
 };
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
-use super::hir::{HIRTypeDefState, HIRTypeResolutionState};
+use super::hir::{HIRTypeResolutionState};
 use super::hir_type_resolution::hir_type_to_usage;
-
-
-impl From<TypeInstanceId> for HIRTypeDefState {
-    fn from(val: TypeInstanceId) -> Self {
-        HIRTypeDef::Resolved(val).into()
-    }
-}
-
-impl From<&TypeInstanceId> for HIRTypeDefState {
-    fn from(val: &TypeInstanceId) -> Self {
-        (*val).into()
-    }
-}
 
 pub enum TypeInferenceError {
     SomeErrorOccured
@@ -323,7 +310,7 @@ fn compute_infer_unary_expr(
 
     for (operator, result_type) in &type_db.get_instance(rhs_type).unary_ops {
         if *operator == op {
-            return Ok(HIRExpr::UnaryExpression(op, rhs_expr.into(), result_type.into(), meta.clone()));
+            return Ok(HIRExpr::UnaryExpression(op, rhs_expr.into(), HIRTypeDef::Resolved(*result_type), meta.clone()));
         }
     }
 
@@ -381,7 +368,7 @@ fn compute_infer_function_call(
 
     let function_inferred = HIRExpr::Trivial(
         TrivialHIRExpr::Variable(var.clone()),
-        type_instance.id.into(),
+        HIRTypeDef::Resolved(type_instance.id),
         fcall_meta.clone(),
     )
     .into();
@@ -390,7 +377,7 @@ fn compute_infer_function_call(
         Ok(HIRExpr::FunctionCall(
             function_inferred,
             fun_params,
-            type_instance.function_return_type.unwrap().into(),
+            HIRTypeDef::Resolved(type_instance.function_return_type.unwrap()),
             meta.clone(),
         ))
     } else {
@@ -429,7 +416,7 @@ fn compute_infer_binop(
                 lhs_expr.into(),
                 op,
                 rhs_expr.into(),
-                result_type.into(),
+                HIRTypeDef::Resolved(*result_type),
                 meta.clone(),
             ));
         }
@@ -465,7 +452,7 @@ fn infer_types_in_body(
             } => {
 
                 infer_types_in_variable_declaration(
-                    &type_hint.typedef_state,
+                    &type_hint,
                     on_function,
                     type_db,
                     errors,
@@ -668,9 +655,7 @@ fn infer_types_in_variable_declaration(
 
     Ok(HIR::Declare {
         var: variable_name.to_string(),
-        typedef: HIRTypeDefState {
-            typedef_state: HIRTypeDef::Resolved(typedef),
-        },
+        typedef: HIRTypeDef::Resolved(typedef),
         expression: typed_expr,
         meta_ast: meta_ast.clone(),
         meta_expr: meta_expr.clone(),

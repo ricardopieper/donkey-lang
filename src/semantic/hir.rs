@@ -36,14 +36,14 @@ pub type HIRAstMetadata = Option<AST>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRExpr {
-    Trivial(TrivialHIRExpr, HIRTypeDefState, HIRExprMetadata),
+    Trivial(TrivialHIRExpr, HIRTypeDef, HIRExprMetadata),
     #[allow(dead_code)]
-    Cast(Box<HIRExpr>, HIRTypeDefState, HIRExprMetadata),
+    Cast(Box<HIRExpr>, HIRTypeDef, HIRExprMetadata),
     BinaryOperation(
         Box<HIRExpr>,
         Operator,
         Box<HIRExpr>,
-        HIRTypeDefState,
+        HIRTypeDef,
         HIRExprMetadata,
     ),
     //obj_expr, method_name, args:type, return type, metadata
@@ -51,15 +51,15 @@ pub enum HIRExpr {
         Box<HIRExpr>,
         String,
         Vec<HIRExpr>,
-        HIRTypeDefState,
+        HIRTypeDef,
         HIRExprMetadata,
     ),
     //func_expr, args:type, return type, metadata
-    FunctionCall(Box<HIRExpr>, Vec<HIRExpr>, HIRTypeDefState, HIRExprMetadata),
-    UnaryExpression(Operator, Box<HIRExpr>, HIRTypeDefState, HIRExprMetadata),
+    FunctionCall(Box<HIRExpr>, Vec<HIRExpr>, HIRTypeDef, HIRExprMetadata),
+    UnaryExpression(Operator, Box<HIRExpr>, HIRTypeDef, HIRExprMetadata),
     //obj, field, result_type, metadata
-    MemberAccess(Box<HIRExpr>, String, HIRTypeDefState, HIRExprMetadata),
-    Array(Vec<HIRExpr>, HIRTypeDefState, HIRExprMetadata),
+    MemberAccess(Box<HIRExpr>, String, HIRTypeDef, HIRExprMetadata),
+    Array(Vec<HIRExpr>, HIRTypeDef, HIRExprMetadata),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +101,7 @@ impl HIRExpr {
             | HIRExpr::UnaryExpression(.., t, _)
             | HIRExpr::MemberAccess(.., t, _)
             | HIRExpr::Array(.., t, _)
-            | HIRExpr::MethodCall(.., t, _) => &t.typedef_state,
+            | HIRExpr::MethodCall(.., t, _) => &t,
         }
     }
 
@@ -126,19 +126,6 @@ pub struct HIRTypedBoundName {
 //so we can store TypeIds, but we need it to be accompanied by more data depending on the kind of the type,
 //types such as functions and generics need to be "instanced"
 
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HIRTypeDefState {
-    pub typedef_state: HIRTypeDef
-}
-
-impl HIRTypeDefState {
-    pub fn pending() -> HIRTypeDefState {
-        HIRTypeDefState { typedef_state: HIRTypeDef::PendingInference }
-    }
-}
-
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRTypeDef {
     PendingInference,
@@ -146,11 +133,6 @@ pub enum HIRTypeDef {
     Resolved(TypeInstanceId),
 }
 
-impl From<HIRTypeDef> for HIRTypeDefState {
-    fn from(val: HIRTypeDef) -> Self {
-        HIRTypeDefState { typedef_state: val }
-    }
-}
 
 impl HIRTypeDef {
   
@@ -197,7 +179,7 @@ pub enum HIR {
     },
     Declare {
         var: String,
-        typedef: HIRTypeDefState,
+        typedef: HIRTypeDef,
         expression: HIRExpr,
         meta_ast: HIRAstMetadata,
         meta_expr: HIRExprMetadata,
@@ -236,46 +218,46 @@ pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr {
     match expr {
         Expr::IntegerValue(i) => HIRExpr::Trivial(
             TrivialHIRExpr::IntegerValue(*i),
-            HIRTypeDefState::pending(),
+            HIRTypeDef::PendingInference,
             expr.clone().into(),
         ),
         Expr::FloatValue(f) => HIRExpr::Trivial(
             TrivialHIRExpr::FloatValue(*f),
-            HIRTypeDefState::pending(),
+            HIRTypeDef::PendingInference,
             expr.clone().into(),
         ),
         Expr::StringValue(s) => HIRExpr::Trivial(
             TrivialHIRExpr::StringValue(s.clone()),
-            HIRTypeDefState::pending(),
+            HIRTypeDef::PendingInference,
             expr.clone().into(),
         ),
         Expr::BooleanValue(b) => HIRExpr::Trivial(
             TrivialHIRExpr::BooleanValue(*b),
-            HIRTypeDefState::pending(),
+            HIRTypeDef::PendingInference,
             expr.clone().into(),
         ),
         Expr::None => HIRExpr::Trivial(
             TrivialHIRExpr::None,
-            HIRTypeDefState::pending(),
+            HIRTypeDef::PendingInference,
             expr.clone().into(),
         ),
         Expr::Variable(name) => HIRExpr::Trivial(
             TrivialHIRExpr::Variable(name.clone()),
-            HIRTypeDefState::pending(),
+            HIRTypeDef::PendingInference,
             expr.clone().into(),
         ),
         Expr::FunctionCall(fun_expr, args) => match &**fun_expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
                 expr_to_hir_expr(var).into(),
                 args.iter().map(expr_to_hir_expr).collect(),
-                HIRTypeDefState::pending(),
+                HIRTypeDef::PendingInference,
                 expr.clone().into(),
             ),
             Expr::MemberAccess(obj, var_name) => HIRExpr::MethodCall(
                 expr_to_hir_expr(obj).into(),
                 var_name.clone(),
                 args.iter().map(expr_to_hir_expr).collect(),
-                HIRTypeDefState::pending(),
+                HIRTypeDef::PendingInference,
                 expr.clone().into(),
             ),
             _ => panic!("Cannot lower function call to HIR: not variable or member access"),
@@ -287,7 +269,7 @@ pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr {
                 vec![
                     expr_to_hir_expr(index)
                 ],
-                HIRTypeDefState::pending(),
+                HIRTypeDef::PendingInference,
                 Some(expr.clone()))
         }
         Expr::BinaryOperation(lhs, op, rhs) => {
@@ -297,7 +279,7 @@ pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr {
                 lhs.into(),
                 *op,
                 rhs.into(),
-                HIRTypeDefState::pending(),
+                HIRTypeDef::PendingInference,
                 expr.clone().into(),
             )
         }
@@ -307,7 +289,7 @@ pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr {
             HIRExpr::UnaryExpression(
                 *op,
                 rhs.into(),
-                HIRTypeDefState::pending(),
+                HIRTypeDef::PendingInference,
                 expr.clone().into(),
             )
         }
@@ -316,13 +298,13 @@ pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr {
             HIRExpr::MemberAccess(
                 object.into(),
                 member.clone(),
-                HIRTypeDefState::pending(),
+                HIRTypeDef::PendingInference,
                 expr.clone().into(),
             )
         }
         Expr::Array(items) => {
             let items = items.iter().map(expr_to_hir_expr).collect();
-            HIRExpr::Array(items, HIRTypeDefState::pending(), expr.clone().into())
+            HIRExpr::Array(items, HIRTypeDef::PendingInference, expr.clone().into())
         }
     }
 }
@@ -341,7 +323,7 @@ pub fn ast_to_hir(ast: &AST, accum: &mut Vec<HIR>) {
 
             let decl_hir = HIR::Declare {
                 var: var.name.clone(),
-                typedef: HIRTypeDefState { typedef_state: HIRTypeDef::Unresolved(HIRType::from_ast(&var.name_type)) },
+                typedef: HIRTypeDef::Unresolved(HIRType::from_ast(&var.name_type)),
                 expression: result_expr,
                 meta_expr: Some(expression.clone()),
                 meta_ast: Some(ast.clone()),

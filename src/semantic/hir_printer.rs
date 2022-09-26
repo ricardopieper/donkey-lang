@@ -138,7 +138,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeInstanceManager) -> Str
                 "{}{} : {} = {}\n",
                 indent,
                 var,
-                hir_type_def_str(&typename.typedef_state, type_db),
+                hir_type_def_str(&typename, type_db),
                 expr_str(expression)
             )
         }

@@ -294,7 +294,7 @@ fn generate_expr(
 ) -> ExprGenerated {
     match expression {
         HIRExpr::Trivial(trivial_expr, typedef, ..) => {
-            let pushed_size = generate_trivial_expr(type_db, trivial_expr, typedef.typedef_state.expect_resolved(), bytecode, scope);
+            let pushed_size = generate_trivial_expr(type_db, trivial_expr, typedef.expect_resolved(), bytecode, scope);
             ExprGenerated {
                 pushed_size,
                 offset_from_bp: offset_from_bp + pushed_size,
@@ -314,7 +314,7 @@ fn generate_expr(
             "Tried to compile this: {expression:#?} but is not arithmetic, bitwise or compare op"
         ),
         HIRExpr::FunctionCall(function_expr, args, return_type, ..) => {
-            generate_function_call_code(type_db, return_type.typedef_state.expect_resolved(), offset_from_bp, bytecode, args, scope, function_expr)
+            generate_function_call_code(type_db, return_type.expect_resolved(), offset_from_bp, bytecode, args, scope, function_expr)
         }
         HIRExpr::UnaryExpression(_, _, _, _) => todo!("unary expression not implemented"),
         HIRExpr::MemberAccess(_, _, _, _) => todo!("member access not implemented"),
