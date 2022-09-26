@@ -2,6 +2,8 @@ use crate::semantic::hir::{HIR, HIRTypeDef, HIRTypedBoundName};
 
 use std::collections::HashSet;
 
+use super::hir::HIRTypeDefState;
+
 fn make_first_assignments_in_body(
     body: &[HIR],
     declarations_found: &mut HashSet<String>,
@@ -26,7 +28,7 @@ fn make_first_assignments_in_body(
                     declarations_found.insert(var.clone());
                     HIR::Declare {
                         var: var.clone(),
-                        typedef: HIRTypeDef::PendingInference,
+                        typedef: HIRTypeDefState::pending(),
                         expression: expression.clone(),
                         meta_ast: meta_ast.clone(),
                         meta_expr: meta_expr.clone(),
@@ -57,10 +59,8 @@ fn make_first_assignments_in_body(
 }
 
 fn make_assignments_into_declarations_in_function(
-    _function_name: &str,
     parameters: &[HIRTypedBoundName],
-    body: &[HIR],
-    _return_type: &HIRTypeDef,
+    body: &[HIR]
 ) -> Vec<HIR> {
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
@@ -92,10 +92,8 @@ pub fn transform_first_assignment_into_declaration(mir: &[HIR]) -> Vec<HIR> {
                 meta,
             } => {
                 let new_body = make_assignments_into_declarations_in_function(
-                    function_name,
                     parameters,
-                    body,
-                    return_type,
+                    body
                 );
                 HIR::DeclareFunction {
                     function_name: function_name.clone(),

@@ -9,7 +9,6 @@ edition = "2021"
 [dependencies]
 rustc_version_runtime = "0.2.1"
 rustyline = "9.1.2"
-either = "1.6.1"
 time-test = "0.2.3"
 tracy-client = "0.13.2"
 

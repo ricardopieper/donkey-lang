@@ -8,3 +8,4 @@ pub mod name_registry;
 pub mod type_checker;
 pub mod type_inference;
 pub mod undeclared_vars;
+pub mod hir_type_resolution;

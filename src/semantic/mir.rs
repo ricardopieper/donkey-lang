@@ -1,9 +1,6 @@
 use super::hir::{HIR, HIRAstMetadata, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr};
 
-use crate::ast::parser::{AST, Expr};
-
-use crate::types::type_db::TypeDatabase;
-use crate::types::type_db::TypeInstance;
+use crate::{ast::parser::{AST, Expr}, types::type_instance_db::{TypeInstanceId, TypeInstanceManager}};
 
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
@@ -27,7 +24,7 @@ pub enum MIRTopLevelNode {
         parameters: Vec<MIRTypedBoundName>,
         body: Vec<MIRBlock>,
         scopes: Vec<MIRScope>,
-        return_type: TypeInstance,
+        return_type: TypeInstanceId,
     },
     #[allow(dead_code)] StructDeclaration {
         struct_name: String,
@@ -53,17 +50,11 @@ pub enum MIRBlockNode {
         meta_expr: Option<Expr>,
     },
     FunctionCall {
-        /*
-        This is just a function call that is not used in an expression, just as a standalone call.
-        Like print(x).
-
-        We always assign a function to a variable, even if it's a function
-        stored in a map. The HIR expr reduction extracts it out to a variable.
-        */
         function: String,
         args: Vec<HIRExpr>,
         meta_ast: Option<AST>,
     },
+    //@TODO Add method call here
 }
 
 /**
@@ -75,7 +66,7 @@ pub enum MIRBlockNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MIRTypedBoundName {
     pub name: String,
-    pub typename: TypeInstance,
+    pub typename: TypeInstanceId,
 }
 
 /*
@@ -167,7 +158,7 @@ impl MIRFunctionEmitter {
         BlockId(current_len)
     }
 
-    fn scope_add_variable(&mut self, scope_id: ScopeId, var: String, typedef: TypeInstance) {
+    fn scope_add_variable(&mut self, scope_id: ScopeId, var: String, typedef: TypeInstanceId) {
         let scope = &mut self.scopes[scope_id.0];
         scope.boundnames.push(MIRTypedBoundName {
             name: var,
@@ -267,9 +258,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 meta_ast,
                 meta_expr,
             } => {
-                let HIRTypeDef::Resolved(actual_type) = typedef else {
-                    panic!("An unresolved, uninferred type has reached the MIR stage. This is a type inference failure. Node: {:?}", typedef);
-                };
+                let actual_type = typedef.typedef_state.expect_resolved();
 
                 //we need to finalize the block we currently are,
                 //define a new scope inheriting the current one,
@@ -429,10 +418,8 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                     emitter.set_current_block(fallback_block);
                 }
             }
-            HIR::Return(expr, typedef, meta_ast) => {
-                let HIRTypeDef::Resolved(_resolved_type) = typedef else {
-                    panic!("Unresolved return type reached MIR, this might be a bug in type inference");
-                };
+            HIR::Return(expr, meta_ast) => {
+                expr.expect_resolved();
                 emitter.finish_with_return(expr.clone(), meta_ast.clone());
             }
             HIR::EmptyReturn => {
@@ -446,8 +433,7 @@ pub fn process_hir_funcdecl(
     function_name: &str,
     parameters: &[HIRTypedBoundName],
     body: &[HIR],
-    return_type: &HIRTypeDef,
-    _type_db: &TypeDatabase,
+    return_type: TypeInstanceId
 ) -> MIRTopLevelNode {
     let mut emitter = MIRFunctionEmitter::new();
 
@@ -474,9 +460,6 @@ pub fn process_hir_funcdecl(
     }
 
     let (scopes, body) = emitter.finish();
-
-    let type_def = return_type.expect_resolved().clone();
-
     return MIRTopLevelNode::DeclareFunction {
         function_name: function_name.to_string(),
         parameters: parameters
@@ -488,11 +471,11 @@ pub fn process_hir_funcdecl(
             .collect::<Vec<_>>(),
         body,
         scopes,
-        return_type: type_def,
+        return_type,
     };
 }
 
-pub fn hir_to_mir(hir_nodes: &[HIR], type_db: &TypeDatabase) -> Vec<MIRTopLevelNode> {
+pub fn hir_to_mir(hir_nodes: &[HIR]) -> Vec<MIRTopLevelNode> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
@@ -504,7 +487,7 @@ pub fn hir_to_mir(hir_nodes: &[HIR], type_db: &TypeDatabase) -> Vec<MIRTopLevelN
                 meta: _,
             } => {
                 let fdecl =
-                    process_hir_funcdecl(function_name, parameters, body, return_type, type_db);
+                    process_hir_funcdecl(function_name, parameters, body, *return_type.expect_resolved());
                 top_levels.push(fdecl);
             }
             _ => {
@@ -525,7 +508,7 @@ mod tests {
     use super::*;
 
     //Parses a single expression
-    fn mir(source: &str) -> (Vec<MIRTopLevelNode>, TypeDatabase) {
+    fn mir(source: &str) -> (Vec<MIRTopLevelNode>, TypeInstanceManager) {
         let tokenized = crate::ast::lexer::Tokenizer::new(source)
             .tokenize()
             .ok()
@@ -536,7 +519,7 @@ mod tests {
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         println!("HIR: {:?}", &analysis_result.final_mir);
         (
-            hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db),
+            hir_to_mir(&analysis_result.final_mir),
             analysis_result.type_db,
         )
     }
