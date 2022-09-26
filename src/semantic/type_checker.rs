@@ -311,7 +311,7 @@ fn methods_receive_parameters_of_correct_type(
                 assert!(path.len() <= 1, "Assign to path len > 2 not supported in type checker yet!");
 
                 //on assigns, we need to check if's a function call.
-                let HIRExpr::MethodCall(object_expr, method, args, _return_type, expr_metadata) = expression else {
+                let HIRExpr::MethodCall(object_expr, method, args, _, expr_metadata) = expression else {
                     continue; //other cases handled elsewhere
                 };
 
