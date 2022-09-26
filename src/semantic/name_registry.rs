@@ -4,22 +4,13 @@ use std::collections::HashMap;
 use crate::types::type_errors::{TypeErrors, TypeConstructionFailure};
 use crate::types::type_instance_db::{TypeInstanceManager, TypeInstanceId};
 
-use super::{hir::{HIRTypeDef, HIR, HIRType, HIRTypeResolutionState}, hir_type_resolution::hir_type_to_usage};
+use super::{hir::{HIRTypeDef, HIR, HIRTypeResolutionState}, hir_type_resolution::hir_type_to_usage};
 
 #[derive(Debug, Clone)]
 pub struct PartiallyResolvedFunctionSignature {
     pub args: Vec<HIRTypeDef>,
     pub return_type: HIRTypeDef,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnresolvedFunction {
-    pub name: String,
-    pub params: Vec<HIRType>, 
-    pub return_type: HIRType
-}
-
-
 #[derive(Debug, Clone)]
 pub struct NameRegistry {
     names: HashMap<String, TypeInstanceId>,
@@ -61,7 +52,7 @@ impl NameRegistry {
         }
     }
 
-    pub fn insert_partially_resolved_signature(
+    #[allow(dead_code)] pub fn insert_partially_resolved_signature(
         &mut self,
         name: String,
         sig: PartiallyResolvedFunctionSignature,
@@ -82,12 +73,12 @@ impl NameRegistry {
 
     pub fn include(&mut self, outer: &NameRegistry) {
         for (k, v) in &outer.names {
-            self.names.insert(k.to_string(), v.clone());
+            self.names.insert(k.to_string(), *v);
         }
     }
 
     pub fn get(&self, name: &str) -> Option<&TypeInstanceId> {
-        return self
+        self
             .names
             .get(name)
     }
@@ -131,17 +122,16 @@ pub fn build_name_registry_and_resolve_signatures(type_db: &mut TypeInstanceMana
             
             for type_def in parameters.iter_mut() {
                 let usage = hir_type_to_usage(
-                    &function_name, 
-                    &type_def.typename.expect_unresolved(),  
+                    function_name, 
+                    type_def.typename.expect_unresolved(),  
                     type_db,
                     errors
                 );
                 if let Some(usage_found) = usage {
-                    let x = &type_def.typename;
                     let constructed = type_db.construct_usage(&usage_found);
                     if let Err(e) = constructed {
                         errors.type_construction_failure.push(TypeConstructionFailure {
-                            on_function: function_name.to_string(),
+                            on_function: (*function_name).to_string(),
                             error: e
                         });
                         return registry;
@@ -157,8 +147,8 @@ pub fn build_name_registry_and_resolve_signatures(type_db: &mut TypeInstanceMana
             }
             
             let usage = hir_type_to_usage(
-                &function_name, 
-                &return_type.expect_unresolved(),
+                function_name, 
+                return_type.expect_unresolved(),
                 type_db,
                 errors
             );
@@ -166,7 +156,7 @@ pub fn build_name_registry_and_resolve_signatures(type_db: &mut TypeInstanceMana
                 let constructed = type_db.construct_usage(&usage_found);
                 if let Err(e) = constructed {
                     errors.type_construction_failure.push(TypeConstructionFailure {
-                        on_function: function_name.to_string(),
+                        on_function: (*function_name).to_string(),
                         error: e
                     });
                     return registry;

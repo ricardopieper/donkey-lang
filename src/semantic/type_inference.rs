@@ -1,27 +1,27 @@
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr, HIR};
-use crate::semantic::hir_printer;
+
 use crate::semantic::name_registry::NameRegistry;
-use crate::types::type_constructor_db::{GenericParameter, TypeUsage};
+
 use crate::types::type_errors::{
     BinaryOperatorNotFound, CallToNonCallableType, FieldOrMethodNotFound,
-    InsufficientTypeInformationForArray, TypeErrors, TypeInferenceFailure, TypeNotFound,
-    UnaryOperatorNotFound, UnexpectedTypeFound, VariableNotFound,
+    InsufficientTypeInformationForArray, TypeErrors,
+    UnaryOperatorNotFound, VariableNotFound,
 };
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::hir::{HIRTypeDefState, HIRTypeResolutionState};
 use super::hir_type_resolution::hir_type_to_usage;
-use super::name_registry::{PartiallyResolvedFunctionSignature, TypeResolvedState};
 
-impl Into<HIRTypeDefState> for TypeInstanceId {
-    fn into(self) -> HIRTypeDefState {
-        HIRTypeDef::Resolved(self).into()
+
+impl From<TypeInstanceId> for HIRTypeDefState {
+    fn from(val: TypeInstanceId) -> Self {
+        HIRTypeDef::Resolved(val).into()
     }
 }
 
-impl Into<HIRTypeDefState> for &TypeInstanceId {
-    fn into(self) -> HIRTypeDefState {
-        (*self).into()
+impl From<&TypeInstanceId> for HIRTypeDefState {
+    fn from(val: &TypeInstanceId) -> Self {
+        (*val).into()
     }
 }
 
@@ -37,9 +37,9 @@ pub fn instantiate_type(
 ) -> Option<TypeInstanceId> {
     let usage = hir_type_to_usage(on_function, typedef, type_db, errors);
     if let Some(s) = usage {
-        return type_db.construct_usage(&s).ok();
+        type_db.construct_usage(&s).ok()
     } else {
-        return None;
+        None
     }
 }
 
@@ -162,12 +162,12 @@ fn compute_infer_method_call(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
-    obj: &Box<HIRExpr>,
+    obj: &HIRExpr,
     errors: &mut TypeErrors,
     method_name: &String,
-    params: &Vec<HIRExpr>,
+    params: &[HIRExpr],
     meta: &Option<crate::ast::parser::Expr>,
-    expression: &HIRExpr,
+    _expression: &HIRExpr,
 ) -> Result<HIRExpr, TypeInferenceError> {
     //compute type of obj
     //find method_name in type of obj
@@ -175,7 +175,7 @@ fn compute_infer_method_call(
         compute_and_infer_expr_type(on_function, type_db, decls_in_scope, obj, None, errors)?;
     let typeof_obj = objexpr.expect_resolved();
 
-    let type_data = type_db.get_instance(*typeof_obj);
+    let type_data = type_db.get_instance(typeof_obj);
     //we'll find the method call here by name
     let method = type_data
         .methods
@@ -192,23 +192,23 @@ fn compute_infer_method_call(
 
         let args = infer_expr_array(on_function, type_db, decls_in_scope, errors, params)?;
 
-        return Ok(HIRExpr::MethodCall(
+        Ok(HIRExpr::MethodCall(
             objexpr.into(),
             method_name.to_string(),
             args,
             HIRTypeDef::Resolved(return_type).into(),
             meta.clone(),
-        ));
+        ))
     } else {
         println!("method call infer error");
         errors
             .field_or_method_not_found
             .push(FieldOrMethodNotFound {
                 on_function: on_function.to_string(),
-                object_type: typeof_obj.clone(),
+                object_type: typeof_obj,
                 field_or_method: method_name.to_string(),
             });
-        return Err(TypeInferenceError::SomeErrorOccured)
+        Err(TypeInferenceError::SomeErrorOccured)
     }
 }
 
@@ -217,7 +217,7 @@ fn compute_infer_array(
     type_hint: Option<TypeInstanceId>,
     errors: &mut TypeErrors,
     on_function: &str,
-    expression: &HIRExpr,
+    _expression: &HIRExpr,
     type_db: &mut TypeInstanceManager,
     meta: &Option<crate::ast::parser::Expr>,
     decls_in_scope: &NameRegistry,
@@ -247,7 +247,7 @@ fn compute_infer_array(
 
         if let Some(expr) = first_typed_item {
             let array_type_generic_replaced = type_db
-                .construct_type(array_type, &[*expr.expect_resolved()])
+                .construct_type(array_type, &[expr.expect_resolved()])
                 .unwrap();
 
             Ok(HIRExpr::Array(
@@ -265,7 +265,7 @@ fn compute_infer_array(
                 on_function: on_function.to_string(),
             });
 
-            return Err(TypeInferenceError::SomeErrorOccured);
+            Err(TypeInferenceError::SomeErrorOccured)
         }
     }
 }
@@ -283,7 +283,7 @@ fn compute_infer_member_access(
         compute_and_infer_expr_type(on_function, type_db, decls_in_scope, obj, None, errors)?;
 
     let typeof_obj = obj_expr.expect_resolved();
-    let type_data = type_db.get_instance(*typeof_obj);
+    let type_data = type_db.get_instance(typeof_obj);
 
     let field = type_data.fields.iter().find(|field| field.name == *name);
     if let Some(field) = field {
@@ -301,7 +301,7 @@ fn compute_infer_member_access(
             .field_or_method_not_found
             .push(FieldOrMethodNotFound {
                 on_function: on_function.to_string(),
-                object_type: typeof_obj.clone(),
+                object_type: typeof_obj,
                 field_or_method: name.to_string(),
             });
         Err(TypeInferenceError::SomeErrorOccured)
@@ -321,7 +321,7 @@ fn compute_infer_unary_expr(
         compute_and_infer_expr_type(on_function, type_db, decls_in_scope, rhs, None, errors)?;
     let rhs_type = rhs_expr.expect_resolved();
 
-    for (operator, result_type) in type_db.get_instance(*rhs_type).unary_ops.iter() {
+    for (operator, result_type) in &type_db.get_instance(rhs_type).unary_ops {
         if *operator == op {
             return Ok(HIRExpr::UnaryExpression(op, rhs_expr.into(), result_type.into(), meta.clone()));
         }
@@ -329,7 +329,7 @@ fn compute_infer_unary_expr(
 
     errors.unary_op_not_found.push(UnaryOperatorNotFound {
         on_function: on_function.to_string(),
-        rhs: rhs_type.clone(),
+        rhs: rhs_type,
         operator: op,
     });
 
@@ -346,9 +346,9 @@ fn infer_expr_array(
     let mut result = vec![];
     for expr in exprs.iter() {
         let res = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, expr, None, errors)?;
-        result.push(res)
+        result.push(res);
     }
-    return Ok(result)
+    Ok(result)
 }
 
 fn compute_infer_function_call(
@@ -421,10 +421,10 @@ fn compute_infer_binop(
     let lhs_type = lhs_expr.expect_resolved();
     let rhs_type = rhs_expr.expect_resolved();
 
-    let lhs_instance = type_db.get_instance(*lhs_type);
+    let lhs_instance = type_db.get_instance(lhs_type);
 
-    for (operator, rhs_supported, result_type) in lhs_instance.rhs_binary_ops.iter() {
-        if *operator == op && rhs_supported == rhs_type {
+    for (operator, rhs_supported, result_type) in &lhs_instance.rhs_binary_ops {
+        if *operator == op && *rhs_supported == rhs_type {
             return Ok(HIRExpr::BinaryOperation(
                 lhs_expr.into(),
                 op,
@@ -438,12 +438,12 @@ fn compute_infer_binop(
     //operator not found, add binary op not found error
     errors.binary_op_not_found.push(BinaryOperatorNotFound {
         on_function: on_function.to_string(),
-        lhs: lhs_type.clone(),
-        rhs: rhs_type.clone(),
+        lhs: lhs_type,
+        rhs: rhs_type,
         operator: op,
     });
 
-    return Err(TypeInferenceError::SomeErrorOccured);
+    Err(TypeInferenceError::SomeErrorOccured)
 }
 
 fn infer_types_in_body(
@@ -568,7 +568,7 @@ fn infer_types_in_if_statement_and_blocks(
         on_function,
         type_db,
         decls_in_scope,
-        &condition,
+        condition,
         None,
         errors,
     )?;
@@ -643,7 +643,7 @@ fn infer_types_in_variable_declaration(
             instantiate_type(on_function, type_db, hir_type, errors)
         }
         HIRTypeDef::Resolved(resolved) => {
-            Some(resolved.clone())
+            Some(*resolved)
         },
     };
 
@@ -652,13 +652,13 @@ fn infer_types_in_variable_declaration(
         type_db,
         decls_in_scope,
         assigned_value,
-        hint.clone(),
+        hint,
         errors,
     )?;
 
     let typedef = match hint {
         None => {
-            *typed_expr.expect_resolved()
+            typed_expr.expect_resolved()
         },
         Some(type_resolved) => {
             type_resolved

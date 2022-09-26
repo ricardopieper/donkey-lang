@@ -82,7 +82,7 @@ fn main() {
         let tp = (f64::from(num_bytes) / (diff.as_secs_f64())) / f64::from(1024 * 1024);
 
         println!("Throughput: {tp}MB/s");
-        return;
+        
     } else if args[1] == "asm" {
         let input = fs::read_to_string(args[2].clone())
             .unwrap_or_else(|_| panic!("Could not read file {}", args[2]));
@@ -105,7 +105,7 @@ fn main() {
 
         let (mut memory, mut registers) = runner::prepare_vm();
 
-        runner::run(&program_decoded, &mut memory, &mut registers)
+        runner::run(&program_decoded, &mut memory, &mut registers);
 
     } else if args[1] == "compile" {
         let generated_asm = compile(&args[2]);

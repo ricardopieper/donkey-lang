@@ -1,6 +1,6 @@
 use super::hir::{HIR, HIRAstMetadata, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr};
 
-use crate::{ast::parser::{AST, Expr}, types::type_instance_db::{TypeInstanceId, TypeInstanceManager}};
+use crate::{ast::parser::{AST, Expr}, types::type_instance_db::{TypeInstanceId}};
 
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
@@ -274,7 +274,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 emitter.finish_with_goto_block(new_block);
 
                 //now we add the variable to scope 1
-                emitter.scope_add_variable(new_scope, var.clone(), actual_type.clone());
+                emitter.scope_add_variable(new_scope, var.clone(), actual_type);
 
                 //go to block 1
                 emitter.set_current_block(new_block);
@@ -445,7 +445,7 @@ pub fn process_hir_funcdecl(
     for param in parameters.iter() {
         let actual_type = param.typename.expect_resolved();
 
-        emitter.scope_add_variable(function_zero_scope, param.name.clone(), actual_type.clone());
+        emitter.scope_add_variable(function_zero_scope, param.name.clone(), *actual_type);
     }
 
     process_body(&mut emitter, body);
@@ -466,7 +466,7 @@ pub fn process_hir_funcdecl(
             .iter()
             .map(|x| MIRTypedBoundName {
                 name: x.name.clone(),
-                typename: x.typename.expect_resolved().clone(),
+                typename: *x.typename.expect_resolved(),
             })
             .collect::<Vec<_>>(),
         body,
@@ -501,7 +501,7 @@ pub fn hir_to_mir(hir_nodes: &[HIR]) -> Vec<MIRTopLevelNode> {
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
-    use crate::{semantic::mir_printer, ast::parser::Parser};
+    use crate::{semantic::mir_printer, ast::parser::Parser, types::type_instance_db::TypeInstanceManager};
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 

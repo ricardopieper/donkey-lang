@@ -171,23 +171,6 @@ impl TypeConstructorDatabase {
         self.types.iter().find(|t| t.name == name)
     }
 
-    pub fn expect_find_by_name(&self, name: &str) -> &TypeConstructor {
-        match name {
-            "i32" => &self.types[self.common_types.i32.0],
-            "i64" => &self.types[self.common_types.i64.0],
-            "f32" => &self.types[self.common_types.f32.0],
-            "f64" => &self.types[self.common_types.f64.0],
-            "u32" => &self.types[self.common_types.u32.0],
-            "u64" => &self.types[self.common_types.u64.0],
-            "void" => &self.types[self.common_types.void.0],
-            "bool" => &self.types[self.common_types.bool.0],
-            _ => match self.types.iter().find(|t| t.name == name) {
-                Some(r) => r,
-                None => panic!("Could not find type by name {}", name),
-            },
-        }
-    }
-
     fn register_primitive_number(
         &mut self,
         name: &str,
@@ -379,5 +362,11 @@ impl TypeConstructorDatabase {
         self.add_simple_field(arr_type, "length", u32_type);
 
         self.common_types.array = arr_type;
+    }
+}
+
+impl Default for TypeConstructorDatabase {
+    fn default() -> Self {
+        Self::new()
     }
 }

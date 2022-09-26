@@ -131,7 +131,7 @@ fn detect_decl_errors_in_body(
             _ => {}
         };
     }
-    return true;
+    true
 }
 
 fn detect_declaration_errors_in_function(
@@ -186,5 +186,5 @@ pub fn detect_undeclared_vars_and_redeclarations(
             }
         };
     }
-    return true
+    true
 }

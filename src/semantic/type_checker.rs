@@ -7,18 +7,18 @@ use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 
-fn find_variable_and_get_type<'block, 'scope>(
+fn find_variable_and_get_type(
     name: &str,
-    current_block: &'block MIRBlock,
-    scopes: &'scope [MIRScope],
-    names: &'scope NameRegistry,
-) -> &'scope TypeInstanceId {
+    current_block: &MIRBlock,
+    scopes: &[MIRScope],
+    names: &NameRegistry,
+) -> TypeInstanceId {
     let mut current_scope = &scopes[current_block.scope.0];
 
     loop {
         let bound_name = current_scope.boundnames.iter().find(|x| x.name == name);
         if let Some(name_and_type) = bound_name {
-            return &name_and_type.typename
+            return name_and_type.typename
         }
         if current_scope.index == 0 {
             break;
@@ -27,10 +27,10 @@ fn find_variable_and_get_type<'block, 'scope>(
     }
 
     //try find in the global scope
-    return names.get(name).unwrap();
+    return *names.get(name).unwrap();
 }
 
-fn check_function_arguments(
+fn check_function_arguments_match_param_types(
     on_function: &str,
     function_called: &FunctionName,
     function_parameters: &[TypeInstanceId],
@@ -51,12 +51,12 @@ fn check_function_arguments(
 
     let zipped = function_parameters.iter().zip(arguments_passed.iter());
 
-    for (number, (expected, passed)) in zipped.enumerate() {
-        if passed != expected {
+    for (number, (parameter_type, argument_type)) in zipped.enumerate() {
+        if argument_type != parameter_type {
             type_errors.function_call_mismatches.push(TypeMismatch {
                 on_function: on_function.to_string(),
-                expected: expected.clone(),
-                actual: passed.clone(),
+                expected: *parameter_type,
+                actual: *argument_type,
                 context: FunctionCallContext {
                     called_function_name: function_called.clone(),
                     argument_position: number,
@@ -69,7 +69,7 @@ fn check_function_arguments(
 fn all_paths_return_values_of_correct_type(
     function_name: &str,
     body: &[MIRBlock],
-    return_type: &TypeInstanceId,
+    return_type: TypeInstanceId,
     type_db: &TypeInstanceManager,
     errors: &mut TypeErrors,
 ) {
@@ -80,18 +80,18 @@ fn all_paths_return_values_of_correct_type(
                 errors.return_type_mismatches.push(TypeMismatch {
                     context: ReturnTypeContext(),
                     on_function: function_name.to_string(),
-                    expected: return_type.clone(),
-                    actual: expr_type.clone(),
+                    expected: return_type,
+                    actual: expr_type,
                 });
             }
         }
         if let MIRBlockFinal::EmptyReturn = &body_node.finish {
-            if return_type != &type_db.common_types.void {
+            if return_type != type_db.common_types.void {
                 errors.return_type_mismatches.push(TypeMismatch {
                     context: ReturnTypeContext(),
                     on_function: function_name.to_string(),
-                    expected: return_type.clone(),
-                    actual: type_db.common_types.void.clone(),
+                    expected: return_type,
+                    actual: type_db.common_types.void,
                 });
             }
         }
@@ -122,8 +122,8 @@ fn all_assignments_correct_type(
                             context: AssignContext {
                                 target_variable_name: var.to_string(),
                             },
-                            expected: variable_type.clone(),
-                            actual: expr_type.clone(),
+                            expected: variable_type,
+                            actual: expr_type,
                         });
                     }
                 }
@@ -144,17 +144,14 @@ fn if_statement_exprs_read_from_bool_variable(
     type_errors: &mut TypeErrors,
 ) {
     for body_node in body {
-        match &body_node.finish {
-            MIRBlockFinal::If(expr, _, _, _) => {
-                let expr_type = expr.expect_resolved();
-                if expr_type != &type_db.common_types.bool {
-                    type_errors.if_statement_unexpected_type.push(IfStatementNotBoolean {
-                        on_function: function_name.to_string(),
-                        actual_type: expr_type.clone()
-                    })
-                }
-            },
-            _ => {}
+        if let MIRBlockFinal::If(expr, _, _, _) = &body_node.finish {
+            let expr_type = expr.expect_resolved();
+            if expr_type != type_db.common_types.bool {
+                type_errors.if_statement_unexpected_type.push(IfStatementNotBoolean {
+                    on_function: function_name.to_string(),
+                    actual_type: expr_type
+                });
+            }
         }
     }
 }
@@ -224,16 +221,16 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     assert!(path.len() <= 1, "Assign to path len > 2 not supported in type checker yet!");
 
                     //on assigns, we need to check if's a function call.
-                    let HIRExpr::FunctionCall(call_expr, args, return_type, expr_metadata) = expression else {
+                    let HIRExpr::FunctionCall(call_expr, args, _return_type, expr_metadata) = expression else {
                         continue; //other cases handled elsewhere
                     };
 
                     let type_id =  call_expr.expect_resolved();
-                    let type_data = type_db.get_instance(*type_id);
+                    let type_data = type_db.get_instance(type_id);
                     if !type_data.is_function {
                         type_errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
-                            actual_type: call_expr.expect_resolved().clone()
+                            actual_type: call_expr.expect_resolved()
                         });
                         continue;
                     }
@@ -244,14 +241,14 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
 
                     let passed_types = args
                         .iter()
-                        .map(|x| x.expect_resolved().clone())
+                        .map(crate::semantic::hir::HIRExpr::expect_resolved)
                         .collect::<Vec<_>>();
                     let actual_function_name = get_actual_function_name_with_details(
-                        &called_function,
+                        called_function,
                         meta_ast,
                         expr_metadata,
                     );
-                    check_function_arguments(
+                    check_function_arguments_match_param_types(
                         function_name,
                         &actual_function_name,
                         &type_data.function_args,
@@ -265,31 +262,31 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     meta_ast,
                 } => {
                     let function_type = find_variable_and_get_type(function, body_node, scopes, names);
-                    let type_data = type_db.get_instance(*function_type);
+                    let type_data = type_db.get_instance(function_type);
                    
                     if !type_data.is_function {
                         type_errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
-                            actual_type: function_type.clone(),
+                            actual_type: function_type,
                         });
                         continue;
                     }
                     
                     let passed = args
                         .iter()
-                        .map(|x| x.expect_resolved().clone())
+                        .map(crate::semantic::hir::HIRExpr::expect_resolved)
                         .collect::<Vec<_>>();
 
                     let actual_function_name =
                         get_actual_function_name_with_details(function, meta_ast, &None);
                         
-                    check_function_arguments(
+                    check_function_arguments_match_param_types(
                         function_name,
                         &actual_function_name,
                         &type_data.function_args,
                         &passed,
                         type_errors
-                    )
+                    );
                 }
             }
         }
@@ -305,47 +302,44 @@ fn methods_receive_parameters_of_correct_type(
     //
     for body_node in body {
         for block_node in &body_node.block {
-            match block_node {
-                MIRBlockNode::Assign {
-                    path,
-                    expression,
+            if let MIRBlockNode::Assign {
+                                path,
+                                expression,
+                                meta_ast,
+                                meta_expr: _,
+                            } = block_node {
+                assert!(path.len() <= 1, "Assign to path len > 2 not supported in type checker yet!");
+
+                //on assigns, we need to check if's a function call.
+                let HIRExpr::MethodCall(object_expr, method, args, _return_type, expr_metadata) = expression else {
+                    continue; //other cases handled elsewhere
+                };
+
+                let object_expr_type = object_expr.expect_resolved(); 
+                let object_type_data = type_db.get_instance(object_expr_type);
+
+                let method = object_type_data.methods.iter().find(|m| &m.name == method).unwrap();
+
+                let method_function_type_data = type_db.get_instance(method.function_type);
+
+                let passed_types = args
+                    .iter()
+                    .map(crate::semantic::hir::HIRExpr::expect_resolved)
+                    .collect::<Vec<_>>();
+
+                let actual_function_name = get_actual_function_name_with_details(
+                    &method_function_type_data.name,
                     meta_ast,
-                    meta_expr: _,
-                } => {
-                    assert!(path.len() <= 1, "Assign to path len > 2 not supported in type checker yet!");
+                    expr_metadata,
+                );
 
-                    //on assigns, we need to check if's a function call.
-                    let HIRExpr::MethodCall(object_expr, method, args, return_type, expr_metadata) = expression else {
-                        continue; //other cases handled elsewhere
-                    };
-
-                    let object_expr_type = object_expr.expect_resolved(); 
-                    let object_type_data = type_db.get_instance(*object_expr_type);
-
-                    let method = object_type_data.methods.iter().find(|m| &m.name == method).unwrap();
-
-                    let method_function_type_data = type_db.get_instance(method.function_type);
-
-                    let passed_types = args
-                        .iter()
-                        .map(|x| x.expect_resolved().clone())
-                        .collect::<Vec<_>>();
-
-                    let actual_function_name = get_actual_function_name_with_details(
-                        &method_function_type_data.name,
-                        meta_ast,
-                        expr_metadata,
-                    );
-
-                    check_function_arguments(
-                        function_name,
-                        &actual_function_name,
-                        &method_function_type_data.function_args,
-                        &passed_types,
-                        type_errors,
-                    );
-                }
-                _ => {}
+                check_function_arguments_match_param_types(
+                    function_name,
+                    &actual_function_name,
+                    &method_function_type_data.function_args,
+                    &passed_types,
+                    type_errors,
+                );
             }
         }
     }
@@ -356,7 +350,7 @@ fn type_check_function(
     function_name: &str,
     body: &[MIRBlock],
     scopes: &[MIRScope],
-    return_type: &TypeInstanceId,
+    return_type: TypeInstanceId,
     globals: &NameRegistry,
     type_db: &TypeInstanceManager,
     type_errors: &mut TypeErrors,
@@ -401,7 +395,7 @@ pub fn check_type(
                     function_name,
                     body,
                     scopes,
-                    return_type,
+                    *return_type,
                     names,
                     type_db,
                     &mut type_errors,

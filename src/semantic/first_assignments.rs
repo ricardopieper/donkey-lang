@@ -1,4 +1,4 @@
-use crate::semantic::hir::{HIR, HIRTypeDef, HIRTypedBoundName};
+use crate::semantic::hir::{HIR, HIRTypedBoundName};
 
 use std::collections::HashSet;
 

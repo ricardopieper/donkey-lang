@@ -32,17 +32,16 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
 
     hir = first_assignments::transform_first_assignment_into_declaration(&hir);
     let after_make_declarations_mir = hir.clone();
-    if !undeclared_vars::detect_undeclared_vars_and_redeclarations(&globals, &hir, &mut errors) {
+    if undeclared_vars::detect_undeclared_vars_and_redeclarations(&globals, &hir, &mut errors) {
+        if let Ok(e) = type_inference::infer_types(&mut globals, &mut type_db, &hir, &mut errors) {
+            hir = e;
+        } else {
+            let printer = TypeErrorPrinter::new(&errors, &type_db);
+            println!("Type inference error\n{printer}");
+        };
+    } else {
         let printer = TypeErrorPrinter::new(&errors, &type_db);
         println!("Type inference error\n{printer}");
-    } else {
-        match type_inference::infer_types(&mut globals, &mut type_db, &hir, &mut errors) {
-            Ok(e) => hir = e,
-            Err(_) => {
-                let printer = TypeErrorPrinter::new(&errors, &type_db);
-                println!("Type inference error\n{printer}");
-            }
-        };
     }
 
     AnalysisResult {

@@ -28,7 +28,7 @@ impl DonkeyEmitter {
         self.annotations.push(None);
     }
 
-    pub fn push_annotated<'a, S: Into<String>>(&mut self, instruction: AssemblyInstruction, annotation: S) {
+    pub fn push_annotated<S: Into<String>>(&mut self, instruction: AssemblyInstruction, annotation: S) {
         self.assembly.push(instruction);
         self.annotations.push(Some(Annotation { annotation: annotation.into() }));
     }
@@ -63,13 +63,12 @@ fn build_write_scope_byte_layout(
         for var in &scope.boundnames {
             found_var.push((var.name.clone(), var.typename.size(type_db)));
         }
-
        
-        if current_index != 0 {
-            current_index = scope.inherit.0;
-        } else {
+        if current_index == 0 {
             break;
         }
+        current_index = scope.inherit.0;
+
     }
 
     let mut map: HashMap<String, ByteRange> = HashMap::new();
@@ -135,7 +134,7 @@ pub fn encode_u64(raw: i128) -> [[u8; 2]; 4] {
 fn generate_trivial_expr(
     type_db: &TypeInstanceManager,
     expression: &TrivialHIRExpr,
-    trivial_type: &TypeInstanceId,
+    trivial_type: TypeInstanceId,
     bytecode: &mut DonkeyEmitter,
     scope: &HashMap<String, ByteRange>,
 ) -> u32 {
@@ -143,9 +142,9 @@ fn generate_trivial_expr(
     match &expression {
         TrivialHIRExpr::IntegerValue(v) => {
             if size == 4 {
-                let (lower, upper) = if trivial_type == &type_db.common_types.i32 {
+                let (lower, upper) = if trivial_type == type_db.common_types.i32 {
                     encode_i32(*v)
-                } else if trivial_type == &type_db.common_types.u32 {
+                } else if trivial_type == type_db.common_types.u32 {
                     encode_u32(*v)
                 } else {
                     panic!("Tried to compile immediate push of a 4-byte type, but somehow types don't match size")
@@ -170,9 +169,9 @@ fn generate_trivial_expr(
                     });
                 }
             } else if size == 8 {
-                let parts = if trivial_type == &type_db.common_types.i64 {
+                let parts = if trivial_type == type_db.common_types.i64 {
                     encode_i64(*v)
-                } else if trivial_type == &type_db.common_types.u64 {
+                } else if trivial_type == type_db.common_types.u64 {
                     encode_u64(*v)
                 } else {
                     panic!("Tried to compile immediate push of a 4-byte type, but somehow types don't match size")
@@ -325,7 +324,7 @@ fn generate_expr(
 }
 
 fn generate_function_call_code(type_db: &TypeInstanceManager, 
-    return_type: &TypeInstanceId, 
+    return_type: TypeInstanceId, 
     offset_from_bp: u32,
     bytecode: &mut DonkeyEmitter,
     args: &[HIRExpr], 
@@ -432,7 +431,7 @@ fn generate_compare_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, b
    //since both expr are the same type, we take the lhs type size and sign
     let lhs_type = lhs.expect_resolved();
     let lhs_size = lhs_type.size(type_db);
-    let type_db_record = type_db.get_instance(*lhs_type);
+    let type_db_record = type_db.get_instance(lhs_type);
     let constructor = type_db.constructors.find(type_db_record.base);
     
     println!("Comparison of types {}", type_db_record.name);
@@ -456,7 +455,7 @@ fn generate_compare_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, b
             sign: sign_flag,
             immediate: None,
         });
-    } else if *lhs_type == type_db.common_types.f32 || *lhs_type == type_db.common_types.f64 {
+    } else if lhs_type == type_db.common_types.f32 || lhs_type == type_db.common_types.f64 {
         todo!("Compare op not implemented yet for floats")
     } else {
         panic!(
@@ -470,13 +469,13 @@ fn generate_compare_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, b
     }
 }
 
-fn is_integer(lhs_type: &TypeInstanceId, type_db: &TypeInstanceManager) -> bool {
-    *lhs_type == type_db.common_types.i32 || *lhs_type == type_db.common_types.i64
-        || *lhs_type == type_db.common_types.u32 || *lhs_type == type_db.common_types.u64
+fn is_integer(lhs_type: TypeInstanceId, type_db: &TypeInstanceManager) -> bool {
+    lhs_type == type_db.common_types.i32 || lhs_type == type_db.common_types.i64
+        || lhs_type == type_db.common_types.u32 || lhs_type == type_db.common_types.u64
 }
 
-fn is_float(lhs_type: &TypeInstanceId, type_db: &TypeInstanceManager) -> bool {
-    *lhs_type == type_db.common_types.f32 || *lhs_type == type_db.common_types.f64
+fn is_float(lhs_type: TypeInstanceId, type_db: &TypeInstanceManager) -> bool {
+    lhs_type == type_db.common_types.f32 || lhs_type == type_db.common_types.f64
 }
 
 fn generate_bitwise_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
@@ -484,7 +483,7 @@ fn generate_bitwise_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, b
     let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
     //since both expr are the same type, we take the lhs type size and sign
     let lhs_type = lhs.expect_resolved();
-    let type_db_record = type_db.get_instance(*lhs_type);
+    let type_db_record = type_db.get_instance(lhs_type);
     let constructor = type_db.constructors.find(type_db_record.base);
     
     let bitwise_op = match op {
@@ -523,7 +522,7 @@ fn generate_arith_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, byt
     //since both expr are the same type, we take the lhs type size and sign
     let lhs_type = lhs.expect_resolved();
     let lhs_size = lhs_type.size(type_db);
-    let type_db_record = type_db.get_instance(*lhs_type);
+    let type_db_record = type_db.get_instance(lhs_type);
     let constructor = type_db.constructors.find(type_db_record.base);
     
     let arith_op = match op {
@@ -564,7 +563,6 @@ fn generate_decl_function(
     parameters: &[MIRTypedBoundName],
     body: &[MIRBlock],
     scopes: &[MIRScope],
-    _return_type: &TypeInstanceId,
     bytecode: &mut DonkeyEmitter,
     type_db: &TypeInstanceManager,
 ) {
@@ -575,7 +573,7 @@ fn generate_decl_function(
 
 
     //generate load parameters
-    let mut args_stack_offset = -8 as isize;
+    let mut args_stack_offset = -8_isize;
     for param in parameters {
         let type_size = param.typename.size(type_db);
         let position = args_stack_offset - (type_size as isize);
@@ -631,7 +629,7 @@ fn generate_decl_function(
     }
 
     for block in body {
-        generate_function_decl_block(&parameters, &scope_byte_layout, block, &target_blocks, bytecode, type_db, &mut offset_from_bp);
+        generate_function_decl_block(parameters, &scope_byte_layout, block, &target_blocks, bytecode, type_db, &mut offset_from_bp);
     }
 }
 
@@ -689,7 +687,7 @@ fn generate_func_block_finish(
     match &block.finish {
         MIRBlockFinal::If(true_expr, true_branch, false_branch, ..) => {
             let generated_expr =
-                generate_expr(type_db, &true_expr, bytecode, scope, *offset_from_bp);
+                generate_expr(type_db, true_expr, bytecode, scope, *offset_from_bp);
             *offset_from_bp = generated_expr.offset_from_bp;
             //generate a jz to the false branch
             //assert that the true branch is just the next one
@@ -744,13 +742,12 @@ fn generate_for_top_lvl(
             parameters,
             body,
             scopes,
-            return_type,
+            ..
         } => generate_decl_function(
             function_name,
             parameters,
             body,
             scopes,
-            return_type,
             emitter,
             type_db,
         ),

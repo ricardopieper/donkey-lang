@@ -2,7 +2,7 @@ use crate::ast::lexer;
 
 use crate::semantic::hir::{HIR, HIRExpr, HIRType, HIRTypeDef, TrivialHIRExpr};
 use crate::semantic::name_registry::TypeResolvedState;
-use crate::types::type_constructor_db::TypeConstructorDatabase;
+
 use crate::types::type_instance_db::TypeInstanceManager;
 use lexer::Operator;
 
@@ -30,16 +30,16 @@ pub fn operator_str(op: lexer::Operator) -> String {
 pub fn expr_str(expr: &HIRExpr) -> String {
     match expr {
         HIRExpr::Trivial(trivial, ..) => trivial_expr_str(trivial),
-        HIRExpr::FunctionCall(f, params, ..) => {
-            let args_str = params
+        HIRExpr::FunctionCall(f, args, ..) => {
+            let args_str = args
                 .iter()
                 .map(expr_str)
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{}({})", expr_str(f), args_str)
         }
-        HIRExpr::MethodCall(obj, name, params, ..) => {
-            let args_str = params
+        HIRExpr::MethodCall(obj, name, args, ..) => {
+            let args_str = args
                 .iter()
                 .map(expr_str)
                 .collect::<Vec<_>>()
@@ -55,12 +55,12 @@ pub fn expr_str(expr: &HIRExpr) -> String {
         ),
 
         HIRExpr::Array(items, ..) => {
-            let args_str = items
+            let array_items_str = items
                 .iter()
                 .map(expr_str)
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("[{}]", args_str)
+            format!("[{}]", array_items_str)
         }
         HIRExpr::UnaryExpression(op, expr, ..) => {
             format!("{}{}", operator_str(*op), expr_str(expr))
@@ -103,11 +103,6 @@ pub fn hir_type_def_str(typ: &HIRTypeDef, type_db: &TypeInstanceManager) -> Stri
         HIRTypeDef::Unresolved(HIRType::Generic(s, g)) => {
             format!("UNRESOLVED {}<{}>", s, slice_types_str(g, type_db))
         }
-        HIRTypeDef::Unresolved(HIRType::Function(args, return_type)) => format!(
-            "UNRESOLVED ({}) -> {}",
-            slice_types_str(args, type_db),
-            hir_type_def_str(&HIRTypeDef::Unresolved(*return_type.clone()), type_db)
-        ),
         HIRTypeDef::Resolved(instance) => instance.as_string(type_db),
     }
 }

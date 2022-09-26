@@ -2,25 +2,25 @@ use std::collections::HashMap;
 
 use crate::ast::lexer::Operator;
 
-use super::type_constructor_db::{TypeConstructorDatabase, TypeConstructorId, TypeConstructor, TypeUsage, TypeKind};
+use super::type_constructor_db::{TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeUsage, TypeConstructor};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeConstructionError {
     TypeNotFound { name: String },
-    GenericArgumentNotFound { name: String },
-    IncorrectNumberOfArgs{ expected: usize, received: usize},
+    //GenericArgumentNotFound { name: String },
+    IncorrectNumberOfArgs { expected: usize, received: usize },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TypeInstanceId(pub usize);
 
 impl TypeInstanceId {
-    pub fn as_string(&self, type_db: &TypeInstanceManager) -> String {
-        type_db.get_instance(*self).name.to_string()
+    pub fn as_string(self, type_db: &TypeInstanceManager) -> String {
+        type_db.get_instance(self).name.to_string()
     }
 
-    pub fn size(&self, type_db: &TypeInstanceManager) -> usize {
-        type_db.get_instance(*self).size
+    pub fn size(self, type_db: &TypeInstanceManager) -> usize {
+        type_db.get_instance(self).size
     }
 }
 
@@ -68,7 +68,7 @@ pub struct TypeInstance {
     //method (name, args, return type)
     pub methods: Vec<TypeInstanceStructMethod>,
     //The arguments used in the type constructor
-    pub type_args: Vec<TypeInstanceId>
+    pub type_args: Vec<TypeInstanceId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -84,12 +84,10 @@ pub struct CommonTypeInstances {
     pub string: TypeInstanceId,
 }
 
-
 pub struct TypeInstanceManager {
     pub constructors: TypeConstructorDatabase,
     pub types: Vec<TypeInstance>,
-    pub common_types: CommonTypeInstances,
-    pub types_by_constructor_id: std::collections::HashMap<TypeConstructorId, TypeInstanceId>
+    pub common_types: CommonTypeInstances
 }
 
 impl TypeInstanceManager {
@@ -99,35 +97,48 @@ impl TypeInstanceManager {
             constructors: TypeConstructorDatabase::new(),
             common_types: CommonTypeInstances {
                 ..Default::default()
-            },
-            types_by_constructor_id: std::collections::HashMap::new()
+            }
         };
         item.init_builtin();
         item
-    }
-
-    pub fn is_function(&self, id: TypeInstanceId) -> bool {
-        self.types[id.0].is_function
     }
 
     pub fn get_instance(&self, id: TypeInstanceId) -> &TypeInstance {
         &self.types[id.0]
     }
 
-    pub fn construct_function(&mut self, arg_types: &[TypeInstanceId], return_type: TypeInstanceId) -> TypeInstanceId {
+    pub fn construct_function(
+        &mut self,
+        arg_types: &[TypeInstanceId],
+        return_type: TypeInstanceId,
+    ) -> TypeInstanceId {
         self.construct_function_method(None, arg_types, return_type)
     }
 
-    pub fn construct_method(&mut self, method_of: TypeInstanceId, arg_types: &[TypeInstanceId], return_type: TypeInstanceId) -> TypeInstanceId {
+    pub fn construct_method(
+        &mut self,
+        method_of: TypeInstanceId,
+        arg_types: &[TypeInstanceId],
+        return_type: TypeInstanceId,
+    ) -> TypeInstanceId {
         self.construct_function_method(Some(method_of), arg_types, return_type)
     }
 
-    fn construct_function_method(&mut self, method_of: Option<TypeInstanceId>, arg_types: &[TypeInstanceId], return_type: TypeInstanceId) -> TypeInstanceId {
-        
-        for instance in self.types.iter() {
-            if !instance.is_function {continue;};
-            if instance.function_args == arg_types && instance.function_return_type.unwrap() == return_type && method_of == instance.is_method_of {
-                return instance.id
+    fn construct_function_method(
+        &mut self,
+        method_of: Option<TypeInstanceId>,
+        arg_types: &[TypeInstanceId],
+        return_type: TypeInstanceId,
+    ) -> TypeInstanceId {
+        for instance in &self.types {
+            if !instance.is_function {
+                continue;
+            };
+            if instance.function_args == arg_types
+                && instance.function_return_type.unwrap() == return_type
+                && method_of == instance.is_method_of
+            {
+                return instance.id;
             }
         }
 
@@ -136,8 +147,12 @@ impl TypeInstanceManager {
             id: new_type_id,
             base: self.constructors.common_types.function,
             is_function: true,
-            size: self.constructors.find(self.constructors.common_types.function).rep_size.unwrap(),
-            name: "".to_string(), //@TODO build name
+            size: self
+                .constructors
+                .find(self.constructors.common_types.function)
+                .rep_size
+                .unwrap(),
+            name: String::new(), //@TODO build name
             function_args: arg_types.to_vec(),
             function_return_type: Some(return_type),
             allowed_casts: vec![],
@@ -149,7 +164,7 @@ impl TypeInstanceManager {
             is_method_of: method_of,
         };
         self.types.push(constructed);
-        
+
         let name = {
             let args = arg_types
                 .iter()
@@ -164,19 +179,26 @@ impl TypeInstanceManager {
         new_type_id
     }
 
-    pub fn construct_usage(&mut self, usage: &TypeUsage) -> Result<TypeInstanceId, TypeConstructionError> {
+    pub fn construct_usage(
+        &mut self,
+        usage: &TypeUsage,
+    ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
 
-    pub fn construct_usage_generic(&mut self, usage: &TypeUsage, type_args: &HashMap<String, TypeInstanceId>) -> Result<TypeInstanceId, TypeConstructionError> {
+    pub fn construct_usage_generic(
+        &mut self,
+        usage: &TypeUsage,
+        type_args: &HashMap<String, TypeInstanceId>,
+    ) -> Result<TypeInstanceId, TypeConstructionError> {
         match usage {
-            TypeUsage::Given(constructor_id) => {
-                self.construct_type(*constructor_id, &[])
-            },
-            TypeUsage::Generic(param) => {
-                type_args.get(&param.0).ok_or_else(|| TypeConstructionError::TypeNotFound { name: param.0.to_string()})
-                    .map(|op| *op)
-            }
+            TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
+            TypeUsage::Generic(param) => type_args
+                .get(&param.0)
+                .ok_or_else(|| TypeConstructionError::TypeNotFound {
+                    name: param.0.to_string(),
+                })
+                .map(|op| *op),
             TypeUsage::Parameterized(constructor_id, params) => {
                 let mut constructed = vec![];
 
@@ -192,41 +214,28 @@ impl TypeInstanceManager {
     pub fn construct_type(
         &mut self,
         constructor_id: TypeConstructorId,
-        positional_args: &[TypeInstanceId]
+        positional_args: &[TypeInstanceId],
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         let c = self.constructors.find(constructor_id);
 
-        for existing_type in self.types.iter() {
-            if existing_type.base == constructor_id &&
-                existing_type.type_args == positional_args {
-                    return Ok(existing_type.id);
-                }
+        for existing_type in &self.types {
+            if existing_type.base == constructor_id && existing_type.type_args == positional_args {
+                return Ok(existing_type.id);
+            }
         }
 
         let id = TypeInstanceId(self.types.len());
-        self.types.push(TypeInstance {
-            id,
-            base: constructor_id,
-            size: 0,
-            name: c.name.to_string(),
-            allowed_casts: vec![],
-            rhs_binary_ops: vec![],
-            unary_ops: vec![],
-            fields: vec![],
-            methods: vec![],
-            type_args: positional_args.to_vec(),
-            is_function: false,
-            function_args: vec![],
-            function_return_type: None,
-            is_method_of: None,
-        });
-       
+        self.types.push(make_base_instance(id,c, positional_args));
+
         //build a map of argname => type id
         let mut type_args = HashMap::new();
         {
             let constructor = self.constructors.find(constructor_id);
             if constructor.type_args.len() != positional_args.len() {
-                return Err(TypeConstructionError::IncorrectNumberOfArgs { expected: constructor.type_args.len(), received: positional_args.len() })
+                return Err(TypeConstructionError::IncorrectNumberOfArgs {
+                    expected: constructor.type_args.len(),
+                    received: positional_args.len(),
+                });
             }
 
             for (index, type_arg) in constructor.type_args.iter().enumerate() {
@@ -234,93 +243,13 @@ impl TypeInstanceManager {
             }
         }
 
-        {
-            let constructor = self.constructors.find(constructor_id);
-            if constructor.type_args.len() == 0 {
-                self.types_by_constructor_id.insert(constructor.id, id);
-            }
-        }
+        let allowed_casts = self.make_casts(constructor_id)?;
+        let rhs_binary_ops = self.make_binary_ops(constructor_id)?;
+        let unary_ops = self.make_unary_ops(constructor_id)?;
+        let fields = self.make_fields(constructor_id)?;
+        let methods = self.make_methods(constructor_id, &type_args, id)?;
 
-        let allowed_casts = {
-            let constructor = self.constructors.find(constructor_id);
-            let mut result = vec![];
-            let casts = constructor.allowed_casts.clone();
-            for type_usage in casts {
-                let constructed = self.construct_usage(&type_usage)?;
-                result.push(constructed);
-            }
-            result
-        };
-
-        let rhs_binary_ops = {
-            let constructor = self.constructors.find(constructor_id);
-            let mut result = vec![];
-            let rhs_bin_ops = constructor.rhs_binary_ops.clone();
-            for (operator, rhs, op_result) in rhs_bin_ops.iter() {
-                result.push((
-                    *operator,
-                    self.construct_usage(rhs)?,
-                    self.construct_usage(op_result)?,
-                ));
-            }
-            result
-        };
-
-        let unary_ops = {
-            let constructor = self.constructors.find(constructor_id);
-
-            let mut result = vec![];
-            let unary_ops = constructor.unary_ops.clone();
-            for (operator, rhs) in unary_ops.iter() {
-                result.push((
-                    *operator,
-                    self.construct_usage(rhs)?
-                ));
-            }
-            result
-        };
-
-        let fields = {
-            let constructor = self.constructors.find(constructor_id);
-            let mut result = vec![];
-            let fields = constructor.fields.clone();
-            for field_decl in fields.iter() {
-                result.push(TypeInstanceStructField {
-                    name: field_decl.name.to_string(),
-                    field_type: self.construct_usage(&field_decl.field_type)?
-                });
-            }
-            result
-        };
-
-        let methods = {
-            let constructor = self.constructors.find(constructor_id);
-
-            let mut result = vec![];
-            let methods = constructor.methods.clone();
-            for method_decl in methods {
-                let args = {
-                    let mut args = vec![];
-                    for arg in method_decl.args.iter() {
-                        let arg_constructed = self.construct_usage(arg)?;
-                        args.push(arg_constructed);
-                    }
-                    args
-                };
-                
-                let return_type = self.construct_usage_generic(&method_decl.return_type, &type_args)?;
-
-                let method_type_id = self.construct_method(id, &args, return_type);
-
-                result.push(TypeInstanceStructMethod {
-                    name: method_decl.name.to_string(),
-                    function_type: method_type_id
-                });
-            }
-            result
-        };
-
-        let name = if positional_args.len() == 0 {
+        let name = if positional_args.is_empty() {
             let constructor = self.constructors.find(constructor_id);
             constructor.name.to_string()
         } else {
@@ -332,7 +261,7 @@ impl TypeInstanceManager {
                 .join(", ");
             format!("{base}<{generics}>", base = constructor.name)
         };
-   
+
         {
             let mut cur = &mut self.types[id.0];
             cur.allowed_casts = allowed_casts;
@@ -346,28 +275,113 @@ impl TypeInstanceManager {
             let size = self.compute_size(&self.types[id.0]);
             self.types[id.0].size = size;
         }
-        return Ok(id);
+        Ok(id)
     }
 
-
-    fn try_find_constructor_by_name(&mut self, name: &str) -> Result<&TypeConstructor, TypeConstructionError> {
-        let base_constructor = self.constructors.find_by_name(name);
-        if let Some(c) = base_constructor {
-            return Ok(c);
-        }
-        Err(TypeConstructionError::TypeNotFound { name: name.to_string() })
+    fn make_casts(&mut self, constructor_id: TypeConstructorId) -> Result<Vec<TypeInstanceId>, TypeConstructionError> {
+        let allowed_casts = {
+            let constructor = self.constructors.find(constructor_id);
+            let mut result = vec![];
+            let casts = constructor.allowed_casts.clone();
+            for type_usage in casts {
+                let constructed = self.construct_usage(&type_usage)?;
+                result.push(constructed);
+            }
+            result
+        };
+        Ok(allowed_casts)
     }
-    
+
+    fn make_binary_ops(&mut self, constructor_id: TypeConstructorId) -> Result<Vec<(Operator, TypeInstanceId, TypeInstanceId)>, TypeConstructionError> {
+        let rhs_binary_ops = {
+            let constructor = self.constructors.find(constructor_id);
+            let mut result = vec![];
+            let rhs_bin_ops = constructor.rhs_binary_ops.clone();
+            for (operator, rhs, op_result) in &rhs_bin_ops {
+                result.push((
+                    *operator,
+                    self.construct_usage(rhs)?,
+                    self.construct_usage(op_result)?,
+                ));
+            }
+            result
+        };
+        Ok(rhs_binary_ops)
+    }
+
+    fn make_unary_ops(&mut self, constructor_id: TypeConstructorId) -> Result<Vec<(Operator, TypeInstanceId)>, TypeConstructionError> {
+        let unary_ops = {
+            let constructor = self.constructors.find(constructor_id);
+
+            let mut result = vec![];
+            let unary_ops = constructor.unary_ops.clone();
+            for (operator, rhs) in &unary_ops {
+                result.push((*operator, self.construct_usage(rhs)?));
+            }
+            result
+        };
+        Ok(unary_ops)
+    }
+
+    fn make_fields(&mut self, constructor_id: TypeConstructorId) -> Result<Vec<TypeInstanceStructField>, TypeConstructionError> {
+        let fields = {
+            let constructor = self.constructors.find(constructor_id);
+            let mut result = vec![];
+            let fields = constructor.fields.clone();
+            for field_decl in &fields {
+                result.push(TypeInstanceStructField {
+                    name: field_decl.name.to_string(),
+                    field_type: self.construct_usage(&field_decl.field_type)?,
+                });
+            }
+            result
+        };
+        Ok(fields)
+    }
+
+    fn make_methods(&mut self, constructor_id: TypeConstructorId, type_args: &HashMap<String, TypeInstanceId>, id: TypeInstanceId) -> Result<Vec<TypeInstanceStructMethod>, TypeConstructionError> {
+        let methods = {
+            let constructor = self.constructors.find(constructor_id);
+
+            let mut result = vec![];
+            let methods = constructor.methods.clone();
+            for method_decl in methods {
+                let args = {
+                    let mut args = vec![];
+                    for arg in &method_decl.args {
+                        let arg_constructed = self.construct_usage(arg)?;
+                        args.push(arg_constructed);
+                    }
+                    args
+                };
+
+                let return_type =
+                    self.construct_usage_generic(&method_decl.return_type, type_args)?;
+
+                let method_type_id = self.construct_method(id, &args, return_type);
+
+                result.push(TypeInstanceStructMethod {
+                    name: method_decl.name.to_string(),
+                    function_type: method_type_id,
+                });
+            }
+            result
+        };
+        Ok(methods)
+    }
+
     fn compute_size(&self, constructed: &TypeInstance) -> usize {
         //compute size of fields if they are struct, if they are primitive then the type constructor already has this info
         let constructor = self.constructors.find(constructed.base);
         if constructor.kind == TypeKind::Primitive {
-            constructor.rep_size.expect("Primitive type should have rep_size")
+            constructor
+                .rep_size
+                .expect("Primitive type should have rep_size")
         } else {
-            constructed.fields.iter()
-                .map(|x| {
-                    self.get_instance(x.field_type).size
-                })
+            constructed
+                .fields
+                .iter()
+                .map(|x| self.get_instance(x.field_type).size)
                 .sum()
         }
     }
@@ -375,8 +389,9 @@ impl TypeInstanceManager {
     fn init_builtin(&mut self) {
         macro_rules! make_type {
             ($type:tt) => {
-                self.common_types.$type =
-                    self.construct_usage(&TypeUsage::Given(self.constructors.common_types.$type)).unwrap();
+                self.common_types.$type = self
+                    .construct_usage(&TypeUsage::Given(self.constructors.common_types.$type))
+                    .unwrap();
             };
         }
 
@@ -392,3 +407,27 @@ impl TypeInstanceManager {
     }
 }
 
+fn make_base_instance(id: TypeInstanceId, constructor: &TypeConstructor, positional_args: &[TypeInstanceId]) -> TypeInstance {
+    TypeInstance {
+        id,
+        base: constructor.id,
+        size: 0,
+        name: constructor.name.to_string(),
+        allowed_casts: vec![],
+        rhs_binary_ops: vec![],
+        unary_ops: vec![],
+        fields: vec![],
+        methods: vec![],
+        type_args: positional_args.to_vec(),
+        is_function: false,
+        function_args: vec![],
+        function_return_type: None,
+        is_method_of: None,
+    }
+}
+
+impl Default for TypeInstanceManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

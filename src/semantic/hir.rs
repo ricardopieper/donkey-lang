@@ -5,10 +5,10 @@ use crate::ast::lexer::Operator;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
 use crate::types::type_instance_db::TypeInstanceId;
-use crate::types::type_instance_db::TypeInstanceManager;
+
 
 use super::name_registry::TypeResolvedState;
-use super::type_inference::instantiate_type;
+
 
 pub type HIRTypeResolutionState = TypeResolvedState<TypeInstanceId, HIRType>;
 
@@ -20,12 +20,6 @@ pub enum TrivialHIRExpr {
     BooleanValue(bool),
     Variable(String),
     None,
-}
-
-impl TrivialHIRExpr {
-    pub fn pending_type(&self) -> HIRExpr {
-        HIRExpr::Trivial(self.clone(), HIRTypeDefState::pending(), None)
-    }
 }
 
 /**
@@ -72,7 +66,7 @@ pub enum HIRExpr {
 pub enum HIRType {
     Simple(String),
     Generic(String, Vec<HIRType>),
-    Function(Vec<HIRType>, Box<HIRType>),
+    //Function(Vec<HIRType>, Box<HIRType>),
 }
 
 impl Display for HIRType {
@@ -93,20 +87,6 @@ impl Display for HIRType {
                 f.write_str(&comma_sep).unwrap();
                 f.write_char('>')
             }
-            HIRType::Function(arg_types, return_type) => {
-                let comma_sep_args = arg_types
-                    .iter()
-                    .map(HIRType::to_string)
-                    .collect::<Vec<String>>()
-                    .join(", ");
-
-                let return_type = return_type.to_string();
-
-                f.write_str("fn (").unwrap();
-                f.write_str(&comma_sep_args).unwrap();
-                f.write_str(") -> ").unwrap();
-                f.write_str(&return_type)
-            }
         }
     }
 }
@@ -125,7 +105,7 @@ impl HIRExpr {
         }
     }
 
-    pub fn expect_resolved(&self) -> &TypeInstanceId {
+    pub fn expect_resolved(&self) -> TypeInstanceId {
         let expr_type = self.get_expr_type();
         expr_type.expect_resolved()
     }
@@ -166,38 +146,28 @@ pub enum HIRTypeDef {
     Resolved(TypeInstanceId),
 }
 
-impl Into<HIRTypeDefState> for HIRTypeDef {
-    fn into(self) -> HIRTypeDefState {
-        HIRTypeDefState { typedef_state: self }
+impl From<HIRTypeDef> for HIRTypeDefState {
+    fn from(val: HIRTypeDef) -> Self {
+        HIRTypeDefState { typedef_state: val }
     }
 }
 
 impl HIRTypeDef {
-    pub fn expect_unresolved(&self) -> HIRType {
+  
+    pub fn get_type(&self) -> Option<TypeInstanceId> {
         match self {
-            HIRTypeDef::PendingInference => panic!("Function parameters must have a type"),
-            HIRTypeDef::Unresolved(e) => e.clone(),
-            HIRTypeDef::Resolved(_) => {
-                panic!("Cannot deal with resolved types at this point, this is a bug")
-            }
+            HIRTypeDef::PendingInference | HIRTypeDef::Unresolved(_) => None,
+            HIRTypeDef::Resolved(r) => Some(*r),
         }
     }
 
-    pub fn get_type(&self) -> Option<&TypeInstanceId> {
-        match self {
-            HIRTypeDef::PendingInference => None,
-            HIRTypeDef::Unresolved(_) => None,
-            HIRTypeDef::Resolved(r) => Some(r),
-        }
-    }
-
-    pub fn expect_resolved(&self) -> &TypeInstanceId {
+    pub fn expect_resolved(&self) -> TypeInstanceId {
         match self {
             HIRTypeDef::PendingInference => panic!("Expected resolved type, but is Pending"),
             HIRTypeDef::Unresolved(e) => {
                 panic!("Expected resolved type, but is Unresolved {:?}", e)
             }
-            HIRTypeDef::Resolved(r) => r,
+            HIRTypeDef::Resolved(r) => *r,
         }
     }
 }
@@ -296,15 +266,15 @@ pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr {
         ),
         Expr::FunctionCall(fun_expr, args) => match &**fun_expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
-                expr_to_hir_expr(&var).into(),
-                args.iter().map(|x| expr_to_hir_expr(x)).collect(),
+                expr_to_hir_expr(var).into(),
+                args.iter().map(expr_to_hir_expr).collect(),
                 HIRTypeDefState::pending(),
                 expr.clone().into(),
             ),
             Expr::MemberAccess(obj, var_name) => HIRExpr::MethodCall(
-                expr_to_hir_expr(&obj).into(),
+                expr_to_hir_expr(obj).into(),
                 var_name.clone(),
-                args.iter().map(|x| expr_to_hir_expr(x)).collect(),
+                args.iter().map(expr_to_hir_expr).collect(),
                 HIRTypeDefState::pending(),
                 expr.clone().into(),
             ),
@@ -389,7 +359,7 @@ pub fn ast_to_hir(ast: &AST, accum: &mut Vec<HIR>) {
                 meta_expr: Some(expression.clone()),
             };
 
-            accum.push(decl_hir)
+            accum.push(decl_hir);
         }
         AST::DeclareFunction {
             function_name,
@@ -425,7 +395,7 @@ pub fn ast_to_hir(ast: &AST, accum: &mut Vec<HIR>) {
                 struct_name: struct_name.clone(),
                 body: fields.collect(),
                 meta: Some(ast.clone()),
-            })
+            });
         }
         AST::StandaloneExpr(expr) => {
             let Expr::FunctionCall(_, _) = expr else {
@@ -443,7 +413,7 @@ pub fn ast_to_hir(ast: &AST, accum: &mut Vec<HIR>) {
                 function: *function.clone(),
                 args: typed_args,
                 meta: Some(ast.clone()),
-            })
+            });
         }
         AST::IfStatement {
             true_branch,
@@ -623,7 +593,7 @@ mod tests {
 
     use crate::semantic::hir;
     use crate::semantic::hir_printer::print_hir;
-    use crate::types::type_constructor_db::TypeConstructorDatabase;
+    
     use crate::types::type_instance_db::TypeInstanceManager;
 
     //Parses a single expression
@@ -636,10 +606,6 @@ mod tests {
         let mut result = vec![];
         hir::ast_to_hir(&root, &mut result);
         result
-    }
-
-    fn get_db() -> TypeConstructorDatabase {
-        TypeConstructorDatabase::new()
     }
 
     #[test]

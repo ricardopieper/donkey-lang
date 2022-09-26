@@ -521,8 +521,8 @@ impl DonkeyProgram {
         let instruction_layout = LayoutHelper::new();
         file.write_all(&(self.entry_point as u32).to_le_bytes())
             .unwrap();
-        for ins in self.instructions.iter() {
-            let encoded = instruction_layout.encode_instruction(&ins);
+        for ins in &self.instructions {
+            let encoded = instruction_layout.encode_instruction(ins);
             let bytes = encoded.to_le_bytes();
             file.write_all(&bytes).unwrap();
         }
@@ -697,7 +697,7 @@ pub fn as_donkey_vm_program(program: &AsmProgram) -> DonkeyProgram {
         .collect();
     
     let entry_point = *program.symbol_table.get("FUNC_main")
-        .or(program.symbol_table.get("main"))
+        .or_else(|| program.symbol_table.get("main"))
         .unwrap_or(&0_u32) as usize;
     
     DonkeyProgram { instructions, entry_point }

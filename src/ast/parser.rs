@@ -1973,7 +1973,7 @@ print(y)",
     }
 
     #[test]
-    fn function_call_without_parameters() {
+    fn function_call_without_args() {
         let tokens = tokenize("some_identifier()").unwrap();
         let result = parse(tokens);
         let expected = Expr::FunctionCall(
@@ -1997,7 +1997,7 @@ print(y)",
     }
 
     #[test]
-    fn function_call_with_many_params() {
+    fn function_call_with_many_args() {
         let tokens = tokenize("some_identifier(1, 2, 3)").unwrap();
         let result = parse(tokens);
         let expected = Expr::FunctionCall(
@@ -2044,7 +2044,7 @@ print(y)",
     }
 
     #[test]
-    fn function_call_with_nested_call_with_empty_params() {
+    fn function_call_with_nested_call_with_no_args() {
         let tokens = tokenize("some_identifier(nested())").unwrap();
         let result = parse(tokens);
         let expected = Expr::FunctionCall(
@@ -2058,7 +2058,7 @@ print(y)",
     }
 
     #[test]
-    fn function_call_with_nested_call_with_single_params() {
+    fn function_call_with_nested_call_with_single_arg() {
         let tokens = tokenize("some_identifier(nested(1))").unwrap();
         let result = parse(tokens);
         let expected = Expr::FunctionCall(
@@ -2072,7 +2072,7 @@ print(y)",
     }
 
     #[test]
-    fn function_call_with_nested_call_with_multiple_params() {
+    fn function_call_with_nested_call_with_multiple_args() {
         let tokens = tokenize("some_identifier(nested(1, 2))").unwrap();
         let result = parse(tokens);
         let expected = Expr::FunctionCall(
@@ -2153,7 +2153,7 @@ print(y)",
     }
 
     #[test]
-    fn multiply_fcall_multiparams() {
+    fn multiply_fcall_multiple_args() {
         let tokens = tokenize("some_identifier(1, 2) * 5").unwrap();
         let result = parse(tokens);
         let call = Expr::FunctionCall(
@@ -2180,7 +2180,7 @@ print(y)",
     }
 
     #[test]
-    fn multiply_fcall_multiparam_nested_last() {
+    fn multiply_fcall_multiple_args_nested_last() {
         let tokens = tokenize("some_identifier(1, nested()) * 5").unwrap();
         let result = parse(tokens);
         let call = Expr::FunctionCall(
@@ -2871,8 +2871,8 @@ struct Struct1:
     field1: i32
     field2: i64
 
-def my_function(arg1: i32, arg2: i32) -> i32:
-    return arg1 * arg2 / (arg2 - arg1)
+def my_function(param1: i32, param2: i32) -> i32:
+    return param1 * param2 / (param2 - param1)
 ",
         )
         .unwrap();
@@ -2891,20 +2891,20 @@ def my_function(arg1: i32, arg2: i32) -> i32:
                 AST::DeclareFunction {
                     function_name: "my_function".into(),
                     parameters: vec![
-                        TypeBoundName::simple("arg1", "i32"),
-                        TypeBoundName::simple("arg2", "i32")
+                        TypeBoundName::simple("param1", "i32"),
+                        TypeBoundName::simple("param2", "i32")
                     ],
                     body: vec![AST::Return(Some(Expr::BinaryOperation(
                         Box::new(Expr::BinaryOperation(
-                            Box::new(Expr::Variable("arg1".into())),
+                            Box::new(Expr::Variable("param1".into())),
                             Operator::Multiply,
-                            Box::new(Expr::Variable("arg2".into()))
+                            Box::new(Expr::Variable("param2".into()))
                         )),
                         Operator::Divide,
                         Box::new(Expr::BinaryOperation(
-                            Box::new(Expr::Variable("arg2".into())),
+                            Box::new(Expr::Variable("param2".into())),
                             Operator::Minus,
-                            Box::new(Expr::Variable("arg1".into()))
+                            Box::new(Expr::Variable("param1".into()))
                         ))
                     )))],
                     return_type: Some(ASTType::Simple("i32".into()))
@@ -3024,7 +3024,7 @@ struct SomeStruct:
     }
 
     #[test]
-    fn method_call_manyparam() {
+    fn method_call_manyargs() {
         let tokens = tokenize("method.call(1, 2)").unwrap();
         let result = parse_ast(tokens);
         let expected = vec![AST::StandaloneExpr(Expr::FunctionCall(
