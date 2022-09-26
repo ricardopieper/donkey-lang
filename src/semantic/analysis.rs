@@ -1,7 +1,8 @@
-use crate::semantic::hir::{HIR, ast_to_hir};
-use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars, type_checker};
-use crate::types::type_db::TypeDatabase;
-use crate::{ast::parser::{AST}, types::type_errors::TypeErrors};
+use crate::semantic::hir::{ast_to_hir, HIR};
+use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
+use crate::types::type_errors::TypeErrorPrinter;
+use crate::types::type_instance_db::TypeInstanceManager;
+use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 
 use super::name_registry::NameRegistry;
 
@@ -9,31 +10,40 @@ pub struct AnalysisResult {
     pub initial_mir: Vec<HIR>,
     pub after_make_declarations_mir: Vec<HIR>,
     pub final_mir: Vec<HIR>,
-    pub type_db: TypeDatabase,
+    pub type_db: TypeInstanceManager,
     pub globals: NameRegistry,
     pub type_errors: TypeErrors,
 }
 
 pub fn do_analysis(ast: &AST) -> AnalysisResult {
     let mut hir = vec![];
+    let mut errors = TypeErrors::new();
+    let mut type_db = TypeInstanceManager::new();
+
     ast_to_hir(ast, &mut hir);
 
     let initial_mir = hir.clone();
-    let type_db = TypeDatabase::new();
 
-    let mut globals = name_registry::build_name_registry(&type_db, &hir);
+    let mut globals = name_registry::build_name_registry_and_resolve_signatures(
+        &mut type_db,
+        &mut errors,
+        &mut hir,
+    );
 
     hir = first_assignments::transform_first_assignment_into_declaration(&hir);
     let after_make_declarations_mir = hir.clone();
-    undeclared_vars::detect_undeclared_vars_and_redeclarations(&globals, &hir);
-
-    println!("Before type inference:\n{}", crate::semantic::hir_printer::print_hir(&hir, &type_db));
-
-    let mut errors = TypeErrors::new();
-
-    hir = type_inference::infer_types(&mut globals, &type_db, &hir, &mut errors);
-
-    println!("After type inference:\n{}", crate::semantic::hir_printer::print_hir(&hir, &type_db));
+    if !undeclared_vars::detect_undeclared_vars_and_redeclarations(&globals, &hir, &mut errors) {
+        let printer = TypeErrorPrinter::new(&errors, &type_db);
+        println!("Type inference error\n{printer}");
+    } else {
+        match type_inference::infer_types(&mut globals, &mut type_db, &hir, &mut errors) {
+            Ok(e) => hir = e,
+            Err(_) => {
+                let printer = TypeErrorPrinter::new(&errors, &type_db);
+                println!("Type inference error\n{printer}");
+            }
+        };
+    }
 
     AnalysisResult {
         initial_mir,
@@ -51,7 +61,10 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::{ast::{lexer::Operator, parser::Parser}, semantic::hir_printer};
+    use crate::{
+        ast::{lexer::Operator, parser::Parser},
+        semantic::hir_printer,
+    };
 
     use super::*;
 
@@ -71,7 +84,7 @@ mod tests {
         let analyzed = hir("
 def my_function():
     x = 1");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
 
         let expected = "
@@ -88,6 +101,7 @@ def my_function() -> i32:
     x: f64 = 1.0
     pow(x)");
 
+        assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", result);
 
@@ -105,7 +119,7 @@ def my_function() -> i32:
 def my_function() -> i32:
     x: f64 = sqrt(16.0)
 ");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", result);
 
@@ -121,7 +135,7 @@ def my_function() -> i32:
         let analyzed = hir("
 def my_function(arg1: i32, arg2: i32) -> i32:
     return arg1 * arg2 / (arg2 - arg1)");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
 
         let expected = "
@@ -136,7 +150,7 @@ def my_function(arg1: i32, arg2: i32) -> i32:
         let analyzed = hir("
 def main(args: array<str>):
     print(10)");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
 
         let expected = "
@@ -152,7 +166,7 @@ def main(args: array<str>) -> Void:
 def main(args: array<str>):
     my_var = 10
     print(my_var)");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
 
         let expected = "
@@ -169,7 +183,7 @@ def main(args: array<str>) -> Void:
 def main(args: array<str>):
     my_var = args[0]
     print(my_var)");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -186,7 +200,7 @@ def main(args: array<str>) -> Void:
 def my_function() -> i32:
     x =  1.3 + ((sqrt_f32(16.0 / 4.0 + 2.0 * 2.1) / 2.0) * 4.0) + (3.0 * pow_f32(2.0, 2.0))
 ");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", result);
 
@@ -207,7 +221,7 @@ def sum(x: i32, y: i32) -> i32:
 def main():
     my_var = sum(1, 2)
     print(my_var)");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -230,7 +244,7 @@ def id(x: array<str>) -> str:
 def main():
     my_var = id(1)
     print(my_var)");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -254,7 +268,7 @@ def main():
     my_func = id
     my_var = my_func(1)
     print(my_var)");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -275,7 +289,7 @@ def main():
     my_array = [1, 2, 3]
     my_array_length = my_array.length
     print(my_array_length)");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -294,7 +308,7 @@ def main(x: i32) -> i32:
     y = 0
     return x + y
 ");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -307,30 +321,24 @@ def main(x: i32) -> i32:
 
     #[test]
     fn self_decl_read() {
-        let result = std::panic::catch_unwind(|| {
-            hir("
+        let result = hir("
 def main(x: i32) -> i32:
     y = y + 1
 ");
-        });
-        let err = result.unwrap_err();
-        let as_str = err.downcast_ref::<String>().unwrap();
-        assert_eq!(as_str, "Variable y not found, function: main");
+        let err = &result.type_errors.variable_not_found[0];
+        assert_eq!(err.variable_name, "y");
     }
 
     #[test]
     fn self_decl_read_expr() {
-        let result = std::panic::catch_unwind(|| {
-            hir("
+        let result = hir("
 def main(x: i32) -> i32:
     a = 1
     b = 2
     y = (a + b * (x / y)) / 2
 ");
-        });
-        let err = result.unwrap_err();
-        let as_str = err.downcast_ref::<String>().unwrap();
-        assert_eq!(as_str, "Variable y not found, function: main");
+        let err = &result.type_errors.variable_not_found[0];
+        assert_eq!(err.variable_name, "y");
     }
 
     #[test]
@@ -342,7 +350,7 @@ def main(x: i32) -> i32:
     else:
         return 2
 ");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -367,7 +375,7 @@ def main(x: i32) -> i32:
         else:
             return x
 ");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -395,7 +403,7 @@ def main(x: i32) -> i32:
         else:
             return x
 ");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -424,7 +432,7 @@ def main() -> i32:
         y = 2 + x
         return x + y
 ");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -462,7 +470,7 @@ def main() -> i32:
         else:
             return 4 * y
 ");
-
+        assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", final_result);
         let expected = "
@@ -605,18 +613,7 @@ def my_function():
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
-        assert_eq!(analyzed.type_errors.unexpected_types.len(), 1);
-
-        assert_eq!(
-            analyzed.type_errors.unexpected_types[0]
-                .type_def
-                .as_string(&analyzed.type_db),
-            "fn (str) -> i32"
-        );
-        assert_eq!(
-            analyzed.type_errors.unexpected_types[0].on_function,
-            "my_function"
-        );
+        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].field_or_method, "as_i32");
     }
 
     #[test]
@@ -629,18 +626,7 @@ def my_function():
         let result = hir_printer::print_hir(&analyzed.final_mir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
-        assert_eq!(analyzed.type_errors.unexpected_types.len(), 1);
-
-        assert_eq!(
-            analyzed.type_errors.unexpected_types[0]
-                .type_def
-                .as_string(&analyzed.type_db),
-            "fn (str) -> i32"
-        );
-        assert_eq!(
-            analyzed.type_errors.unexpected_types[0].on_function,
-            "my_function"
-        );
+        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].field_or_method, "as_i32");
     }
 
     #[test]

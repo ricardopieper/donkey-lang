@@ -1,12 +1,12 @@
 use crate::semantic::hir_printer::{expr_str};
-use crate::types::type_db::TypeDatabase;
+use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::mir::MIRBlock;
 use super::mir::MIRBlockNode;
 use super::mir::MIRScope;
 use super::mir::MIRTopLevelNode;
 
-fn print_mir_block(block: &MIRBlock, _type_db: &TypeDatabase) -> String {
+fn print_mir_block(block: &MIRBlock) -> String {
     let mut buffer = String::new();
 
     buffer.push_str(&format!("    defblock {}:\n", block.index));
@@ -61,7 +61,7 @@ fn print_mir_block(block: &MIRBlock, _type_db: &TypeDatabase) -> String {
     buffer
 }
 
-fn print_mir_scope(scope: &MIRScope, type_db: &TypeDatabase) -> String {
+fn print_mir_scope(scope: &MIRScope, type_db: &TypeInstanceManager) -> String {
     let mut buffer = String::new();
 
     buffer.push_str(&format!("    defscope {}:\n", scope.index));
@@ -78,7 +78,7 @@ fn print_mir_scope(scope: &MIRScope, type_db: &TypeDatabase) -> String {
     buffer
 }
 
-fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeDatabase) -> String {
+fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> String {
     match node {
         MIRTopLevelNode::DeclareFunction {
             function_name,
@@ -104,7 +104,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeDatabase) -> String {
             }
 
             for n in body {
-                function.push_str(&print_mir_block(n, type_db));
+                function.push_str(&print_mir_block(n));
             }
 
             function
@@ -118,7 +118,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeDatabase) -> String {
     }
 }
 
-pub fn print_mir(mir: &[MIRTopLevelNode], type_db: &TypeDatabase) -> String {
+pub fn print_mir(mir: &[MIRTopLevelNode], type_db: &TypeInstanceManager) -> String {
     let mut buffer = String::new();
     for node in mir {
         buffer.push_str(&print_mir_str(node, type_db));

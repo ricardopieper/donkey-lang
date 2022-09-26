@@ -1,8 +1,13 @@
 use crate::ast::lexer;
 
 use crate::semantic::hir::{HIR, HIRExpr, HIRType, HIRTypeDef, TrivialHIRExpr};
-use crate::types::type_db::TypeDatabase;
+use crate::semantic::name_registry::TypeResolvedState;
+use crate::types::type_constructor_db::TypeConstructorDatabase;
+use crate::types::type_instance_db::TypeInstanceManager;
 use lexer::Operator;
+
+use super::hir::HIRTypeResolutionState;
+
 
 pub fn operator_str(op: lexer::Operator) -> String {
     match op {
@@ -21,17 +26,6 @@ pub fn operator_str(op: lexer::Operator) -> String {
     }
 }
 
-fn trivial_expr_str(expr: &TrivialHIRExpr) -> String {
-    match &expr {
-        TrivialHIRExpr::Variable(s) => s.clone(),
-        TrivialHIRExpr::FloatValue(f) => format!("{:?}", f.0),
-        TrivialHIRExpr::IntegerValue(i) => format!("{}", i),
-        TrivialHIRExpr::StringValue(s) => format!("\"{}\"", s),
-        TrivialHIRExpr::BooleanValue(true) => "True".to_string(),
-        TrivialHIRExpr::BooleanValue(false) => "False".to_string(),
-        TrivialHIRExpr::None => "None".into(),
-    }
-}
 
 pub fn expr_str(expr: &HIRExpr) -> String {
     match expr {
@@ -78,11 +72,27 @@ pub fn expr_str(expr: &HIRExpr) -> String {
     }
 }
 
-pub fn hir_type_str(typ: &HIRTypeDef, type_db: &TypeDatabase) -> String {
-    fn slice_types_str(types: &[HIRType], type_db: &TypeDatabase) -> String {
+
+fn trivial_expr_str(expr: &TrivialHIRExpr) -> String {
+    match &expr {
+        TrivialHIRExpr::Variable(s) => s.clone(),
+        TrivialHIRExpr::FloatValue(f) => format!("{:?}", f.0),
+        TrivialHIRExpr::IntegerValue(i) => format!("{}", i),
+        TrivialHIRExpr::StringValue(s) => format!("\"{}\"", s),
+        TrivialHIRExpr::BooleanValue(true) => "True".to_string(),
+        TrivialHIRExpr::BooleanValue(false) => "False".to_string(),
+        TrivialHIRExpr::None => "None".into(),
+    }
+}
+
+
+
+ 
+pub fn hir_type_def_str(typ: &HIRTypeDef, type_db: &TypeInstanceManager) -> String {
+    fn slice_types_str(types: &[HIRType], type_db: &TypeInstanceManager) -> String {
         types
             .iter()
-            .map(|x| hir_type_str(&HIRTypeDef::Unresolved(x.clone()), type_db))
+            .map(|x| hir_type_def_str(&HIRTypeDef::Unresolved(x.clone()), type_db))
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -96,14 +106,27 @@ pub fn hir_type_str(typ: &HIRTypeDef, type_db: &TypeDatabase) -> String {
         HIRTypeDef::Unresolved(HIRType::Function(args, return_type)) => format!(
             "UNRESOLVED ({}) -> {}",
             slice_types_str(args, type_db),
-            hir_type_str(&HIRTypeDef::Unresolved(*return_type.clone()), type_db)
+            hir_type_def_str(&HIRTypeDef::Unresolved(*return_type.clone()), type_db)
         ),
         HIRTypeDef::Resolved(instance) => instance.as_string(type_db),
     }
 }
 
+pub fn infer_state_type_str(typ: &HIRTypeResolutionState, type_db: &TypeInstanceManager) -> String {
+
+    match typ {
+        TypeResolvedState::Resolved(type_instance_id) => {
+            type_db.get_instance(*type_instance_id).name.clone()
+        },
+        TypeResolvedState::Unresolved(unresolved) => {
+            hir_type_def_str(&HIRTypeDef::Unresolved(unresolved.clone()), type_db)
+        }
+    }
+}
+
 #[allow(dead_code)]
-fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
+fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeInstanceManager) -> String {
+   
     match node {
         HIR::Assign {
             path, expression, ..
@@ -120,7 +143,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
                 "{}{} : {} = {}\n",
                 indent,
                 var,
-                hir_type_str(typename, type_db),
+                hir_type_def_str(&typename.typedef_state, type_db),
                 expr_str(expression)
             )
         }
@@ -138,7 +161,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
                         "{}{}: {}",
                         indent,
                         param.name,
-                        hir_type_str(&param.typename, type_db)
+                        infer_state_type_str(&param.typename, type_db)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -149,7 +172,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
                 indent,
                 function_name,
                 parameters,
-                hir_type_str(return_type, type_db)
+                infer_state_type_str(return_type, type_db)
             );
             let indent_block = format!("{}    ", indent);
             for n in body {
@@ -173,7 +196,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
                     "{}  {}: {}",
                     indent,
                     field.name,
-                    hir_type_str(&field.typename, type_db)
+                    infer_state_type_str(&field.typename, type_db)
                 ));
             }
 
@@ -210,8 +233,9 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeDatabase) -> String {
     }
 }
 
+
 #[allow(dead_code)]
-pub fn print_hir(mir: &[HIR], type_db: &TypeDatabase) -> String {
+pub fn print_hir(mir: &[HIR], type_db: &TypeInstanceManager) -> String {
     let mut buffer = String::new();
     for node in mir {
         buffer.push_str(&print_hir_str(node, "", type_db));

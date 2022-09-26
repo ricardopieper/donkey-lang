@@ -42,7 +42,7 @@ use tracy_client::frame_name;
 use tracy_client::Client;
 
 fn main() {
-    println!("{}", 11i32 / 2i32);
+    
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -144,7 +144,7 @@ fn compile(file_name: &str) -> DonkeyEmitter {
     let root = parser::AST::Root(ast);
     let result = crate::semantic::analysis::do_analysis(&root);
     print_hir(&result.final_mir, &result.type_db);
-    let mir = hir_to_mir(&result.final_mir, &result.type_db);
+    let mir = hir_to_mir(&result.final_mir);
     println!("{}", mir_printer::print_mir(&mir, &result.type_db));
     let errors = check_type(&mir, &result.type_db, &result.globals);
     if errors.count() > 0 {

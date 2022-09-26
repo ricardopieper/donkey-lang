@@ -1,9 +1,8 @@
 use super::hir::{HIRAstMetadata, HIRExpr, HIRExprMetadata, TrivialHIRExpr};
 use crate::ast::parser::AST;
-use crate::types::type_db::TypeDatabase;
-use crate::types::type_db::TypeInstance;
 use crate::types::type_errors::IfStatementNotBoolean;
 use crate::types::type_errors::{AssignContext, CallToNonCallableType, FunctionCallArgumentCountMismatch, FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch};
+use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
@@ -13,7 +12,7 @@ fn find_variable_and_get_type<'block, 'scope>(
     current_block: &'block MIRBlock,
     scopes: &'scope [MIRScope],
     names: &'scope NameRegistry,
-) -> &'scope TypeInstance {
+) -> &'scope TypeInstanceId {
     let mut current_scope = &scopes[current_block.scope.0];
 
     loop {
@@ -28,15 +27,14 @@ fn find_variable_and_get_type<'block, 'scope>(
     }
 
     //try find in the global scope
-    return names.get(name).unwrap().expect_resolved();
+    return names.get(name).unwrap();
 }
 
 fn check_function_arguments(
     on_function: &str,
     function_called: &FunctionName,
-    function_parameters: &[TypeInstance],
-    arguments_passed: &[TypeInstance],
-    _type_db: &TypeDatabase,
+    function_parameters: &[TypeInstanceId],
+    arguments_passed: &[TypeInstanceId],
     type_errors: &mut TypeErrors,
 ) {
     if function_parameters.len() != arguments_passed.len() {
@@ -71,14 +69,14 @@ fn check_function_arguments(
 fn all_paths_return_values_of_correct_type(
     function_name: &str,
     body: &[MIRBlock],
-    return_type: &TypeInstance,
-    type_db: &TypeDatabase,
+    return_type: &TypeInstanceId,
+    type_db: &TypeInstanceManager,
     errors: &mut TypeErrors,
 ) {
     for body_node in body {
         if let MIRBlockFinal::Return(return_expr, ..) = &body_node.finish {
             let expr_type = return_expr.get_expr_type().expect_resolved();
-            if !return_type.is_compatible(return_expr.get_expr_type().expect_resolved(), type_db) {
+            if return_type != return_expr.get_expr_type().expect_resolved() {
                 errors.return_type_mismatches.push(TypeMismatch {
                     context: ReturnTypeContext(),
                     on_function: function_name.to_string(),
@@ -88,12 +86,12 @@ fn all_paths_return_values_of_correct_type(
             }
         }
         if let MIRBlockFinal::EmptyReturn = &body_node.finish {
-            if return_type != &type_db.special_types.void {
+            if return_type != &type_db.common_types.void {
                 errors.return_type_mismatches.push(TypeMismatch {
                     context: ReturnTypeContext(),
                     on_function: function_name.to_string(),
                     expected: return_type.clone(),
-                    actual: type_db.special_types.void.clone(),
+                    actual: type_db.common_types.void.clone(),
                 });
             }
         }
@@ -105,7 +103,6 @@ fn all_assignments_correct_type(
     body: &[MIRBlock],
     scopes: &[MIRScope],
     names: &NameRegistry,
-    _type_db: &TypeDatabase,
     type_errors: &mut TypeErrors,
 ) {
     for body_node in body {
@@ -143,14 +140,14 @@ fn all_assignments_correct_type(
 fn if_statement_exprs_read_from_bool_variable(
     function_name: &str,
     body: &[MIRBlock],
-    type_db: &TypeDatabase,
+    type_db: &TypeInstanceManager,
     type_errors: &mut TypeErrors,
 ) {
     for body_node in body {
         match &body_node.finish {
             MIRBlockFinal::If(expr, _, _, _) => {
                 let expr_type = expr.expect_resolved();
-                if expr_type != &type_db.special_types.bool {
+                if expr_type != &type_db.common_types.bool {
                     type_errors.if_statement_unexpected_type.push(IfStatementNotBoolean {
                         on_function: function_name.to_string(),
                         actual_type: expr_type.clone()
@@ -178,7 +175,6 @@ fn get_actual_function_name_with_details(
     meta_ast: &HIRAstMetadata,
     meta_expr: &HIRExprMetadata,
 ) -> FunctionName {
-    println!("GET FUNC NAME: {function_name}, {meta_expr:#?}");
     if meta_ast.is_none() && meta_expr.is_none() {
         return FunctionName::Function(function_name.to_string());
     }
@@ -212,7 +208,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
     scopes: &[MIRScope],
     names: &NameRegistry,
     function_name: &str,
-    type_db: &TypeDatabase,
+    type_db: &TypeInstanceManager,
     type_errors: &mut TypeErrors,
 ) {
     //
@@ -231,21 +227,20 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     let HIRExpr::FunctionCall(call_expr, args, return_type, expr_metadata) = expression else {
                         continue; //other cases handled elsewhere
                     };
-                    
-                    //if it is a function call, check that the arguments match (return type and arguments passed)
-                    let TypeInstance::Function(func_args_types, func_return_type) = call_expr.expect_resolved() else {
+
+                    let type_id =  call_expr.expect_resolved();
+                    let type_data = type_db.get_instance(*type_id);
+                    if !type_data.is_function {
                         type_errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
                             actual_type: call_expr.expect_resolved().clone()
                         });
                         continue;
-                    };
-                    
+                    }
+                  
                     let HIRExpr::Trivial(TrivialHIRExpr::Variable(called_function), ..) = &**call_expr else {
                         panic!("Cannot call function that is not named: anonymous functions not supported yet")
                     };
-
-                    assert!(!(return_type.expect_resolved() != func_return_type.as_ref()), "Return type of function is {func_return_type:#?} but expression return type is {return_type:#?}. This should not happen. This is a type inference bug, and something is inconsistent!");
 
                     let passed_types = args
                         .iter()
@@ -259,9 +254,8 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     check_function_arguments(
                         function_name,
                         &actual_function_name,
-                        func_args_types,
+                        &type_data.function_args,
                         &passed_types,
-                        type_db,
                         type_errors,
                     );
                 }
@@ -271,51 +265,114 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     meta_ast,
                 } => {
                     let function_type = find_variable_and_get_type(function, body_node, scopes, names);
-                    match function_type {
-                        TypeInstance::Function(argument_types, _) => {
-                            let passed = args
-                                .iter()
-                                .map(|x| x.expect_resolved().clone())
-                                .collect::<Vec<_>>();
-                            let actual_function_name =
-                                get_actual_function_name_with_details(function, meta_ast, &None);
-                            check_function_arguments(
-                                function_name,
-                                &actual_function_name,
-                                argument_types,
-                                &passed,
-                                type_db,
-                                type_errors,
-                            );
-                        }
-                        _ => {
-                            type_errors.call_non_callable.push(CallToNonCallableType {
-                                on_function: function_name.to_string(),
-                                actual_type: function_type.clone(),
-                            });
-                        }
+                    let type_data = type_db.get_instance(*function_type);
+                   
+                    if !type_data.is_function {
+                        type_errors.call_non_callable.push(CallToNonCallableType {
+                            on_function: function_name.to_string(),
+                            actual_type: function_type.clone(),
+                        });
+                        continue;
                     }
+                    
+                    let passed = args
+                        .iter()
+                        .map(|x| x.expect_resolved().clone())
+                        .collect::<Vec<_>>();
+
+                    let actual_function_name =
+                        get_actual_function_name_with_details(function, meta_ast, &None);
+                        
+                    check_function_arguments(
+                        function_name,
+                        &actual_function_name,
+                        &type_data.function_args,
+                        &passed,
+                        type_errors
+                    )
                 }
             }
         }
     }
 }
 
+fn methods_receive_parameters_of_correct_type(
+    body: &[MIRBlock],
+    function_name: &str,
+    type_db: &TypeInstanceManager,
+    type_errors: &mut TypeErrors,
+) {
+    //
+    for body_node in body {
+        for block_node in &body_node.block {
+            match block_node {
+                MIRBlockNode::Assign {
+                    path,
+                    expression,
+                    meta_ast,
+                    meta_expr: _,
+                } => {
+                    assert!(path.len() <= 1, "Assign to path len > 2 not supported in type checker yet!");
+
+                    //on assigns, we need to check if's a function call.
+                    let HIRExpr::MethodCall(object_expr, method, args, return_type, expr_metadata) = expression else {
+                        continue; //other cases handled elsewhere
+                    };
+
+                    let object_expr_type = object_expr.expect_resolved(); 
+                    let object_type_data = type_db.get_instance(*object_expr_type);
+
+                    let method = object_type_data.methods.iter().find(|m| &m.name == method).unwrap();
+
+                    let method_function_type_data = type_db.get_instance(method.function_type);
+
+                    let passed_types = args
+                        .iter()
+                        .map(|x| x.expect_resolved().clone())
+                        .collect::<Vec<_>>();
+
+                    let actual_function_name = get_actual_function_name_with_details(
+                        &method_function_type_data.name,
+                        meta_ast,
+                        expr_metadata,
+                    );
+
+                    check_function_arguments(
+                        function_name,
+                        &actual_function_name,
+                        &method_function_type_data.function_args,
+                        &passed_types,
+                        type_errors,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+
 fn type_check_function(
     function_name: &str,
     body: &[MIRBlock],
     scopes: &[MIRScope],
-    return_type: &TypeInstance,
+    return_type: &TypeInstanceId,
     globals: &NameRegistry,
-    type_db: &TypeDatabase,
+    type_db: &TypeInstanceManager,
     type_errors: &mut TypeErrors,
 ) {
     all_paths_return_values_of_correct_type(function_name, body, return_type, type_db, type_errors);
-    all_assignments_correct_type(function_name, body, scopes, globals, type_db, type_errors);
+    all_assignments_correct_type(function_name, body, scopes, globals, type_errors);
     function_calls_are_actually_callable_and_parameters_are_correct_type(
         body,
         scopes,
         globals,
+        function_name,
+        type_db,
+        type_errors,
+    );
+    methods_receive_parameters_of_correct_type(
+        body,
         function_name,
         type_db,
         type_errors,
@@ -326,7 +383,7 @@ fn type_check_function(
 
 pub fn check_type(
     top_nodes: &[MIRTopLevelNode],
-    type_db: &TypeDatabase,
+    type_db: &TypeInstanceManager,
     names: &NameRegistry,
 ) -> TypeErrors {
     let mut type_errors = TypeErrors::new();
@@ -370,7 +427,7 @@ mod tests {
 
     pub struct TestContext {
         mir: Vec<MIRTopLevelNode>,
-        database: TypeDatabase,
+        database: TypeInstanceManager,
         globals: NameRegistry,
     }
 
@@ -382,9 +439,8 @@ mod tests {
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast());
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
-        let mir = hir_to_mir(&analysis_result.final_mir, &analysis_result.type_db);
+        let mir = hir_to_mir(&analysis_result.final_mir);
 
-        println!("{:#?}", &mir);
         println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
 
         TestContext {
@@ -395,13 +451,14 @@ mod tests {
     }
 
     //Parses a single expression
-    fn run_test(ctx: &TestContext) -> (TypeErrors, &TypeDatabase) {
+    fn run_test(ctx: &TestContext) -> (TypeErrors, &TypeInstanceManager) {
         let errors = check_type(&ctx.mir, &ctx.database, &ctx.globals);
         if errors.count() > 0 {
             println!("{}", TypeErrorPrinter::new(&errors, &ctx.database));
         } else {
             println!("No errors found!");
         }
+       
         (errors, &ctx.database)
     }
 
@@ -433,11 +490,11 @@ def main():
         assert_eq!(1, err.return_type_mismatches.len());
         assert_eq!(
             err.return_type_mismatches[0].expected,
-            db.special_types.void
+            db.common_types.void
         );
         assert_eq!(
             err.return_type_mismatches[0].actual,
-            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+            db.common_types.i32
         );
     }
 
@@ -464,10 +521,10 @@ def main() -> i32:
         let (err, db) = run_test(&ctx);
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
-        assert_eq!(err.return_type_mismatches[0].actual, db.special_types.void);
+        assert_eq!(err.return_type_mismatches[0].actual, db.common_types.void);
         assert_eq!(
             err.return_type_mismatches[0].expected,
-            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+            db.common_types.i32
         );
     }
 
@@ -485,11 +542,11 @@ def main():
         assert_eq!(1, err.assign_mismatches.len());
         assert_eq!(
             err.assign_mismatches[0].actual,
-            TypeInstance::Simple(db.expect_find_by_name("str").id)
+            db.common_types.string
         );
         assert_eq!(
             err.assign_mismatches[0].expected,
-            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+            db.common_types.i32
         );
     }
 
@@ -526,11 +583,11 @@ def main():
         assert_eq!(1, err.assign_mismatches.len());
         assert_eq!(
             err.assign_mismatches[0].actual,
-            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+            db.common_types.i32
         );
         assert_eq!(
             err.assign_mismatches[0].expected,
-            TypeInstance::Simple(db.expect_find_by_name("f32").id)
+            db.common_types.f32
         );
     }
 
@@ -552,11 +609,11 @@ def main():
         assert_eq!(1, err.assign_mismatches.len());
         assert_eq!(
             err.assign_mismatches[0].actual,
-            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+            db.common_types.i32
         );
         assert_eq!(
             err.assign_mismatches[0].expected,
-            TypeInstance::Simple(db.expect_find_by_name("f32").id)
+            db.common_types.f32
         );
     }
 
@@ -630,11 +687,11 @@ def main():
         assert_eq!(1, err.function_call_mismatches.len());
         assert_eq!(
             err.function_call_mismatches[0].actual,
-            TypeInstance::Simple(db.expect_find_by_name("str").id)
+            db.common_types.string
         );
         assert_eq!(
             err.function_call_mismatches[0].expected,
-            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+            db.common_types.i32
         );
     }
 
@@ -658,20 +715,20 @@ def main():
         assert_eq!(2, err.function_call_mismatches.len());
         assert_eq!(
             err.function_call_mismatches[0].actual,
-            TypeInstance::Simple(db.expect_find_by_name("str").id)
+            db.common_types.string
         );
         assert_eq!(
             err.function_call_mismatches[0].expected,
-            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+            db.common_types.i32
         );
 
         assert_eq!(
             err.function_call_mismatches[1].actual,
-            TypeInstance::Simple(db.expect_find_by_name("i32").id)
+            db.common_types.i32
         );
         assert_eq!(
             err.function_call_mismatches[1].expected,
-            TypeInstance::Simple(db.expect_find_by_name("f32").id)
+            db.common_types.f32
         );
     }
 
@@ -714,6 +771,7 @@ def main(args: array<str>):
     i : str = args[\"lol\"]
 ",
         );
+       
         let (err, db) = run_test(&ctx);
         let printer = TypeErrorPrinter::new(&err, db);
         let error_msg = format!("{}", printer);
