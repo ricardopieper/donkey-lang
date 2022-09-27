@@ -1,13 +1,12 @@
 use crate::ast::lexer;
 
-use crate::semantic::hir::{HIR, HIRExpr, HIRType, HIRTypeDef, TrivialHIRExpr};
-use crate::semantic::name_registry::TypeResolvedState;
+use crate::semantic::hir::{HIR, HIRExpr, TrivialHIRExpr};
 
 use crate::types::type_instance_db::TypeInstanceManager;
 use lexer::Operator;
 
-use super::hir::HIRTypeResolutionState;
-
+use super::hir::HIRRoot;
+use super::type_name_printer::TypeNamePrinter;
 
 pub fn operator_str(op: lexer::Operator) -> String {
     match op {
@@ -27,7 +26,7 @@ pub fn operator_str(op: lexer::Operator) -> String {
 }
 
 
-pub fn expr_str(expr: &HIRExpr) -> String {
+pub fn expr_str<TExprType>(expr: &HIRExpr<TExprType>) -> String {
     match expr {
         HIRExpr::Trivial(trivial, ..) => trivial_expr_str(trivial),
         HIRExpr::FunctionCall(f, args, ..) => {
@@ -85,42 +84,8 @@ fn trivial_expr_str(expr: &TrivialHIRExpr) -> String {
     }
 }
 
-
-
- 
-pub fn hir_type_def_str(typ: &HIRTypeDef, type_db: &TypeInstanceManager) -> String {
-    fn slice_types_str(types: &[HIRType], type_db: &TypeInstanceManager) -> String {
-        types
-            .iter()
-            .map(|x| hir_type_def_str(&HIRTypeDef::Unresolved(x.clone()), type_db))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    match typ {
-        HIRTypeDef::PendingInference => "UNKNOWN_TYPE".into(),
-        HIRTypeDef::Unresolved(HIRType::Simple(s)) => format!("UNRESOLVED! {}", s.clone()),
-        HIRTypeDef::Unresolved(HIRType::Generic(s, g)) => {
-            format!("UNRESOLVED {}<{}>", s, slice_types_str(g, type_db))
-        }
-        HIRTypeDef::Resolved(instance) => instance.as_string(type_db),
-    }
-}
-
-pub fn infer_state_type_str(typ: &HIRTypeResolutionState, type_db: &TypeInstanceManager) -> String {
-
-    match typ {
-        TypeResolvedState::Resolved(type_instance_id) => {
-            type_db.get_instance(*type_instance_id).name.clone()
-        },
-        TypeResolvedState::Unresolved(unresolved) => {
-            hir_type_def_str(&HIRTypeDef::Unresolved(unresolved.clone()), type_db)
-        }
-    }
-}
-
 #[allow(dead_code)]
-fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeInstanceManager) -> String {
+fn print_hir_body_str(node: &HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>, indent: &str, type_db: &TypeInstanceManager) -> String {
    
     match node {
         HIR::Assign {
@@ -138,42 +103,9 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeInstanceManager) -> Str
                 "{}{} : {} = {}\n",
                 indent,
                 var,
-                hir_type_def_str(&typename, type_db),
+                typename.print_name(type_db),
                 expr_str(expression)
             )
-        }
-        HIR::DeclareFunction {
-            function_name,
-            parameters,
-            body,
-            return_type,
-            ..
-        } => {
-            let parameters = parameters
-                .iter()
-                .map(|param| {
-                    format!(
-                        "{}{}: {}",
-                        indent,
-                        param.name,
-                        infer_state_type_str(&param.typename, type_db)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let mut function = format!(
-                "{}def {}({}) -> {}:\n",
-                indent,
-                function_name,
-                parameters,
-                infer_state_type_str(return_type, type_db)
-            );
-            let indent_block = format!("{}    ", indent);
-            for n in body {
-                function.push_str(&print_hir_str(n, &indent_block, type_db));
-            }
-            function
         }
         HIR::Return(expr, ..) => {
             format!("{}return {}\n", indent, expr_str(expr))
@@ -181,22 +113,7 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeInstanceManager) -> Str
         HIR::EmptyReturn => {
             format!("{}return\n", indent)
         }
-        HIR::StructDeclaration {
-            struct_name, body, ..
-        } => {
-            let mut structdecl = format!("{}struct {}:\n", indent, struct_name);
-
-            for field in body {
-                structdecl.push_str(&format!(
-                    "{}  {}: {}",
-                    indent,
-                    field.name,
-                    infer_state_type_str(&field.typename, type_db)
-                ));
-            }
-
-            structdecl
-        }
+       
         HIR::FunctionCall { function, args, .. } => {
             let args_str = args
                 .iter()
@@ -211,12 +128,12 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeInstanceManager) -> Str
             let mut ifdecl = format!("{}if {}:\n", indent, condition_str);
             let indent_block = format!("{}    ", indent);
             for statement in true_body {
-                let statement_str = print_hir_str(statement, &indent_block, type_db);
+                let statement_str = print_hir_body_str(statement, &indent_block, type_db);
                 ifdecl.push_str(&statement_str);
             }
             ifdecl.push_str(&format!("{}else:\n", indent));
             for statement in false_body {
-                let statement_str = print_hir_str(statement, &indent_block, type_db);
+                let statement_str = print_hir_body_str(statement, &indent_block, type_db);
                 ifdecl.push_str(&statement_str);
             }
 
@@ -228,9 +145,63 @@ fn print_hir_str(node: &HIR, indent: &str, type_db: &TypeInstanceManager) -> Str
     }
 }
 
+fn print_hir_str(node: &HIRRoot<impl TypeNamePrinter, HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>>, indent: &str, type_db: &TypeInstanceManager) -> String {
+    match node {
+        HIRRoot::DeclareFunction {
+            function_name,
+            parameters,
+            body,
+            return_type,
+            ..
+        } => {
+            let parameters = parameters
+                .iter()
+                .map(|param| {
+                    format!(
+                        "{}{}: {}",
+                        indent,
+                        param.name,
+                        param.typename.print_name(type_db)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let mut function = format!(
+                "{}def {}({}) -> {}:\n",
+                indent,
+                function_name,
+                parameters,
+                return_type.print_name(type_db)
+            );
+            let indent_block = format!("{}    ", indent);
+            for n in body {
+                function.push_str(&print_hir_body_str(n, &indent_block, type_db));
+            }
+            function
+        },
+        HIRRoot::StructDeclaration {
+            struct_name, body, ..
+        } => {
+            let mut structdecl = format!("{}struct {}:\n", indent, struct_name);
+
+            for field in body {
+                structdecl.push_str(&format!(
+                    "{}  {}: {}",
+                    indent,
+                    field.name,
+                    field.typename.print_name(type_db)
+                ));
+            }
+
+            structdecl
+        }
+    }
+
+}
 
 #[allow(dead_code)]
-pub fn print_hir(mir: &[HIR], type_db: &TypeInstanceManager) -> String {
+pub fn print_hir(mir: &[HIRRoot<impl TypeNamePrinter, HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>>], type_db: &TypeInstanceManager) -> String {
     let mut buffer = String::new();
     for node in mir {
         buffer.push_str(&print_hir_str(node, "", type_db));

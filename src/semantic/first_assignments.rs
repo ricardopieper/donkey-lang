@@ -1,14 +1,14 @@
-use crate::semantic::hir::{HIR, HIRTypedBoundName};
+use crate::{semantic::hir::{HIR, HIRTypedBoundName}, types::type_instance_db::TypeInstanceId};
 
 use std::collections::HashSet;
 
-use super::hir::HIRTypeDef;
+use super::hir::{StartingHIR, HIRRoot, GlobalsInferredMIR, GlobalsInferredMIRRoot, HIRType};
 
 fn make_first_assignments_in_body(
-    body: &[HIR],
+    body: &[StartingHIR],
     declarations_found: &mut HashSet<String>,
-) -> Vec<HIR> {
-    let mut new_mir = vec![];
+) -> Vec<StartingHIR> {
+    let mut new_mir: Vec<StartingHIR> = vec![];
     for node in body {
         let mir_node = match node {
             decl @ HIR::Declare { var, .. } => {
@@ -28,7 +28,7 @@ fn make_first_assignments_in_body(
                     declarations_found.insert(var.clone());
                     HIR::Declare {
                         var: var.clone(),
-                        typedef: HIRTypeDef::PendingInference,
+                        typedef: HIRType::NotInformed,
                         expression: expression.clone(),
                         meta_ast: meta_ast.clone(),
                         meta_expr: meta_expr.clone(),
@@ -59,9 +59,9 @@ fn make_first_assignments_in_body(
 }
 
 fn make_assignments_into_declarations_in_function(
-    parameters: &[HIRTypedBoundName],
-    body: &[HIR]
-) -> Vec<HIR> {
+    parameters: &[HIRTypedBoundName<TypeInstanceId>],
+    body: &[GlobalsInferredMIR]
+) -> Vec<GlobalsInferredMIR> {
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
 
@@ -79,12 +79,12 @@ fn make_assignments_into_declarations_in_function(
     make_first_assignments_in_body(body, &mut declarations_found)
 }
 
-pub fn transform_first_assignment_into_declaration(mir: &[HIR]) -> Vec<HIR> {
+pub fn transform_first_assignment_into_declaration(mir: &[GlobalsInferredMIRRoot]) -> Vec<GlobalsInferredMIRRoot> {
     let mut new_mir = vec![];
 
     for node in mir {
         let result = match node {
-            HIR::DeclareFunction {
+            HIRRoot::DeclareFunction {
                 function_name,
                 parameters,
                 body,
@@ -95,11 +95,11 @@ pub fn transform_first_assignment_into_declaration(mir: &[HIR]) -> Vec<HIR> {
                     parameters,
                     body
                 );
-                HIR::DeclareFunction {
+                HIRRoot::DeclareFunction {
                     function_name: function_name.clone(),
                     parameters: parameters.clone(),
                     body: new_body,
-                    return_type: return_type.clone(),
+                    return_type: *return_type,
                     meta: meta.clone(),
                 }
             }

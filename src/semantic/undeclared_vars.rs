@@ -5,13 +5,13 @@ use crate::{
 
 use std::collections::HashSet;
 
-use super::name_registry::NameRegistry;
+use super::{name_registry::NameRegistry, hir::{HIRRoot}, compiler_errors::CompilerError};
 
 //Returns true if everything is valid
-fn check_expr(
+fn check_expr<T>(
     declarations_found: &HashSet<String>,
     function_name: &str,
-    expr: &HIRExpr,
+    expr: &HIRExpr<T>,
     errors: &mut TypeErrors,
 ) -> bool {
     match expr {
@@ -62,10 +62,10 @@ fn check_expr(
     }
 }
 
-fn detect_decl_errors_in_body(
+fn detect_decl_errors_in_body<T, T1>(
     declarations_found: &mut HashSet<String>,
     function_name: &str,
-    body: &[HIR],
+    body: &[HIR<T, HIRExpr<T1>>],
     errors: &mut TypeErrors,
 ) -> bool {
     for node in body {
@@ -134,11 +134,11 @@ fn detect_decl_errors_in_body(
     true
 }
 
-fn detect_declaration_errors_in_function(
+fn detect_declaration_errors_in_function<T, T1, T2>(
     mut declarations_found: HashSet<String>,
     function_name: &str,
-    parameters: &[HIRTypedBoundName],
-    body: &[HIR],
+    parameters: &[HIRTypedBoundName<T>],
+    body: &[HIR<T1, HIRExpr<T2>>],
     errors: &mut TypeErrors,
 ) -> bool {
     for p in parameters {
@@ -148,11 +148,11 @@ fn detect_declaration_errors_in_function(
     detect_decl_errors_in_body(&mut declarations_found, function_name, body, errors)
 }
 
-pub fn detect_undeclared_vars_and_redeclarations(
+pub fn detect_undeclared_vars_and_redeclarations<T, T1, T2>(
     globals: &NameRegistry,
-    mir: &[HIR],
+    mir: &[HIRRoot<T, HIR<T1, HIRExpr<T2>>>],
     errors: &mut TypeErrors,
-) -> bool {
+) -> Result<(), CompilerError> {
     let mut declarations_found = HashSet::<String>::new();
 
     for name in globals.get_names() {
@@ -161,14 +161,14 @@ pub fn detect_undeclared_vars_and_redeclarations(
 
     //first collect all globals
     for node in mir.iter() {
-        if let HIR::DeclareFunction { function_name, .. } = node {
+        if let HIRRoot::DeclareFunction { function_name, .. } = node {
             declarations_found.insert(function_name.clone());
         };
     }
 
     //then check functions
     for node in mir.iter() {
-        if let HIR::DeclareFunction {
+        if let HIRRoot::DeclareFunction {
             function_name,
             parameters,
             body,
@@ -182,9 +182,9 @@ pub fn detect_undeclared_vars_and_redeclarations(
                 body,
                 errors,
             ) {
-                return false
+                return Err(CompilerError::TypeInferenceError)
             }
         };
     }
-    true
+    Ok(())
 }

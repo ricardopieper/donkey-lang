@@ -75,8 +75,8 @@ fn all_paths_return_values_of_correct_type(
 ) {
     for body_node in body {
         if let MIRBlockFinal::Return(return_expr, ..) = &body_node.finish {
-            let expr_type = return_expr.get_expr_type().expect_resolved();
-            if return_type != return_expr.get_expr_type().expect_resolved() {
+            let expr_type = return_expr.get_type();
+            if return_type != return_expr.get_type() {
                 errors.return_type_mismatches.push(TypeMismatch {
                     context: ReturnTypeContext(),
                     on_function: function_name.to_string(),
@@ -114,7 +114,7 @@ fn all_assignments_correct_type(
                     let var = path.first().unwrap();
                     //find variable
                     let variable_type = find_variable_and_get_type(var, body_node, scopes, names);
-                    let expr_type = expression.get_expr_type().expect_resolved();
+                    let expr_type = expression.get_type();
 
                     if variable_type != expr_type {
                         type_errors.assign_mismatches.push(TypeMismatch {
@@ -145,7 +145,7 @@ fn if_statement_exprs_read_from_bool_variable(
 ) {
     for body_node in body {
         if let MIRBlockFinal::If(expr, _, _, _) = &body_node.finish {
-            let expr_type = expr.expect_resolved();
+            let expr_type = expr.get_type();
             if expr_type != type_db.common_types.bool {
                 type_errors.if_statement_unexpected_type.push(IfStatementNotBoolean {
                     on_function: function_name.to_string(),
@@ -225,12 +225,12 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         continue; //other cases handled elsewhere
                     };
 
-                    let type_id =  call_expr.expect_resolved();
+                    let type_id =  call_expr.get_type();
                     let type_data = type_db.get_instance(type_id);
                     if !type_data.is_function {
                         type_errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
-                            actual_type: call_expr.expect_resolved()
+                            actual_type: call_expr.get_type()
                         });
                         continue;
                     }
@@ -241,7 +241,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
 
                     let passed_types = args
                         .iter()
-                        .map(crate::semantic::hir::HIRExpr::expect_resolved)
+                        .map(HIRExpr::<TypeInstanceId>::get_type)
                         .collect::<Vec<_>>();
                     let actual_function_name = get_actual_function_name_with_details(
                         called_function,
@@ -274,7 +274,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     
                     let passed = args
                         .iter()
-                        .map(crate::semantic::hir::HIRExpr::expect_resolved)
+                        .map(HIRExpr::<TypeInstanceId>::get_type)
                         .collect::<Vec<_>>();
 
                     let actual_function_name =
@@ -315,7 +315,7 @@ fn methods_receive_parameters_of_correct_type(
                     continue; //other cases handled elsewhere
                 };
 
-                let object_expr_type = object_expr.expect_resolved(); 
+                let object_expr_type = object_expr.get_type(); 
                 let object_type_data = type_db.get_instance(object_expr_type);
 
                 let method = object_type_data.methods.iter().find(|m| &m.name == method).unwrap();
@@ -324,7 +324,7 @@ fn methods_receive_parameters_of_correct_type(
 
                 let passed_types = args
                     .iter()
-                    .map(crate::semantic::hir::HIRExpr::expect_resolved)
+                    .map(HIRExpr::<TypeInstanceId>::get_type)
                     .collect::<Vec<_>>();
 
                 let actual_function_name = get_actual_function_name_with_details(
@@ -433,7 +433,7 @@ mod tests {
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast());
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
-        let mir = hir_to_mir(&analysis_result.final_mir);
+        let mir = hir_to_mir(&analysis_result.final_hir);
 
         println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
 

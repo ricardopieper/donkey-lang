@@ -22,6 +22,7 @@ impl TypeInstanceId {
     pub fn size(self, type_db: &TypeInstanceManager) -> usize {
         type_db.get_instance(self).size
     }
+
 }
 
 impl Default for TypeInstanceId {

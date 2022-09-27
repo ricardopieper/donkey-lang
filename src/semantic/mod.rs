@@ -9,3 +9,5 @@ pub mod type_checker;
 pub mod type_inference;
 pub mod undeclared_vars;
 pub mod hir_type_resolution;
+pub mod compiler_errors;
+pub mod type_name_printer;
