@@ -273,7 +273,7 @@ struct ExprGenerated {
     offset_from_bp: u32,
 }
 
-fn generate_function_jump_lbl(expr: &HIRExpr) -> String {
+fn generate_function_jump_lbl(expr: &HIRExpr<TypeInstanceId>) -> String {
     match &expr {
         HIRExpr::Trivial(TrivialHIRExpr::Variable(var_name),..) => format!("FUNC_{}", var_name),
         _ => {
@@ -287,14 +287,14 @@ fn generate_function_jump_lbl(expr: &HIRExpr) -> String {
 
 fn generate_expr(
     type_db: &TypeInstanceManager,
-    expression: &HIRExpr,
+    expression: &HIRExpr<TypeInstanceId>,
     bytecode: &mut DonkeyEmitter,
     scope: &HashMap<String, ByteRange>,
     offset_from_bp: u32,
 ) -> ExprGenerated {
     match expression {
         HIRExpr::Trivial(trivial_expr, typedef, ..) => {
-            let pushed_size = generate_trivial_expr(type_db, trivial_expr, typedef.typedef_state.expect_resolved(), bytecode, scope);
+            let pushed_size = generate_trivial_expr(type_db, trivial_expr, *typedef, bytecode, scope);
             ExprGenerated {
                 pushed_size,
                 offset_from_bp: offset_from_bp + pushed_size,
@@ -314,7 +314,7 @@ fn generate_expr(
             "Tried to compile this: {expression:#?} but is not arithmetic, bitwise or compare op"
         ),
         HIRExpr::FunctionCall(function_expr, args, return_type, ..) => {
-            generate_function_call_code(type_db, return_type.typedef_state.expect_resolved(), offset_from_bp, bytecode, args, scope, function_expr)
+            generate_function_call_code(type_db, *return_type, offset_from_bp, bytecode, args, scope, function_expr)
         }
         HIRExpr::UnaryExpression(_, _, _, _) => todo!("unary expression not implemented"),
         HIRExpr::MemberAccess(_, _, _, _) => todo!("member access not implemented"),
@@ -327,9 +327,9 @@ fn generate_function_call_code(type_db: &TypeInstanceManager,
     return_type: TypeInstanceId, 
     offset_from_bp: u32,
     bytecode: &mut DonkeyEmitter,
-    args: &[HIRExpr], 
+    args: &[HIRExpr<TypeInstanceId>], 
     scope: &HashMap<String, ByteRange>, 
-    function_expr: &HIRExpr) -> ExprGenerated {
+    function_expr: &HIRExpr<TypeInstanceId>) -> ExprGenerated {
 
     let return_size = return_type.size(type_db);
     let mut offset_from_bp_arg = offset_from_bp + return_size as u32;
@@ -425,11 +425,11 @@ fn generate_function_call_code(type_db: &TypeInstanceManager,
     }
 }
 
-fn generate_compare_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
+fn generate_compare_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr<TypeInstanceId>, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr<TypeInstanceId>, op: Operator, offset_from_bp: u32) -> ExprGenerated {
     let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
     let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
    //since both expr are the same type, we take the lhs type size and sign
-    let lhs_type = lhs.expect_resolved();
+    let lhs_type = lhs.get_type();
     let lhs_size = lhs_type.size(type_db);
     let type_db_record = type_db.get_instance(lhs_type);
     let constructor = type_db.constructors.find(type_db_record.base);
@@ -478,11 +478,11 @@ fn is_float(lhs_type: TypeInstanceId, type_db: &TypeInstanceManager) -> bool {
     lhs_type == type_db.common_types.f32 || lhs_type == type_db.common_types.f64
 }
 
-fn generate_bitwise_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
+fn generate_bitwise_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr<TypeInstanceId>, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr<TypeInstanceId>, op: Operator, offset_from_bp: u32) -> ExprGenerated {
     let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
     let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
     //since both expr are the same type, we take the lhs type size and sign
-    let lhs_type = lhs.expect_resolved();
+    let lhs_type = lhs.get_type();
     let type_db_record = type_db.get_instance(lhs_type);
     let constructor = type_db.constructors.find(type_db_record.base);
     
@@ -515,12 +515,12 @@ fn generate_bitwise_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, b
     }
 }
 
-fn generate_arith_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr, op: Operator, offset_from_bp: u32) -> ExprGenerated {
+fn generate_arith_binexpr_code(type_db: &TypeInstanceManager, rhs: &HIRExpr<TypeInstanceId>, bytecode: &mut DonkeyEmitter, scope: &HashMap<String, ByteRange>, lhs: &HIRExpr<TypeInstanceId>, op: Operator, offset_from_bp: u32) -> ExprGenerated {
     let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
     let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
    
     //since both expr are the same type, we take the lhs type size and sign
-    let lhs_type = lhs.expect_resolved();
+    let lhs_type = lhs.get_type();
     let lhs_size = lhs_type.size(type_db);
     let type_db_record = type_db.get_instance(lhs_type);
     let constructor = type_db.constructors.find(type_db_record.base);
@@ -810,7 +810,7 @@ mod test {
             let type_err_display = TypeErrorPrinter::new(&analysis_result.type_errors, &analysis_result.type_db);
             panic!("Type errors:\n{}", type_err_display)
         }
-        let mir = hir_to_mir(&analysis_result.final_mir);
+        let mir = hir_to_mir(&analysis_result.final_hir);
         println!("{}", crate::semantic::mir_printer::print_mir(&mir, &analysis_result.type_db));
         let errors = check_type(&mir, &analysis_result.type_db, &analysis_result.globals);
         

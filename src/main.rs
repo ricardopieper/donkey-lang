@@ -143,8 +143,8 @@ fn compile(file_name: &str) -> DonkeyEmitter {
     let ast = parser::parse_ast(tokens.unwrap());
     let root = parser::AST::Root(ast);
     let result = crate::semantic::analysis::do_analysis(&root);
-    print_hir(&result.final_mir, &result.type_db);
-    let mir = hir_to_mir(&result.final_mir);
+    print_hir(&result.final_hir, &result.type_db);
+    let mir = hir_to_mir(&result.final_hir);
     println!("{}", mir_printer::print_mir(&mir, &result.type_db));
     let errors = check_type(&mir, &result.type_db, &result.globals);
     if errors.count() > 0 {

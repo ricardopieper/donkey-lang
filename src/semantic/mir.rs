@@ -1,4 +1,4 @@
-use super::hir::{HIR, HIRAstMetadata, HIRExpr, HIRTypeDef, HIRTypedBoundName, TrivialHIRExpr};
+use super::hir::{HIR, HIRAstMetadata, HIRExpr, HIRTypedBoundName, TrivialHIRExpr, InferredTypeHIR, InferredTypeHIRRoot, HIRRoot};
 
 use crate::{ast::parser::{AST, Expr}, types::type_instance_db::{TypeInstanceId}};
 
@@ -28,7 +28,7 @@ pub enum MIRTopLevelNode {
     },
     #[allow(dead_code)] StructDeclaration {
         struct_name: String,
-        body: Vec<HIRTypedBoundName>,
+        body: Vec<HIRTypedBoundName<TypeInstanceId>>,
     },
 }
 
@@ -45,13 +45,13 @@ a scope and a block.
 pub enum MIRBlockNode {
     Assign {
         path: Vec<String>,
-        expression: HIRExpr,
+        expression: HIRExpr<TypeInstanceId>,
         meta_ast: Option<AST>,
         meta_expr: Option<Expr>,
     },
     FunctionCall {
         function: String,
-        args: Vec<HIRExpr>,
+        args: Vec<HIRExpr<TypeInstanceId>>,
         meta_ast: Option<AST>,
     },
     //@TODO Add method call here
@@ -85,9 +85,9 @@ pub struct MIRScope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockFinal {
     //expression, true, else, meta
-    If(HIRExpr, BlockId, BlockId, HIRAstMetadata),
+    If(HIRExpr<TypeInstanceId>, BlockId, BlockId, HIRAstMetadata),
     GotoBlock(BlockId),
-    Return(HIRExpr, HIRAstMetadata),
+    Return(HIRExpr<TypeInstanceId>, HIRAstMetadata),
     EmptyReturn,
 }
 
@@ -179,7 +179,7 @@ impl MIRFunctionEmitter {
 
     fn finish_with_branch(
         &mut self,
-        condition: HIRExpr,
+        condition: HIRExpr<TypeInstanceId>,
         true_branch: BlockId,
         false_branch: BlockId,
         meta_ast: HIRAstMetadata,
@@ -192,7 +192,7 @@ impl MIRFunctionEmitter {
         ));
     }
 
-    fn finish_with_return(&mut self, expr: HIRExpr, meta_ast: HIRAstMetadata) {
+    fn finish_with_return(&mut self, expr: HIRExpr<TypeInstanceId>, meta_ast: HIRAstMetadata) {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, meta_ast));
     }
 
@@ -229,15 +229,9 @@ impl MIRFunctionEmitter {
 
 //returns the "root block" that this execution generated (or started with)
 #[allow(clippy::too_many_lines)] //too lazy for now, and I think it's ok here
-fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
+fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
     for hir in body {
         match hir {
-            HIR::DeclareFunction { .. } => {
-                panic!("Cannot declare function inside another function yet!")
-            }
-            HIR::StructDeclaration { .. } => {
-                panic!("Cannot declare struct inside a function yet!")
-            }
             HIR::Assign {
                 path,
                 expression,
@@ -258,7 +252,6 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 meta_ast,
                 meta_expr,
             } => {
-                let actual_type = typedef.typedef_state.expect_resolved();
 
                 //we need to finalize the block we currently are,
                 //define a new scope inheriting the current one,
@@ -274,7 +267,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 emitter.finish_with_goto_block(new_block);
 
                 //now we add the variable to scope 1
-                emitter.scope_add_variable(new_scope, var.clone(), actual_type);
+                emitter.scope_add_variable(new_scope, var.clone(), *typedef);
 
                 //go to block 1
                 emitter.set_current_block(new_block);
@@ -312,10 +305,6 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 };
             }
             HIR::If(condition, true_branch_hir, false_branch_hir, ast) => {
-                let HIRTypeDef::Resolved(_actual_condition_type) = &condition.get_expr_type() else {
-                    panic!("Unresolved condition type reached MIR, this might be a type inference bug");
-                };
-
                 //we need to finalize the block we currently are,
                 //define a new scope inheriting the current one,
                 //generate both sides of the branch
@@ -419,7 +408,6 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
                 }
             }
             HIR::Return(expr, meta_ast) => {
-                expr.expect_resolved();
                 emitter.finish_with_return(expr.clone(), meta_ast.clone());
             }
             HIR::EmptyReturn => {
@@ -431,8 +419,8 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[HIR]) {
 
 pub fn process_hir_funcdecl(
     function_name: &str,
-    parameters: &[HIRTypedBoundName],
-    body: &[HIR],
+    parameters: &[HIRTypedBoundName<TypeInstanceId>],
+    body: &[InferredTypeHIR],
     return_type: TypeInstanceId
 ) -> MIRTopLevelNode {
     let mut emitter = MIRFunctionEmitter::new();
@@ -443,9 +431,7 @@ pub fn process_hir_funcdecl(
     emitter.set_current_block(function_zero_block);
 
     for param in parameters.iter() {
-        let actual_type = param.typename.expect_resolved();
-
-        emitter.scope_add_variable(function_zero_scope, param.name.clone(), *actual_type);
+        emitter.scope_add_variable(function_zero_scope, param.name.clone(), param.typename);
     }
 
     process_body(&mut emitter, body);
@@ -466,7 +452,7 @@ pub fn process_hir_funcdecl(
             .iter()
             .map(|x| MIRTypedBoundName {
                 name: x.name.clone(),
-                typename: *x.typename.expect_resolved(),
+                typename: x.typename,
             })
             .collect::<Vec<_>>(),
         body,
@@ -475,11 +461,11 @@ pub fn process_hir_funcdecl(
     };
 }
 
-pub fn hir_to_mir(hir_nodes: &[HIR]) -> Vec<MIRTopLevelNode> {
+pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
-            HIR::DeclareFunction {
+            HIRRoot::DeclareFunction {
                 function_name,
                 parameters,
                 body,
@@ -487,7 +473,7 @@ pub fn hir_to_mir(hir_nodes: &[HIR]) -> Vec<MIRTopLevelNode> {
                 meta: _,
             } => {
                 let fdecl =
-                    process_hir_funcdecl(function_name, parameters, body, *return_type.expect_resolved());
+                    process_hir_funcdecl(function_name, parameters, body, *return_type);
                 top_levels.push(fdecl);
             }
             _ => {
@@ -517,9 +503,9 @@ mod tests {
         let ast = AST::Root(parser.parse_ast());
         println!("AST: {:?}", &ast);
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
-        println!("HIR: {:?}", &analysis_result.final_mir);
+        println!("HIR: {:?}", &analysis_result.final_hir);
         (
-            hir_to_mir(&analysis_result.final_mir),
+            hir_to_mir(&analysis_result.final_hir),
             analysis_result.type_db,
         )
     }

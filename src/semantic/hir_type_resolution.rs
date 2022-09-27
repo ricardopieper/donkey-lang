@@ -1,19 +1,19 @@
 use crate::types::{type_instance_db::TypeInstanceManager, type_errors::{TypeErrors, TypeNotFound}, type_constructor_db::TypeUsage};
 
-use super::hir::HIRType;
+use super::{hir::HIRType, compiler_errors::CompilerError};
 
 
-pub fn hir_type_to_usage(on_function: &str, typedef: &HIRType, type_db: &TypeInstanceManager, errors: &mut TypeErrors) -> Option<TypeUsage> {
+pub fn hir_type_to_usage(on_function: &str, typedef: &HIRType, type_db: &TypeInstanceManager, errors: &mut TypeErrors) -> Result<TypeUsage, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
             if let Some(type_id) = type_db.constructors.find_by_name(name) {
-                Some(TypeUsage::Given(type_id.id))
+                Ok(TypeUsage::Given(type_id.id))
             } else {
                 errors.type_not_found.push(TypeNotFound {
                     on_function: on_function.to_string(),
                     type_name: HIRType::Simple(name.to_string())
                 });
-                None
+                Err(CompilerError::TypeInferenceError)
             }
         },
         HIRType::Generic(base, args) => {
@@ -21,21 +21,17 @@ pub fn hir_type_to_usage(on_function: &str, typedef: &HIRType, type_db: &TypeIns
                 let base_id = type_id.id;
                 let mut generics = vec![];
                 for arg in args.iter() {
-                    let usage = hir_type_to_usage(on_function, arg, type_db, errors);
-                    if let Some(ref u)= usage {
-                        generics.push(u.clone());
-                    } else {
-                        return None
-                    }
+                    let usage = hir_type_to_usage(on_function, arg, type_db, errors)?;
+                    generics.push(usage);
                 }
 
-                Some(TypeUsage::Parameterized(base_id, generics))
+                Ok(TypeUsage::Parameterized(base_id, generics))
             } else {
                 errors.type_not_found.push(TypeNotFound {
                     on_function: on_function.to_string(),
                     type_name: HIRType::Simple(base.to_string())
                 });
-                None
+                Err(CompilerError::TypeInferenceError)
             }
         }
     }

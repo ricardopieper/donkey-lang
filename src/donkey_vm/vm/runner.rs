@@ -326,7 +326,6 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             };
         }
         Instruction::Pop { bytes } => {
-            let _num = u32::from(bytes.get_bytes());
             reg.sp -= u32::from(bytes.get_bytes());
             reg.ip += IP_OFFSET;
         }
