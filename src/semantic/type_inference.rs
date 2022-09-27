@@ -10,9 +10,11 @@ use crate::types::type_errors::{
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::compiler_errors::CompilerError;
-use super::hir::{InferredTypeHIR, GlobalsInferredMIR, HIRRoot, GlobalsInferredMIRRoot, InferredTypeHIRRoot};
+use super::hir::{InferredTypeHIR, HIRRoot, InferredTypeHIRRoot, FirstAssignmentsDeclaredHIRRoot, FirstAssignmentsDeclaredHIR, HIRTypeDef};
 use super::hir_type_resolution::hir_type_to_usage;
 
+pub type TypeInferenceInputHIRRoot = FirstAssignmentsDeclaredHIRRoot;
+pub type TypeInferenceInputHIR = FirstAssignmentsDeclaredHIR;
 
 pub fn instantiate_type(
     on_function: &str,
@@ -420,7 +422,7 @@ fn infer_types_in_body(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &mut NameRegistry,
-    body: &[GlobalsInferredMIR],
+    body: &[TypeInferenceInputHIR],
     errors: &mut TypeErrors,
 ) -> Result<Vec<InferredTypeHIR>, CompilerError> {
     let mut new_mir = vec![];
@@ -513,9 +515,9 @@ fn infer_types_in_if_statement_and_blocks(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &mut NameRegistry,
-    true_branch: &[GlobalsInferredMIR],
+    true_branch: &[TypeInferenceInputHIR],
     errors: &mut TypeErrors,
-    false_branch: &[GlobalsInferredMIR],
+    false_branch: &[TypeInferenceInputHIR],
     condition: &HIRExpr<()>,
     meta: &Option<crate::ast::parser::AST>,
 ) ->  Result<InferredTypeHIR,CompilerError>  {
@@ -597,7 +599,7 @@ fn infer_types_in_assignment(
 }
 
 fn infer_types_in_variable_declaration(
-    hint: &HIRType,
+    variable_typedecl: &HIRTypeDef,
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     errors: &mut TypeErrors,
@@ -608,38 +610,32 @@ fn infer_types_in_variable_declaration(
     meta_expr: &Option<crate::ast::parser::Expr>,
 ) -> Result<InferredTypeHIR, CompilerError> {
     //Type hint takes precedence over expr type
-    let hint = match hint {
-        HIRType::NotInformed => None,
-        other => {
-            match instantiate_type(on_function, type_db, other, errors) {
-                Ok(id) => Some(id),
-                Err(e) => return Err(e),
-            }
+    let variable_chosen = match variable_typedecl {
+        HIRTypeDef::PendingInference => None,
+        HIRTypeDef::Provided(typedecl) => match instantiate_type(on_function, type_db, typedecl, errors) {
+            Ok(id) => Some(id),
+            Err(e) => return Err(e),
         }
     };
-
+        
     let typed_expr = compute_and_infer_expr_type(
         on_function,
         type_db,
         decls_in_scope,
         assigned_value,
-        hint,
+        variable_chosen,
         errors,
     )?;
-
-    let typedef = match hint {
-        None => {
-            typed_expr.get_type()
-        },
-        Some(type_resolved) => {
-            type_resolved
-        }
+    let actual_type = match variable_chosen {
+        Some(decl) => decl,
+        None => typed_expr.get_type(),
     };
-    decls_in_scope.insert(variable_name, typedef);
+
+    decls_in_scope.insert(variable_name, actual_type);
 
     Ok(HIR::Declare {
         var: variable_name.to_string(),
-        typedef,
+        typedef: actual_type,
         expression: typed_expr,
         meta_ast: meta_ast.clone(),
         meta_expr: meta_expr.clone(),
@@ -651,7 +647,7 @@ fn infer_variable_types_in_functions(
     globals: &NameRegistry,
     function_name: &str,
     parameters: &[HIRTypedBoundName<TypeInstanceId>],
-    body: &[GlobalsInferredMIR],
+    body: &[TypeInferenceInputHIR],
     errors: &mut TypeErrors,
 ) -> Result<Vec<InferredTypeHIR>, CompilerError> {
     let mut decls_in_scope = NameRegistry::new();
@@ -669,7 +665,7 @@ fn infer_variable_types_in_functions(
 pub fn infer_types(
     globals: &mut NameRegistry,
     type_db: &mut TypeInstanceManager,
-    mir: &[GlobalsInferredMIRRoot],
+    mir: &[TypeInferenceInputHIRRoot],
     errors: &mut TypeErrors,
 ) -> Result<Vec<InferredTypeHIRRoot>, CompilerError> {
     let mut new_mir = vec![];

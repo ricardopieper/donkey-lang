@@ -34,6 +34,5 @@ pub fn hir_type_to_usage(on_function: &str, typedef: &HIRType, type_db: &TypeIns
                 Err(CompilerError::TypeInferenceError)
             }
         }
-        HIRType::NotInformed => Err(CompilerError::UnexpectedPendingError),
     }
 }

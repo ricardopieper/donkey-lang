@@ -4,12 +4,12 @@ use crate::semantic::{first_assignments, name_registry, type_inference, undeclar
 use crate::types::type_instance_db::{TypeInstanceManager};
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 
-use super::hir::{InferredTypeHIRRoot, StartingHIRRoot, ast_globals_to_hir, GlobalsInferredMIRRoot};
+use super::hir::{InferredTypeHIRRoot, StartingHIRRoot, ast_globals_to_hir, FirstAssignmentsDeclaredHIRRoot};
 use super::name_registry::NameRegistry;
 
 pub struct AnalysisResult {
     pub initial_hir: Vec<StartingHIRRoot>,
-    pub after_make_declarations_hir: Vec<GlobalsInferredMIRRoot>,
+    pub after_make_declarations_hir: Vec<FirstAssignmentsDeclaredHIRRoot>,
     pub final_hir: Vec<InferredTypeHIRRoot>,
     pub type_db: TypeInstanceManager,
     pub globals: NameRegistry,

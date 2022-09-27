@@ -27,7 +27,6 @@ impl TypeNamePrinter for HIRType {
         }
     
         match self {
-            HIRType::NotInformed => "UNKNOWN_TYPE".into(),
             HIRType::Simple(s) => format!("UNRESOLVED! {}", s.clone()),
             HIRType::Generic(s, g) => {
                 format!("UNRESOLVED {}<{}>", s, slice_types_str(g, type_db))

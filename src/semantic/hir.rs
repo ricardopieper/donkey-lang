@@ -32,14 +32,22 @@ pub type HIRAstMetadata = Option<AST>;
 
 
 pub type StartingHIR = HIR<HIRType, HIRExpr<()>>;
+pub type FirstAssignmentsDeclaredHIR = HIR<HIRTypeDef, HIRExpr<()>>;
 pub type GlobalsInferredMIR = HIR<HIRType, HIRExpr<()>>;
 pub type InferredTypeHIR = HIR<TypeInstanceId,  HIRExpr<TypeInstanceId>>;
 
 
 pub type StartingHIRRoot = HIRRoot<HIRType, StartingHIR>;
+pub type FirstAssignmentsDeclaredHIRRoot = HIRRoot<TypeInstanceId, FirstAssignmentsDeclaredHIR>;
 pub type GlobalsInferredMIRRoot = HIRRoot<TypeInstanceId, GlobalsInferredMIR>;
 pub type InferredTypeHIRRoot = HIRRoot<TypeInstanceId, InferredTypeHIR>;
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HIRTypeDef {
+    PendingInference,
+    Provided(HIRType)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRExpr<TExprType> {
@@ -71,7 +79,6 @@ pub enum HIRExpr<TExprType> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRType {
-    NotInformed,
     Simple(String),
     Generic(String, Vec<HIRType>),
     //Function(Vec<HIRType>, Box<HIRType>),
@@ -79,7 +86,6 @@ pub enum HIRType {
 
 impl Display for HIRType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let _str = String::new();
         match self {
             HIRType::Simple(s) => f.write_str(s),
             HIRType::Generic(s, generics) => {
@@ -89,12 +95,11 @@ impl Display for HIRType {
                     .collect::<Vec<String>>()
                     .join(", ");
 
-                f.write_str(s).unwrap();
-                f.write_char('<').unwrap();
-                f.write_str(&comma_sep).unwrap();
+                f.write_str(s)?;
+                f.write_char('<')?;
+                f.write_str(&comma_sep)?;
                 f.write_char('>')
             }
-            HIRType::NotInformed => f.write_str("NOT INFORMED"),
         }
     }
 }
