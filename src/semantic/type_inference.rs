@@ -137,7 +137,6 @@ impl FunctionTypeInferenceContext<'_, '_> {
                 meta,
             ))
         } else {
-            println!("method call infer error");
             self.errors
                 .field_or_method_not_found
                 .push(FieldOrMethodNotFound {
