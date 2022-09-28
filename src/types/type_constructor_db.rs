@@ -229,7 +229,11 @@ impl TypeConstructorDatabase {
         type_id
     }
 
-    pub fn add_method(&mut self, type_id: TypeConstructorId, signature: TypeConstructorFunctionDeclaration) {
+    pub fn add_method(
+        &mut self,
+        type_id: TypeConstructorId,
+        signature: TypeConstructorFunctionDeclaration,
+    ) {
         let record = self.types.get_mut(type_id.0).unwrap();
         record.methods.push(signature);
     }
@@ -252,14 +256,15 @@ impl TypeConstructorDatabase {
         type_id: TypeConstructorId,
         name: &str,
         field_type: TypeConstructorId,
-        type_args: &[TypeConstructorId]
+        type_args: &[TypeConstructorId],
     ) {
         let record = self.types.get_mut(type_id.0).unwrap();
         record.fields.push(TypeConstructorFieldDeclaration {
             name: name.to_string(),
             field_type: TypeUsage::Parameterized(
                 field_type,
-                type_args.iter().map(|x| TypeUsage::Given(*x)).collect()),
+                type_args.iter().map(|x| TypeUsage::Given(*x)).collect(),
+            ),
         });
     }
 
@@ -304,8 +309,7 @@ impl TypeConstructorDatabase {
         self.common_types.f64 =
             self.register_primitive_number("f64", mem::size_of::<f64>(), TypeSign::Signed);
 
-        let u8 =
-            self.register_primitive_number("u8", mem::size_of::<u8>(), TypeSign::Unsigned);
+        let u8 = self.register_primitive_number("u8", mem::size_of::<u8>(), TypeSign::Unsigned);
 
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
         let ptr_type = self.add_generic(
@@ -340,7 +344,12 @@ impl TypeConstructorDatabase {
             Some(mem::size_of::<usize>() + mem::size_of::<u32>()),
         );
 
-        self.common_types.function = self.add(TypeKind::Primitive, TypeSign::Unsigned, "function", Some(std::mem::size_of::<u32>()));
+        self.common_types.function = self.add(
+            TypeKind::Primitive,
+            TypeSign::Unsigned,
+            "function",
+            Some(std::mem::size_of::<u32>()),
+        );
         self.add_method(
             arr_type,
             TypeConstructorFunctionDeclaration {

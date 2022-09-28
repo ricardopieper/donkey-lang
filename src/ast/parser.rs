@@ -157,7 +157,6 @@ macro_rules! parse_guard {
     };
 }
 
-
 macro_rules! expect_token {
     ($parser:expr, $token:tt::$pattern:tt) => {
         if let $token::$pattern = $parser.cur() {
@@ -174,30 +173,21 @@ macro_rules! expect_token {
         if let $token::$pattern = $parser.cur() {
             $parser.next();
         } else {
-            panic!(
-                $msg,
-                $parser.cur().name()
-            );
+            panic!($msg, $parser.cur().name());
         }
     };
 }
 
 macro_rules! expect_identifier {
-    ($parser:expr, $role:expr) => {
-        {
-            if let Token::Identifier(id) = $parser.cur() {
-                let return_val = id.clone();
-                $parser.next();
-                return_val
-            } else {
-                panic!(
-                    "Expected {}, got {}",
-                    $role,
-                    $parser.cur().name()
-                );
-            }
+    ($parser:expr, $role:expr) => {{
+        if let Token::Identifier(id) = $parser.cur() {
+            let return_val = id.clone();
+            $parser.next();
+            return_val
+        } else {
+            panic!("Expected {}, got {}", $role, $parser.cur().name());
         }
-    };
+    }};
 }
 
 macro_rules! expect_colon_newline {
@@ -466,7 +456,7 @@ impl Parser {
 
                 self.next();
                 let Token::NewLine = self.cur() else { break; };
-               
+
                 self.next();
                 if !self.can_go() {
                     break;
@@ -476,7 +466,7 @@ impl Parser {
                     break;
                 }
             }
-    
+
             AST::StructDeclaration {
                 struct_name,
                 body: fields,
@@ -484,14 +474,13 @@ impl Parser {
         });
 
         Some(struct_def)
-        
     }
 
     pub fn parse_while_statement(&mut self) -> Option<AST> {
         parse_guard!(self, Token::WhileKeyword);
-        
+
         let expr = self.parse_expr().expect("Expected expr").resulting_expr;
-        
+
         expect_colon_newline!(self);
 
         Some(indented!(self, {
@@ -512,9 +501,9 @@ impl Parser {
             .parse_expr()
             .expect("Expected expr after in keyword in for expression")
             .resulting_expr;
-        
+
         expect_colon_newline!(self);
-        
+
         Some(indented!(self, {
             let ast = self.parse_ast();
 
@@ -586,7 +575,7 @@ impl Parser {
         let function_name = expect_identifier!(self, "function name");
 
         expect_token!(self, Token::OpenParen);
-            
+
         let mut params: Vec<TypeBoundName> = vec![];
 
         while let Token::Identifier(_) = self.cur() {
@@ -620,7 +609,11 @@ impl Parser {
             self.next();
         }
 
-        expect_token!(self, Token::Colon, "Expected colon paren after parameters and return type in function declaration, got {}");
+        expect_token!(
+            self,
+            Token::Colon,
+            "Expected colon paren after parameters and return type in function declaration, got {}"
+        );
 
         Some(indented!(self, {
             let ast = self.parse_ast();
@@ -756,14 +749,18 @@ impl Parser {
             assert!(parsed_successfully, "Could not parse code");
 
             let is_end = !self.is_not_end();
-            if is_end { break; };
-           
-            if self.cur_is_newline() { continue; };
+            if is_end {
+                break;
+            };
+
+            if self.cur_is_newline() {
+                continue;
+            };
             panic!(
                 "is not end but is also not newline, cur = {:?}, parsed = {:?}",
                 self.cur(),
                 results
-            );   
+            );
         }
 
         results
@@ -806,7 +803,7 @@ impl Parser {
 
     fn function_call_helper(&mut self, expr_callable: &Expr) -> Result<Expr, ParsingError> {
         if let Token::CloseParen = self.cur() {
-            return Ok(Expr::FunctionCall(Box::new(expr_callable.clone()), vec![]))
+            return Ok(Expr::FunctionCall(Box::new(expr_callable.clone()), vec![]));
         }
 
         self.new_stack();
@@ -819,8 +816,7 @@ impl Parser {
                 let popped = self.pop_stack();
                 let resulting_exprs = expressions.resulting_expr_list;
 
-                let fcall =
-                    Expr::FunctionCall(Box::new(expr_callable.clone()), resulting_exprs);
+                let fcall = Expr::FunctionCall(Box::new(expr_callable.clone()), resulting_exprs);
 
                 self.set_cur(&popped);
 
@@ -831,7 +827,6 @@ impl Parser {
                 Err(e)
             }
         }
-        
     }
 
     #[allow(clippy::too_many_lines)] //no patience to fix this, expr parsing is messy and I will not touch it
@@ -1049,7 +1044,8 @@ impl Parser {
                         was_operand = true;
                     }
                     Token::Operator(o) => self.push_operator(o),
-                    _ => { //close paren, close bracket are not part of expr, as in "they're just syntax"
+                    _ => {
+                        //close paren, close bracket are not part of expr, as in "they're just syntax"
                         not_part_of_expr = true;
                     }
                 }

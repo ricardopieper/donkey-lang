@@ -1,10 +1,9 @@
-
 use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
 
-use crate::types::type_instance_db::{TypeInstanceManager};
+use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 
-use super::hir::{InferredTypeHIRRoot, StartingHIRRoot, ast_globals_to_hir, FirstAssignmentsDeclaredHIRRoot};
+use super::hir::{ast_globals_to_hir, InferredTypeHIRRoot};
 use super::name_registry::NameRegistry;
 
 pub struct AnalysisResult {
@@ -16,12 +15,12 @@ pub struct AnalysisResult {
 
 pub fn do_analysis(ast: &AST) -> AnalysisResult {
     let mut analysis_result = AnalysisResult {
-        hir:  vec![],
-        type_db:  TypeInstanceManager::new(),
+        hir: vec![],
+        type_db: TypeInstanceManager::new(),
         globals: NameRegistry::new(),
-        type_errors: TypeErrors::new()
+        type_errors: TypeErrors::new(),
     };
-    
+
     let mut ast_hir = vec![];
     ast_globals_to_hir(ast, &mut ast_hir);
 
@@ -29,7 +28,7 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
         &mut analysis_result.type_db,
         &mut analysis_result.globals,
         &mut analysis_result.type_errors,
-        &ast_hir
+        ast_hir,
     ) {
         Ok(hir) => hir,
         Err(e) => {
@@ -38,20 +37,30 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
         }
     };
 
-    let first_assignment_hir = first_assignments::transform_first_assignment_into_declaration(&inferred_globals_hir);
+    let first_assignment_hir =
+        first_assignments::transform_first_assignment_into_declaration(inferred_globals_hir);
 
-    if let Err(e) = undeclared_vars::detect_undeclared_vars_and_redeclarations(&analysis_result.globals, &first_assignment_hir, &mut analysis_result.type_errors) {
+    if let Err(e) = undeclared_vars::detect_undeclared_vars_and_redeclarations(
+        &analysis_result.globals,
+        &first_assignment_hir,
+        &mut analysis_result.type_errors,
+    ) {
         println!("detect_undeclared_vars_and_redeclarations Err: {e:#?}");
         return analysis_result;
     }
 
-    match type_inference::infer_types(&mut analysis_result.globals, &mut analysis_result.type_db, &first_assignment_hir, &mut analysis_result.type_errors) {
+    match type_inference::infer_types(
+        &mut analysis_result.globals,
+        &mut analysis_result.type_db,
+        first_assignment_hir,
+        &mut analysis_result.type_errors,
+    ) {
         Ok(final_hir) => analysis_result.hir = final_hir,
         Err(e) => {
             println!("infer_types Err: {e:#?}");
-        },
+        }
     }
-    
+
     analysis_result
 }
 
@@ -616,7 +625,10 @@ def my_function():
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
-        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].field_or_method, "as_i32");
+        assert_eq!(
+            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            "as_i32"
+        );
     }
 
     #[test]
@@ -629,7 +641,10 @@ def my_function():
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
-        assert_eq!(analyzed.type_errors.field_or_method_not_found[0].field_or_method, "as_i32");
+        assert_eq!(
+            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            "as_i32"
+        );
     }
 
     #[test]

@@ -6,10 +6,13 @@ use crate::donkey_vm::asm::{
     },
 };
 
-use super::asm_instructions::{AssemblyInstruction, Annotation};
+use super::asm_instructions::{Annotation, AssemblyInstruction};
 
 #[allow(dead_code, clippy::too_many_lines)] //sometimes useful in debugging
-pub fn print<'a, T>(instructions: T) where T: IntoIterator<Item = (&'a AssemblyInstruction, &'a Option<Annotation>)> {
+pub fn print<'a, T>(instructions: T)
+where
+    T: IntoIterator<Item = (&'a AssemblyInstruction, &'a Option<Annotation>)>,
+{
     let ops_indent = "\t\t";
     for inst in instructions {
         print!("\t");

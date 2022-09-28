@@ -230,7 +230,7 @@ impl Memory {
             self.mem.get_unchecked(address_page as usize) as _
         }
     }
-    
+
     fn get_page_and_allocate(&mut self, address: u32) -> &mut Page {
         unsafe {
             //mem is always filled
@@ -251,7 +251,10 @@ impl Memory {
         if end_index > PAGE_SIZE {
             //stack overflow detection
             let end_address = address + data.len() as u32;
-            assert!(!(address >= self.stack_start && end_address >= self.heap_start), "Donkey VM stack overflow detected");
+            assert!(
+                !(address >= self.stack_start && end_address >= self.heap_start),
+                "Donkey VM stack overflow detected"
+            );
 
             //first we write to the current page
             let bytes_until_fill_page = PAGE_SIZE - index;

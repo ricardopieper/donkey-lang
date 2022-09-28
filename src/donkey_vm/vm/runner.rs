@@ -1,7 +1,7 @@
 use core::panic;
 use std::fmt::Display;
 
-use crate::donkey_vm::{vm::instructions::AddressJumpAddressSource, asm::assembler::DonkeyProgram};
+use crate::donkey_vm::{asm::assembler::DonkeyProgram, vm::instructions::AddressJumpAddressSource};
 
 use super::{
     instructions::{
@@ -182,7 +182,7 @@ pub fn immediate_integer_compare<T>(
 
 const IP_OFFSET: usize = 1_usize;
 
-#[allow(clippy::match_same_arms)]
+#[allow(clippy::match_same_arms, clippy::too_many_lines)] //Don't care about too many lines here`
 pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegisterValues) -> bool {
     match inst {
         Instruction::Noop => {
@@ -409,7 +409,12 @@ fn execute_return(reg: &mut ControlRegisterValues, memory: &mut Memory) {
     reg.ip = popped as usize;
 }
 
-fn execute_call(source: AddressJumpAddressSource, reg: &mut ControlRegisterValues, offset: u32, memory: &mut Memory) {
+fn execute_call(
+    source: AddressJumpAddressSource,
+    reg: &mut ControlRegisterValues,
+    offset: u32,
+    memory: &mut Memory,
+) {
     match source {
         super::instructions::AddressJumpAddressSource::FromOperand => {
             let return_ip = (reg.ip + IP_OFFSET) as u32;
@@ -430,7 +435,14 @@ fn execute_call(source: AddressJumpAddressSource, reg: &mut ControlRegisterValue
     }
 }
 
-fn execute_integer_compare_imm(bytes: NumberOfBytes, sign: SignFlag, memory: &mut Memory, reg: &mut ControlRegisterValues, operation: CompareOperation, operand: [u8; 2]) {
+fn execute_integer_compare_imm(
+    bytes: NumberOfBytes,
+    sign: SignFlag,
+    memory: &mut Memory,
+    reg: &mut ControlRegisterValues,
+    operation: CompareOperation,
+    operand: [u8; 2],
+) {
     match (bytes, sign) {
         (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
             immediate_integer_compare::<u8>(memory, reg, operation, operand);
@@ -460,7 +472,13 @@ fn execute_integer_compare_imm(bytes: NumberOfBytes, sign: SignFlag, memory: &mu
     reg.ip += IP_OFFSET;
 }
 
-fn execute_integer_compare_stack(bytes: NumberOfBytes, sign: SignFlag, memory: &mut Memory, reg: &mut ControlRegisterValues, operation: CompareOperation) {
+fn execute_integer_compare_stack(
+    bytes: NumberOfBytes,
+    sign: SignFlag,
+    memory: &mut Memory,
+    reg: &mut ControlRegisterValues,
+    operation: CompareOperation,
+) {
     match (bytes, sign) {
         (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
             stacked_binop_compare::<u8>(memory, reg, operation);
@@ -756,11 +774,10 @@ pub fn print_stack(memory: &Memory, registers: &ControlRegisterValues) {
         } else {
             print!("{as_u32} ");
         }
-
     }
 
-   // print!("\n{}",  " ".repeat(i32_cell));
-   // print!("^\n");
+    // print!("\n{}",  " ".repeat(i32_cell));
+    // print!("^\n");
 
     println!();
 }
@@ -793,12 +810,12 @@ pub fn run(code: &DonkeyProgram, memory: &mut Memory, registers: &mut ControlReg
             sp = registers.sp,
             bp = registers.bp
         );*/
-        
+
         if execute(inst, memory, registers) {
             break;
         }
         //print_stack(memory, &registers);
-        
+
         if registers.ip >= code_len {
             break;
         }
@@ -813,14 +830,17 @@ mod tests {
 
     use crate::donkey_vm::{
         asm::assembler::{as_donkey_vm_program, parse_asm, resolve, DonkeyProgram},
-        vm::{memory::Memory, runner::{execute, print_stack}},
+        vm::{
+            memory::Memory,
+            runner::{execute, print_stack},
+        },
     };
 
-    use super::{run, ControlRegisterValues, prepare_vm};
+    use super::{prepare_vm, run, ControlRegisterValues};
 
     fn assemble(code: &str) -> DonkeyProgram {
         let parsed = parse_asm(code);
-        let resolved = resolve(&parsed); 
+        let resolved = resolve(&parsed);
         as_donkey_vm_program(&resolved)
     }
 

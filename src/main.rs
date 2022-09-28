@@ -42,7 +42,6 @@ use tracy_client::frame_name;
 use tracy_client::Client;
 
 fn main() {
-    
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -82,12 +81,11 @@ fn main() {
         let tp = (f64::from(num_bytes) / (diff.as_secs_f64())) / f64::from(1024 * 1024);
 
         println!("Throughput: {tp}MB/s");
-        
     } else if args[1] == "asm" {
         let input = fs::read_to_string(args[2].clone())
             .unwrap_or_else(|_| panic!("Could not read file {}", args[2]));
         let parsed = crate::donkey_vm::asm::assembler::parse_asm(input.as_str());
-        
+
         let resolved = crate::donkey_vm::asm::assembler::resolve(&parsed);
         let program = crate::donkey_vm::asm::assembler::as_donkey_vm_program(&resolved);
 
@@ -106,7 +104,6 @@ fn main() {
         let (mut memory, mut registers) = runner::prepare_vm();
 
         runner::run(&program_decoded, &mut memory, &mut registers);
-
     } else if args[1] == "compile" {
         let generated_asm = compile(&args[2]);
         let resolved = resolve(&generated_asm.assembly);
@@ -134,7 +131,6 @@ fn main() {
         runner::run(&program, &mut memory, &mut registers);
     }
 }
-
 
 fn compile(file_name: &str) -> DonkeyEmitter {
     let input = fs::read_to_string(file_name)

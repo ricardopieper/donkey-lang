@@ -1,7 +1,10 @@
 use super::hir::{HIRAstMetadata, HIRExpr, HIRExprMetadata, TrivialHIRExpr};
-use crate::ast::parser::{AST, Expr};
+use crate::ast::parser::{Expr, AST};
 use crate::types::type_errors::IfStatementNotBoolean;
-use crate::types::type_errors::{AssignContext, CallToNonCallableType, FunctionCallArgumentCountMismatch, FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch};
+use crate::types::type_errors::{
+    AssignContext, CallToNonCallableType, FunctionCallArgumentCountMismatch, FunctionCallContext,
+    ReturnTypeContext, TypeErrors, TypeMismatch,
+};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode};
@@ -18,7 +21,7 @@ fn find_variable_and_get_type(
     loop {
         let bound_name = current_scope.boundnames.iter().find(|x| x.name == name);
         if let Some(name_and_type) = bound_name {
-            return name_and_type.typename
+            return name_and_type.typename;
         }
         if current_scope.index == 0 {
             break;
@@ -136,7 +139,6 @@ fn all_assignments_correct_type(
     }
 }
 
-
 fn if_statement_exprs_read_from_bool_variable(
     function_name: &str,
     body: &[MIRBlock],
@@ -147,21 +149,23 @@ fn if_statement_exprs_read_from_bool_variable(
         if let MIRBlockFinal::If(expr, _, _, _) = &body_node.finish {
             let expr_type = expr.get_type();
             if expr_type != type_db.common_types.bool {
-                type_errors.if_statement_unexpected_type.push(IfStatementNotBoolean {
-                    on_function: function_name.to_string(),
-                    actual_type: expr_type
-                });
+                type_errors
+                    .if_statement_unexpected_type
+                    .push(IfStatementNotBoolean {
+                        on_function: function_name.to_string(),
+                        actual_type: expr_type,
+                    });
             }
         }
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionName {
     Function(String),
     IndexAccess,
-    #[allow(dead_code)] Method {
+    #[allow(dead_code)]
+    Method {
         function_name: String,
         type_name: String,
     },
@@ -172,7 +176,7 @@ fn get_actual_function_name_with_details(
     meta_ast: &HIRAstMetadata,
     meta_expr: &HIRExprMetadata,
 ) -> FunctionName {
-   //@TODO return FunctionName method variant
+    //@TODO return FunctionName method variant
     //Prioritize AST standalone expr
     let expr = match meta_ast {
         AST::StandaloneExpr(expr) => expr,
@@ -182,12 +186,8 @@ fn get_actual_function_name_with_details(
     match expr {
         Expr::FunctionCall(function_name, _) => {
             match &**function_name {
-                Expr::Variable(str) => {
-                    return FunctionName::Function(str.to_string())
-                }
-                Expr::MemberAccess(_, member) => {
-                    return FunctionName::Function(member.to_string())
-                }
+                Expr::Variable(str) => return FunctionName::Function(str.to_string()),
+                Expr::MemberAccess(_, member) => return FunctionName::Function(member.to_string()),
                 _ => {}
             };
         }
@@ -216,23 +216,26 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     meta_ast,
                     meta_expr: _,
                 } => {
-                    assert!(path.len() <= 1, "Assign to path len > 2 not supported in type checker yet!");
+                    assert!(
+                        path.len() <= 1,
+                        "Assign to path len > 2 not supported in type checker yet!"
+                    );
 
                     //on assigns, we need to check if's a function call.
                     let HIRExpr::FunctionCall(call_expr, args, _return_type, expr_metadata) = expression else {
                         continue; //other cases handled elsewhere
                     };
 
-                    let type_id =  call_expr.get_type();
+                    let type_id = call_expr.get_type();
                     let type_data = type_db.get_instance(type_id);
                     if !type_data.is_function {
                         type_errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
-                            actual_type: call_expr.get_type()
+                            actual_type: call_expr.get_type(),
                         });
                         continue;
                     }
-                  
+
                     let HIRExpr::Trivial(TrivialHIRExpr::Variable(called_function), ..) = &**call_expr else {
                         panic!("Cannot call function that is not named: anonymous functions not supported yet")
                     };
@@ -243,8 +246,8 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         .collect::<Vec<_>>();
                     let actual_function_name = get_actual_function_name_with_details(
                         called_function,
-                        meta_ast.into(),
-                        expr_metadata.into(),
+                        meta_ast,
+                        expr_metadata,
                     );
                     check_function_arguments_match_param_types(
                         function_name,
@@ -258,11 +261,12 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     function,
                     args,
                     meta_ast,
-                    meta_expr
+                    meta_expr,
                 } => {
-                    let function_type = find_variable_and_get_type(function, body_node, scopes, names);
+                    let function_type =
+                        find_variable_and_get_type(function, body_node, scopes, names);
                     let type_data = type_db.get_instance(function_type);
-                   
+
                     if !type_data.is_function {
                         type_errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
@@ -270,21 +274,21 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         });
                         continue;
                     }
-                    
+
                     let passed = args
                         .iter()
                         .map(HIRExpr::<TypeInstanceId>::get_type)
                         .collect::<Vec<_>>();
 
                     let actual_function_name =
-                        get_actual_function_name_with_details(function, meta_ast.into(), meta_expr.into());
-                        
+                        get_actual_function_name_with_details(function, meta_ast, meta_expr);
+
                     check_function_arguments_match_param_types(
                         function_name,
                         &actual_function_name,
                         &type_data.function_args,
                         &passed,
-                        type_errors
+                        type_errors,
                     );
                 }
             }
@@ -302,22 +306,30 @@ fn methods_receive_parameters_of_correct_type(
     for body_node in body {
         for block_node in &body_node.block {
             if let MIRBlockNode::Assign {
-                                path,
-                                expression,
-                                meta_ast,
-                                meta_expr: _,
-                            } = block_node {
-                assert!(path.len() <= 1, "Assign to path len > 2 not supported in type checker yet!");
+                path,
+                expression,
+                meta_ast,
+                meta_expr: _,
+            } = block_node
+            {
+                assert!(
+                    path.len() <= 1,
+                    "Assign to path len > 2 not supported in type checker yet!"
+                );
 
                 //on assigns, we need to check if's a function call.
                 let HIRExpr::MethodCall(object_expr, method, args, _, expr_metadata) = expression else {
                     continue; //other cases handled elsewhere
                 };
 
-                let object_expr_type = object_expr.get_type(); 
+                let object_expr_type = object_expr.get_type();
                 let object_type_data = type_db.get_instance(object_expr_type);
 
-                let method = object_type_data.methods.iter().find(|m| &m.name == method).unwrap();
+                let method = object_type_data
+                    .methods
+                    .iter()
+                    .find(|m| &m.name == method)
+                    .unwrap();
 
                 let method_function_type_data = type_db.get_instance(method.function_type);
 
@@ -328,8 +340,8 @@ fn methods_receive_parameters_of_correct_type(
 
                 let actual_function_name = get_actual_function_name_with_details(
                     &method_function_type_data.name,
-                    meta_ast.into(),
-                    expr_metadata.into(),
+                    meta_ast,
+                    expr_metadata,
                 );
 
                 check_function_arguments_match_param_types(
@@ -343,7 +355,6 @@ fn methods_receive_parameters_of_correct_type(
         }
     }
 }
-
 
 fn type_check_function(
     function_name: &str,
@@ -364,13 +375,8 @@ fn type_check_function(
         type_db,
         type_errors,
     );
-    methods_receive_parameters_of_correct_type(
-        body,
-        function_name,
-        type_db,
-        type_errors,
-    );
-    
+    methods_receive_parameters_of_correct_type(body, function_name, type_db, type_errors);
+
     if_statement_exprs_read_from_bool_variable(function_name, body, type_db, type_errors);
 }
 
@@ -414,7 +420,8 @@ mod tests {
     use super::*;
     use crate::{
         ast::parser::{Parser, AST},
-        semantic::{mir_printer, mir::hir_to_mir}, types::type_errors::TypeErrorPrinter,
+        semantic::{mir::hir_to_mir, mir_printer},
+        types::type_errors::TypeErrorPrinter,
     };
     use pretty_assertions::assert_eq;
 
@@ -451,7 +458,7 @@ mod tests {
         } else {
             println!("No errors found!");
         }
-       
+
         (errors, &ctx.database)
     }
 
@@ -481,14 +488,8 @@ def main():
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
-        assert_eq!(
-            err.return_type_mismatches[0].expected,
-            db.common_types.void
-        );
-        assert_eq!(
-            err.return_type_mismatches[0].actual,
-            db.common_types.i32
-        );
+        assert_eq!(err.return_type_mismatches[0].expected, db.common_types.void);
+        assert_eq!(err.return_type_mismatches[0].actual, db.common_types.i32);
     }
 
     #[test]
@@ -515,10 +516,7 @@ def main() -> i32:
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
         assert_eq!(err.return_type_mismatches[0].actual, db.common_types.void);
-        assert_eq!(
-            err.return_type_mismatches[0].expected,
-            db.common_types.i32
-        );
+        assert_eq!(err.return_type_mismatches[0].expected, db.common_types.i32);
     }
 
     #[test]
@@ -533,14 +531,8 @@ def main():
         let (err, db) = run_test(&ctx);
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
-        assert_eq!(
-            err.assign_mismatches[0].actual,
-            db.common_types.string
-        );
-        assert_eq!(
-            err.assign_mismatches[0].expected,
-            db.common_types.i32
-        );
+        assert_eq!(err.assign_mismatches[0].actual, db.common_types.string);
+        assert_eq!(err.assign_mismatches[0].expected, db.common_types.i32);
     }
 
     #[test]
@@ -574,14 +566,8 @@ def main():
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
-        assert_eq!(
-            err.assign_mismatches[0].actual,
-            db.common_types.i32
-        );
-        assert_eq!(
-            err.assign_mismatches[0].expected,
-            db.common_types.f32
-        );
+        assert_eq!(err.assign_mismatches[0].actual, db.common_types.i32);
+        assert_eq!(err.assign_mismatches[0].expected, db.common_types.f32);
     }
 
     #[test]
@@ -600,14 +586,8 @@ def main():
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
-        assert_eq!(
-            err.assign_mismatches[0].actual,
-            db.common_types.i32
-        );
-        assert_eq!(
-            err.assign_mismatches[0].expected,
-            db.common_types.f32
-        );
+        assert_eq!(err.assign_mismatches[0].actual, db.common_types.i32);
+        assert_eq!(err.assign_mismatches[0].expected, db.common_types.f32);
     }
 
     #[test]
@@ -715,10 +695,7 @@ def main():
             db.common_types.i32
         );
 
-        assert_eq!(
-            err.function_call_mismatches[1].actual,
-            db.common_types.i32
-        );
+        assert_eq!(err.function_call_mismatches[1].actual, db.common_types.i32);
         assert_eq!(
             err.function_call_mismatches[1].expected,
             db.common_types.f32
@@ -764,7 +741,7 @@ def main(args: array<str>):
     i : str = args[\"lol\"]
 ",
         );
-       
+
         let (err, db) = run_test(&ctx);
         let printer = TypeErrorPrinter::new(&err, db);
         let error_msg = format!("{}", printer);

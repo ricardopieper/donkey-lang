@@ -5,10 +5,14 @@ use crate::{
     semantic::{hir::HIRType, hir_printer::operator_str, type_checker::FunctionName},
 };
 
-use super::type_instance_db::{TypeInstanceManager, TypeInstanceId, TypeConstructionError};
+use super::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
 
 pub trait TypeErrorDisplay {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result;
 }
 
 pub struct TypeMismatch<TContext> {
@@ -23,7 +27,11 @@ pub struct AssignContext {
 }
 
 impl TypeErrorDisplay for TypeMismatch<AssignContext> {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         let var_type_str = self.expected.as_string(type_db);
         let expr_type_str = self.actual.as_string(type_db);
 
@@ -37,7 +45,11 @@ impl TypeErrorDisplay for TypeMismatch<AssignContext> {
 pub struct ReturnTypeContext();
 
 impl TypeErrorDisplay for TypeMismatch<ReturnTypeContext> {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         let passed_name = self.actual.as_string(type_db);
         let expected_name = self.expected.as_string(type_db);
         write!(f,  "Return type mismatch: Function {on_function} returns {return_type_name} but expression returns {expr_return_type_name}",
@@ -54,7 +66,11 @@ pub struct FunctionCallContext {
 }
 
 impl TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         let passed_name = self.actual.as_string(type_db);
         let expected_name = self.expected.as_string(type_db);
         match &self.context.called_function_name {
@@ -122,7 +138,11 @@ pub struct CallToNonCallableType {
 }
 
 impl TypeErrorDisplay for CallToNonCallableType {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
             "In function {on_function}, call to non-callable type {non_callable_type_name}",
@@ -158,7 +178,11 @@ pub struct UnexpectedTypeFound {
 }
 
 impl TypeErrorDisplay for UnexpectedTypeFound {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
             "In function {on_function}, unexpected type found in expression: {unexpected_type}",
@@ -176,7 +200,11 @@ pub struct BinaryOperatorNotFound {
 }
 
 impl TypeErrorDisplay for BinaryOperatorNotFound {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
             "In function {on_function}, binary operator {operator} not found for types: {lhs_type} {operator} {rhs_type}",
@@ -195,7 +223,11 @@ pub struct UnaryOperatorNotFound {
 }
 
 impl TypeErrorDisplay for UnaryOperatorNotFound {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
             "In function {on_function}, unary operator {operator} not found for type: {rhs_type}",
@@ -213,7 +245,11 @@ pub struct FieldOrMethodNotFound {
 }
 
 impl TypeErrorDisplay for FieldOrMethodNotFound {
-    fn fmt_err(&self, type_db: &TypeInstanceManager, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
             "In function {on_function}, tried to access field/method {field_or_method} on type {type_name} but no such field or method exists.",
@@ -244,7 +280,7 @@ impl TypeErrorDisplay for InsufficientTypeInformationForArray {
 
 pub struct IfStatementNotBoolean {
     pub on_function: String,
-    pub actual_type: TypeInstanceId
+    pub actual_type: TypeInstanceId,
 }
 
 impl TypeErrorDisplay for IfStatementNotBoolean {
@@ -264,7 +300,7 @@ impl TypeErrorDisplay for IfStatementNotBoolean {
 
 pub struct TypeInferenceFailure {
     pub on_function: String,
-    pub variable: String
+    pub variable: String,
 }
 
 impl TypeErrorDisplay for TypeInferenceFailure {
@@ -282,10 +318,9 @@ impl TypeErrorDisplay for TypeInferenceFailure {
     }
 }
 
-
 pub struct TypeConstructionFailure {
     pub on_function: String,
-    pub error: TypeConstructionError
+    pub error: TypeConstructionError,
 }
 
 impl TypeErrorDisplay for TypeConstructionFailure {

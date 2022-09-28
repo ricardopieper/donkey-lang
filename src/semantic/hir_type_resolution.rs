@@ -1,9 +1,17 @@
-use crate::types::{type_instance_db::TypeInstanceManager, type_errors::{TypeErrors, TypeNotFound}, type_constructor_db::TypeUsage};
+use crate::types::{
+    type_constructor_db::TypeUsage,
+    type_errors::{TypeErrors, TypeNotFound},
+    type_instance_db::TypeInstanceManager,
+};
 
-use super::{hir::HIRType, compiler_errors::CompilerError};
+use super::{compiler_errors::CompilerError, hir::HIRType};
 
-
-pub fn hir_type_to_usage(on_function: &str, typedef: &HIRType, type_db: &TypeInstanceManager, errors: &mut TypeErrors) -> Result<TypeUsage, CompilerError> {
+pub fn hir_type_to_usage(
+    on_function: &str,
+    typedef: &HIRType,
+    type_db: &TypeInstanceManager,
+    errors: &mut TypeErrors,
+) -> Result<TypeUsage, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
             if let Some(type_id) = type_db.constructors.find_by_name(name) {
@@ -11,11 +19,11 @@ pub fn hir_type_to_usage(on_function: &str, typedef: &HIRType, type_db: &TypeIns
             } else {
                 errors.type_not_found.push(TypeNotFound {
                     on_function: on_function.to_string(),
-                    type_name: HIRType::Simple(name.to_string())
+                    type_name: HIRType::Simple(name.to_string()),
                 });
                 Err(CompilerError::TypeInferenceError)
             }
-        },
+        }
         HIRType::Generic(base, args) => {
             if let Some(type_id) = type_db.constructors.find_by_name(base) {
                 let base_id = type_id.id;
@@ -29,7 +37,7 @@ pub fn hir_type_to_usage(on_function: &str, typedef: &HIRType, type_db: &TypeIns
             } else {
                 errors.type_not_found.push(TypeNotFound {
                     on_function: on_function.to_string(),
-                    type_name: HIRType::Simple(base.to_string())
+                    type_name: HIRType::Simple(base.to_string()),
                 });
                 Err(CompilerError::TypeInferenceError)
             }

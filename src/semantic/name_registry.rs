@@ -4,10 +4,8 @@ use crate::types::type_errors::{TypeConstructionFailure, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::compiler_errors::CompilerError;
-use super::hir::{HIRTypedBoundName, StartingHIRRoot, GlobalsInferredMIRRoot, HIRRoot, HIRType};
-use super::{
-    hir_type_resolution::hir_type_to_usage,
-};
+use super::hir::{GlobalsInferredMIRRoot, HIRRoot, HIRType, HIRTypedBoundName, StartingHIRRoot};
+use super::hir_type_resolution::hir_type_to_usage;
 
 #[derive(Debug, Clone)]
 pub struct PartiallyResolvedFunctionSignature {
@@ -84,63 +82,54 @@ pub fn build_name_registry_and_resolve_signatures(
     type_db: &mut TypeInstanceManager,
     registry: &mut NameRegistry,
     errors: &mut TypeErrors,
-    mir: &[StartingHIRRoot],
+    mir: Vec<StartingHIRRoot>,
 ) -> Result<Vec<GlobalsInferredMIRRoot>, CompilerError> {
     register_builtins(type_db, registry);
     let mut new_mir = vec![];
 
     //first collect all globals by navigating through all functions and assignments
-    for node in mir.iter() {
+    for node in mir {
         let globals_inferred = match node {
             HIRRoot::DeclareFunction {
                 function_name,
                 parameters,
                 return_type,
                 body,
-                meta
+                meta,
             } => {
                 let mut param_types = vec![];
                 let mut resolved_params = vec![];
 
-                for type_def in parameters.iter() {
-                    let usage = hir_type_to_usage(
-                        function_name,
-                        &type_def.typename,
-                        type_db,
-                        errors,
-                    )?;
+                for type_def in parameters {
+                    let usage =
+                        hir_type_to_usage(&function_name, &type_def.typename, type_db, errors)?;
 
                     let constructed = type_db.construct_usage(&usage);
                     if let Err(e) = constructed {
                         errors
                             .type_construction_failure
                             .push(TypeConstructionFailure {
-                                on_function: (*function_name).to_string(),
+                                on_function: function_name,
                                 error: e,
                             });
                         return Err(CompilerError::TypeInferenceError);
                     }
                     let type_id = constructed.unwrap();
                     resolved_params.push(HIRTypedBoundName {
-                        name: type_def.name.to_string(),
-                        typename: type_id
+                        name: type_def.name,
+                        typename: type_id,
                     });
                     param_types.push(type_id);
                 }
 
-                let usage = hir_type_to_usage(
-                    function_name,
-                    return_type,
-                    type_db,
-                    errors,
-                )?;
+                let usage = hir_type_to_usage(&function_name, &return_type, type_db, errors)?;
 
                 let constructed = type_db.construct_usage(&usage);
                 if let Err(e) = constructed {
                     errors
                         .type_construction_failure
                         .push(TypeConstructionFailure {
-                            on_function: (*function_name).to_string(),
+                            on_function: function_name,
                             error: e,
                         });
                     return Err(CompilerError::TypeInferenceError);
@@ -149,17 +138,17 @@ pub fn build_name_registry_and_resolve_signatures(
 
                 let func_id = type_db.construct_function(&param_types, return_type);
 
-                registry.insert(function_name, func_id);
+                registry.insert(&function_name, func_id);
 
-                HIRRoot::DeclareFunction { 
-                    function_name: function_name.to_string(), 
-                    parameters: resolved_params, 
-                    body: body.clone(), 
-                    return_type, 
-                    meta: meta.clone()
+                HIRRoot::DeclareFunction {
+                    function_name,
+                    parameters: resolved_params,
+                    body,
+                    return_type,
+                    meta,
                 }
             }
-            _ => todo!()
+            _ => todo!(),
         };
         new_mir.push(globals_inferred);
     }

@@ -1,6 +1,12 @@
-use super::hir::{HIR, HIRAstMetadata, HIRExpr, HIRTypedBoundName, TrivialHIRExpr, InferredTypeHIR, InferredTypeHIRRoot, HIRRoot};
+use super::hir::{
+    HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR, InferredTypeHIRRoot,
+    TrivialHIRExpr, HIR,
+};
 
-use crate::{ast::parser::{AST, Expr}, types::type_instance_db::{TypeInstanceId}};
+use crate::{
+    ast::parser::{Expr, AST},
+    types::type_instance_db::TypeInstanceId,
+};
 
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
@@ -26,7 +32,8 @@ pub enum MIRTopLevelNode {
         scopes: Vec<MIRScope>,
         return_type: TypeInstanceId,
     },
-    #[allow(dead_code)] StructDeclaration {
+    #[allow(dead_code)]
+    StructDeclaration {
         struct_name: String,
         body: Vec<HIRTypedBoundName<TypeInstanceId>>,
     },
@@ -227,7 +234,6 @@ impl MIRFunctionEmitter {
     }
 }
 
-
 //returns the "root block" that this execution generated (or started with)
 #[allow(clippy::too_many_lines)] //too lazy for now, and I think it's ok here
 fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
@@ -253,7 +259,6 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 meta_ast,
                 meta_expr,
             } => {
-
                 //we need to finalize the block we currently are,
                 //define a new scope inheriting the current one,
                 //declare a new variable in the new scope,
@@ -292,7 +297,8 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
             HIR::FunctionCall {
                 function,
                 args,
-                meta_ast, meta_expr
+                meta_ast,
+                meta_expr,
             } => {
                 match &function {
                     HIRExpr::Trivial(TrivialHIRExpr::Variable(var), ..) => {
@@ -322,7 +328,10 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 let has_else_code = !false_branch_hir.is_empty();
 
                 let (true_block, true_branch_returns) = {
-                    assert!(!true_branch_hir.is_empty(), "Empty true branch on if statement reached MIR");
+                    assert!(
+                        !true_branch_hir.is_empty(),
+                        "Empty true branch on if statement reached MIR"
+                    );
                     //create a block for the true branch
                     let true_branch_scope = emitter.create_scope(current_scope);
                     let true_branch_block = emitter.new_block(true_branch_scope);
@@ -423,7 +432,7 @@ pub fn process_hir_funcdecl(
     function_name: &str,
     parameters: &[HIRTypedBoundName<TypeInstanceId>],
     body: &[InferredTypeHIR],
-    return_type: TypeInstanceId
+    return_type: TypeInstanceId,
 ) -> MIRTopLevelNode {
     let mut emitter = MIRFunctionEmitter::new();
 
@@ -474,8 +483,7 @@ pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode> {
                 return_type,
                 meta: _,
             } => {
-                let fdecl =
-                    process_hir_funcdecl(function_name, parameters, body, *return_type);
+                let fdecl = process_hir_funcdecl(function_name, parameters, body, *return_type);
                 top_levels.push(fdecl);
             }
             _ => {
@@ -489,7 +497,9 @@ pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode> {
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
-    use crate::{semantic::mir_printer, ast::parser::Parser, types::type_instance_db::TypeInstanceManager};
+    use crate::{
+        ast::parser::Parser, semantic::mir_printer, types::type_instance_db::TypeInstanceManager,
+    };
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
@@ -506,10 +516,7 @@ mod tests {
         println!("AST: {:?}", &ast);
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
         println!("HIR: {:?}", &analysis_result.hir);
-        (
-            hir_to_mir(&analysis_result.hir),
-            analysis_result.type_db,
-        )
+        (hir_to_mir(&analysis_result.hir), analysis_result.type_db)
     }
 
     #[test]
