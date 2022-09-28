@@ -90,7 +90,7 @@ pub fn build_name_registry_and_resolve_signatures(
     let mut new_mir = vec![];
 
     //first collect all globals by navigating through all functions and assignments
-    for node in mir.into_iter() {
+    for node in mir {
         let globals_inferred = match node {
             HIRRoot::DeclareFunction {
                 function_name,

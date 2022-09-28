@@ -40,13 +40,13 @@ pub fn compute_and_infer_expr_type(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
-    expression: &HIRExpr<()>,
+    expression: HIRExpr<()>,
     type_hint: Option<TypeInstanceId>,
     errors: &mut TypeErrors,
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
     match expression {
         HIRExpr::Trivial(TrivialHIRExpr::Variable(var), _, meta) => {
-            let decl_type = decls_in_scope.get(var);
+            let decl_type = decls_in_scope.get(&var);
             let Some(found_type) = decl_type else {
                 errors.variable_not_found.push(VariableNotFound {
                    on_function: on_function.to_string(),
@@ -57,7 +57,7 @@ pub fn compute_and_infer_expr_type(
             Ok(HIRExpr::Trivial(
                 TrivialHIRExpr::Variable(var.to_string()),
                 *found_type,
-                meta.clone(),
+                meta,
             ))
         }
         HIRExpr::Trivial(trivial_expr, _, meta) => {
@@ -73,24 +73,24 @@ pub fn compute_and_infer_expr_type(
                 ),
             };
             Ok(HIRExpr::Trivial(
-                trivial_expr.clone(),
+                trivial_expr,
                 typename,
-                meta.clone(),
+                meta,
             ))
         }
         HIRExpr::BinaryOperation(lhs, op, rhs, _, meta) => compute_infer_binop(
             on_function,
             type_db,
             decls_in_scope,
-            lhs,
+            *lhs,
             meta,
             errors,
-            rhs,
-            *op,
+            *rhs,
+            op,
         ),
         //no function polymorphism supported
         HIRExpr::FunctionCall(fun_expr, fun_params, _, meta) => compute_infer_function_call(
-            fun_expr,
+            *fun_expr,
             fun_params,
             on_function,
             type_db,
@@ -99,13 +99,13 @@ pub fn compute_and_infer_expr_type(
             errors,
         ),
         HIRExpr::UnaryExpression(op, rhs, _, meta) => {
-            compute_infer_unary_expr(on_function, type_db, decls_in_scope, rhs, meta, errors, *op)
+            compute_infer_unary_expr(on_function, type_db, decls_in_scope, *rhs, meta, errors, op)
         }
         HIRExpr::MemberAccess(obj, name, _, meta) => compute_infer_member_access(
             on_function,
             type_db,
             decls_in_scope,
-            obj,
+            *obj,
             meta,
             errors,
             name,
@@ -126,7 +126,7 @@ pub fn compute_and_infer_expr_type(
             on_function,
             type_db,
             decls_in_scope,
-            obj,
+            *obj,
             errors,
             method_name,
             params,
@@ -139,11 +139,11 @@ fn compute_infer_method_call(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
-    obj: &HIRExpr<()>,
+    obj: HIRExpr<()>,
     errors: &mut TypeErrors,
-    method_name: &String,
-    params: &[HIRExpr<()>],
-    meta: &Expr
+    method_name: String,
+    params: Vec<HIRExpr<()>>,
+    meta: Expr
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
     //compute type of obj
     //find method_name in type of obj
@@ -170,10 +170,10 @@ fn compute_infer_method_call(
 
         Ok(HIRExpr::MethodCall(
             objexpr.into(),
-            method_name.to_string(),
+            method_name,
             args,
             return_type,
-            meta.clone(),
+            meta,
         ))
     } else {
         println!("method call infer error");
@@ -189,29 +189,30 @@ fn compute_infer_method_call(
 }
 
 fn compute_infer_array(
-    array_items: &[HIRExpr<()>],
+    array_items: Vec<HIRExpr<()>>,
     type_hint: Option<TypeInstanceId>,
     errors: &mut TypeErrors,
     on_function: &str,
     type_db: &mut TypeInstanceManager,
-    meta: &Expr,
+    meta: Expr,
     decls_in_scope: &NameRegistry,
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
-    if array_items.is_empty() && type_hint.is_none() {
-        errors
-            .insufficient_array_type_info
-            .push(InsufficientTypeInformationForArray {
-                on_function: on_function.to_string(),
-            });
-        return Err(CompilerError::TypeInferenceError);
-    }
-
     if array_items.is_empty() {
-        Ok(HIRExpr::Array(
-            vec![],
-            type_hint.unwrap(),
-            meta.clone(),
-        ))
+      match type_hint {
+            Some(_hint) => Ok(HIRExpr::Array(
+                vec![],
+                type_hint.unwrap(),
+                meta,
+            )),
+            None => {
+                errors
+                    .insufficient_array_type_info
+                    .push(InsufficientTypeInformationForArray {
+                        on_function: on_function.to_string(),
+                    });
+                Err(CompilerError::TypeInferenceError)
+            },
+        }
     } else {
         let all_exprs = infer_expr_array(on_function, type_db, decls_in_scope, errors, array_items)?;
 
@@ -227,7 +228,7 @@ fn compute_infer_array(
             Ok(HIRExpr::Array(
                 all_exprs,
                 array_type_generic_replaced,
-                meta.clone(),
+                meta,
             ))
         } else {
             //array has items but all of them failed type inference lmao
@@ -248,10 +249,10 @@ fn compute_infer_member_access(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
-    obj: &HIRExpr<()>,
-    meta: &Expr,
+    obj: HIRExpr<()>,
+    meta: Expr,
     errors: &mut TypeErrors,
-    name: &str,
+    name: String,
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
     let obj_expr =
         compute_and_infer_expr_type(on_function, type_db, decls_in_scope, obj, None, errors)?;
@@ -264,9 +265,9 @@ fn compute_infer_member_access(
         let resolved_type = field.field_type;
         Ok(HIRExpr::MemberAccess(
             obj_expr.into(),
-            name.to_string(),
+            name,
             resolved_type,
-            meta.clone(),
+            meta,
         ))
     } else {
         println!("member access infer error");
@@ -276,7 +277,7 @@ fn compute_infer_member_access(
             .push(FieldOrMethodNotFound {
                 on_function: on_function.to_string(),
                 object_type: typeof_obj,
-                field_or_method: name.to_string(),
+                field_or_method: name,
             });
         Err(CompilerError::TypeInferenceError)
     }
@@ -286,8 +287,8 @@ fn compute_infer_unary_expr(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
-    rhs: &HIRExpr<()>,
-    meta: &Expr,
+    rhs: HIRExpr<()>,
+    meta: Expr,
     errors: &mut TypeErrors,
     op: crate::ast::lexer::Operator,
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
@@ -297,7 +298,7 @@ fn compute_infer_unary_expr(
 
     for (operator, result_type) in &type_db.get_instance(rhs_type).unary_ops {
         if *operator == op {
-            return Ok(HIRExpr::UnaryExpression(op, rhs_expr.into(), *result_type, meta.clone()));
+            return Ok(HIRExpr::UnaryExpression(op, rhs_expr.into(), *result_type, meta));
         }
     }
 
@@ -315,10 +316,10 @@ fn infer_expr_array(
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
     errors: &mut TypeErrors,
-    exprs: &[HIRExpr<()>]
+    exprs: Vec<HIRExpr<()>>
 ) -> Result<Vec<HIRExpr<TypeInstanceId>>, CompilerError> {
     let mut result = vec![];
-    for expr in exprs.iter() {
+    for expr in exprs {
         let res = compute_and_infer_expr_type(on_function, type_db, decls_in_scope, expr, None, errors)?;
         result.push(res);
     }
@@ -326,24 +327,24 @@ fn infer_expr_array(
 }
 
 fn compute_infer_function_call(
-    fun_expr: &HIRExpr<()>,
-    fun_params: &[HIRExpr<()>],
+    fun_expr: HIRExpr<()>,
+    fun_params: Vec<HIRExpr<()>>,
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
-    meta: &Expr,
+    meta: Expr,
     errors: &mut TypeErrors
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
-    let HIRExpr::Trivial(TrivialHIRExpr::Variable(var), .., fcall_meta) = &fun_expr else {
+    let HIRExpr::Trivial(TrivialHIRExpr::Variable(var), .., fcall_meta) = fun_expr else {
         panic!("Functions should be bound to a name! This is a bug in the type inference phase or HIR expression reduction phase.");
     };
     //infer parameter types
     let fun_params = infer_expr_array(on_function, type_db, decls_in_scope, errors, fun_params)?;
 
-    let Some(decl_type) = decls_in_scope.get(var) else {
+    let Some(decl_type) = decls_in_scope.get(&var) else {
         errors.variable_not_found.push(VariableNotFound {
             on_function: on_function.to_string(),
-            variable_name: var.to_string() 
+            variable_name: var 
          });
          return Err(CompilerError::TypeInferenceError);
     };
@@ -355,7 +356,7 @@ fn compute_infer_function_call(
     let function_inferred = HIRExpr::Trivial(
         TrivialHIRExpr::Variable(var.clone()),
         type_instance.id,
-        fcall_meta.clone(),
+        fcall_meta,
     )
     .into();
 
@@ -364,7 +365,7 @@ fn compute_infer_function_call(
             function_inferred,
             fun_params,
             type_instance.function_return_type.expect("function type data has no return type"),
-            meta.clone(),
+            meta,
         ))
     } else {
         //type is fully resolved but all wrong
@@ -380,10 +381,10 @@ fn compute_infer_binop(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
-    lhs: &HIRExpr<()>,
-    meta: &Expr,
+    lhs: HIRExpr<()>,
+    meta: Expr,
     errors: &mut TypeErrors,
-    rhs: &HIRExpr<()>,
+    rhs: HIRExpr<()>,
     op: crate::ast::lexer::Operator,
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
     let lhs_expr =
@@ -399,11 +400,11 @@ fn compute_infer_binop(
     for (operator, rhs_supported, result_type) in &lhs_instance.rhs_binary_ops {
         if *operator == op && *rhs_supported == rhs_type {
             return Ok(HIRExpr::BinaryOperation(
-                lhs_expr.into(),
+                Box::new(lhs_expr),
                 op,
-                rhs_expr.into(),
+                Box::new(rhs_expr),
                 *result_type,
-                meta.clone(),
+                meta
             ));
         }
     }
@@ -423,7 +424,7 @@ fn infer_types_in_body(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &mut NameRegistry,
-    body: &[TypeInferenceInputHIR],
+    body: Vec<TypeInferenceInputHIR>,
     errors: &mut TypeErrors,
 ) -> Result<Vec<InferredTypeHIR>, CompilerError> {
     let mut new_mir = vec![];
@@ -504,24 +505,24 @@ fn infer_types_in_return(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &mut NameRegistry,
-    expr: &HIRExpr<()>,
+    expr: HIRExpr<()>,
     errors: &mut TypeErrors,
-    meta: &AST,
+    meta: AST,
 ) -> Result<InferredTypeHIR, CompilerError> {
     let typed_expr =
         compute_and_infer_expr_type(on_function, type_db, decls_in_scope, expr, None, errors)?;
-    Ok(HIR::Return(typed_expr, meta.clone()))
+    Ok(HIR::Return(typed_expr, meta))
 }
 
 fn infer_types_in_if_statement_and_blocks(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &mut NameRegistry,
-    true_branch: &[TypeInferenceInputHIR],
+    true_branch: Vec<TypeInferenceInputHIR>,
     errors: &mut TypeErrors,
-    false_branch: &[TypeInferenceInputHIR],
-    condition: &HIRExpr<()>,
-    meta: &AST,
+    false_branch: Vec<TypeInferenceInputHIR>,
+    condition: HIRExpr<()>,
+    meta: AST,
 ) ->  Result<InferredTypeHIR,CompilerError>  {
     let true_branch_inferred = infer_types_in_body(
         on_function,
@@ -549,19 +550,19 @@ fn infer_types_in_if_statement_and_blocks(
         condition_expr,
         true_branch_inferred,
         false_branch_inferred,
-        meta.clone(),
+        meta,
     ))
 }
 
 fn infer_types_in_fcall(
-    function: &HIRExpr<()>,
-    args: &[HIRExpr<()>],
+    function: HIRExpr<()>,
+    args: Vec<HIRExpr<()>>,
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &mut NameRegistry,
     errors: &mut TypeErrors,
-    meta_ast: &AST,
-    meta_expr: &Expr,
+    meta_ast: AST,
+    meta_expr: Expr,
 ) -> Result<InferredTypeHIR,CompilerError> {
 
     let function_arg = compute_and_infer_expr_type(on_function, type_db, decls_in_scope,
@@ -571,8 +572,8 @@ fn infer_types_in_fcall(
     Ok(HIR::FunctionCall {
         function: function_arg,
         args: inferred_args,
-        meta_ast: meta_ast.clone(),
-        meta_expr: meta_expr.clone(),
+        meta_ast,
+        meta_expr,
     })
 }
 
@@ -580,11 +581,11 @@ fn infer_types_in_assignment(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &mut NameRegistry,
-    expression: &HIRExpr<()>,
+    expression: HIRExpr<()>,
     errors: &mut TypeErrors,
-    path: &[String],
-    meta_ast: &AST,
-    meta_expr: &Expr,
+    path: Vec<String>,
+    meta_ast: AST,
+    meta_expr: Expr,
 ) -> Result<InferredTypeHIR, CompilerError> {
     let typed_expr = compute_and_infer_expr_type(
         on_function,
@@ -595,28 +596,28 @@ fn infer_types_in_assignment(
         errors,
     )?;
     Ok(HIR::Assign {
-        path: path.to_vec(),
+        path,
         expression: typed_expr,
-        meta_ast: meta_ast.clone(),
-        meta_expr: meta_expr.clone(),
+        meta_ast,
+        meta_expr
     })
 }
 
 fn infer_types_in_variable_declaration(
-    variable_typedecl: &HIRTypeDef,
+    variable_typedecl: HIRTypeDef,
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     errors: &mut TypeErrors,
     decls_in_scope: &mut NameRegistry,
-    assigned_value: &HIRExpr<()>,
-    variable_name: &str,
-    meta_ast: &AST,
-    meta_expr: &Expr,
+    assigned_value: HIRExpr<()>,
+    variable_name: String,
+    meta_ast: AST,
+    meta_expr: Expr,
 ) -> Result<InferredTypeHIR, CompilerError> {
     //Type hint takes precedence over expr type
     let variable_chosen = match variable_typedecl {
         HIRTypeDef::PendingInference => None,
-        HIRTypeDef::Provided(typedecl) => match instantiate_type(on_function, type_db, typedecl, errors) {
+        HIRTypeDef::Provided(typedecl) => match instantiate_type(on_function, type_db, &typedecl, errors) {
             Ok(id) => Some(id),
             Err(e) => return Err(e),
         }
@@ -635,14 +636,14 @@ fn infer_types_in_variable_declaration(
         None => typed_expr.get_type(),
     };
 
-    decls_in_scope.insert(variable_name, actual_type);
+    decls_in_scope.insert(&variable_name, actual_type);
 
     Ok(HIR::Declare {
-        var: variable_name.to_string(),
+        var: variable_name,
         typedef: actual_type,
         expression: typed_expr,
-        meta_ast: meta_ast.clone(),
-        meta_expr: meta_expr.clone(),
+        meta_ast,
+        meta_expr
     })
 }
 
@@ -651,7 +652,7 @@ fn infer_variable_types_in_functions(
     globals: &NameRegistry,
     function_name: &str,
     parameters: &[HIRTypedBoundName<TypeInstanceId>],
-    body: &[TypeInferenceInputHIR],
+    body: Vec<TypeInferenceInputHIR>,
     errors: &mut TypeErrors,
 ) -> Result<Vec<InferredTypeHIR>, CompilerError> {
     let mut decls_in_scope = NameRegistry::new();
@@ -669,7 +670,7 @@ fn infer_variable_types_in_functions(
 pub fn infer_types(
     globals: &mut NameRegistry,
     type_db: &mut TypeInstanceManager,
-    mir: &[TypeInferenceInputHIRRoot],
+    mir: Vec<TypeInferenceInputHIRRoot>,
     errors: &mut TypeErrors,
 ) -> Result<Vec<InferredTypeHIRRoot>, CompilerError> {
     let mut new_mir = vec![];
@@ -686,16 +687,16 @@ pub fn infer_types(
                 let new_body = infer_variable_types_in_functions(
                     type_db,
                     globals,
-                    function_name,
-                    parameters,
+                    &function_name,
+                    &parameters,
                     body,
                     errors,
                 )?;
                 HIRRoot::DeclareFunction {
-                    function_name: function_name.clone(),
-                    parameters: parameters.clone(),
+                    function_name,
+                    parameters,
                     body: new_body,
-                    return_type: *return_type,
+                    return_type,
                     meta: meta.clone(),
                 }
             }

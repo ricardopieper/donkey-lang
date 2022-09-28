@@ -36,7 +36,7 @@ pub type HIRAstMetadata = AST;
  * types not yet inferred. With generics, we ensure that this is not the case. In fact I had actual problems during development
  * with unexpected uninferred types, and this eliminated them using the Rust type system.
  * 
- * HIR is for the function *bodies*, while HIRRoot is for function declarations, struct declarations, etc. 
+ * HIR is for the function *bodies*, while `HIRRoot` is for function declarations, struct declarations, etc. 
  */
 
  //The HIR right after AST transformation, no types. HIRExpr is () because the type certainly is unknown.
@@ -221,46 +221,46 @@ fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
         Expr::IntegerValue(i) => HIRExpr::Trivial(
             TrivialHIRExpr::IntegerValue(*i),
             (),
-            expr.clone().into(),
+            expr.clone(),
         ),
         Expr::FloatValue(f) => HIRExpr::Trivial(
             TrivialHIRExpr::FloatValue(*f),
             (),
-            expr.clone().into(),
+            expr.clone(),
         ),
         Expr::StringValue(s) => HIRExpr::Trivial(
             TrivialHIRExpr::StringValue(s.clone()),
             (),
-            expr.clone().into(),
+            expr.clone(),
         ),
         Expr::BooleanValue(b) => HIRExpr::Trivial(
             TrivialHIRExpr::BooleanValue(*b),
             (),
-            expr.clone().into(),
+            expr.clone(),
         ),
         Expr::None => HIRExpr::Trivial(
             TrivialHIRExpr::None,
             (),
-            expr.clone().into(),
+            expr.clone(),
         ),
         Expr::Variable(name) => HIRExpr::Trivial(
             TrivialHIRExpr::Variable(name.clone()),
             (),
-            expr.clone().into(),
+            expr.clone(),
         ),
         Expr::FunctionCall(fun_expr, args) => match &**fun_expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
                 expr_to_hir_expr(var).into(),
                 args.iter().map(expr_to_hir_expr).collect(),
                 (),
-                expr.clone().into(),
+                expr.clone(),
             ),
             Expr::MemberAccess(obj, var_name) => HIRExpr::MethodCall(
                 expr_to_hir_expr(obj).into(),
                 var_name.clone(),
                 args.iter().map(expr_to_hir_expr).collect(),
                 (),
-                expr.clone().into(),
+                expr.clone(),
             ),
             _ => panic!("Cannot lower function call to HIR: not variable or member access"),
         },
@@ -282,7 +282,7 @@ fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
                 *op,
                 rhs.into(),
                 (),
-                expr.clone().into(),
+                expr.clone(),
             )
         }
         Expr::Parenthesized(_) => panic!("parenthesized not expected"),
@@ -292,7 +292,7 @@ fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
                 *op,
                 rhs.into(),
                 (),
-                expr.clone().into(),
+                expr.clone(),
             )
         }
         Expr::MemberAccess(object, member) => {
@@ -301,12 +301,12 @@ fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
                 object.into(),
                 member.clone(),
                 (),
-                expr.clone().into(),
+                expr.clone(),
             )
         }
         Expr::Array(items) => {
             let items = items.iter().map(expr_to_hir_expr).collect();
-            HIRExpr::Array(items, (), expr.clone().into())
+            HIRExpr::Array(items, (), expr.clone())
         }
     }
 }
@@ -524,7 +524,7 @@ fn ast_if_to_hir(
                 first_node.condition,
                 first_node.true_body,
                 final_else_body,
-                (*ast).clone().into(),
+                (*ast).clone(),
             ));
         }
 

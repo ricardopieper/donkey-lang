@@ -243,8 +243,8 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         .collect::<Vec<_>>();
                     let actual_function_name = get_actual_function_name_with_details(
                         called_function,
-                        meta_ast.into(),
-                        expr_metadata.into(),
+                        meta_ast,
+                        expr_metadata,
                     );
                     check_function_arguments_match_param_types(
                         function_name,
@@ -277,7 +277,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         .collect::<Vec<_>>();
 
                     let actual_function_name =
-                        get_actual_function_name_with_details(function, meta_ast.into(), meta_expr.into());
+                        get_actual_function_name_with_details(function, meta_ast, meta_expr);
                         
                     check_function_arguments_match_param_types(
                         function_name,
@@ -328,8 +328,8 @@ fn methods_receive_parameters_of_correct_type(
 
                 let actual_function_name = get_actual_function_name_with_details(
                     &method_function_type_data.name,
-                    meta_ast.into(),
-                    expr_metadata.into(),
+                    meta_ast,
+                    expr_metadata,
                 );
 
                 check_function_arguments_match_param_types(

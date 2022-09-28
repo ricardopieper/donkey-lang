@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use super::hir::{UninferredHIR, HIRRoot, GlobalsInferredMIRRoot, HIRTypeDef, FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot};
 
 fn make_first_assignments_in_body(
-    body: &[UninferredHIR],
+    body: Vec<UninferredHIR>,
     declarations_found: &mut HashSet<String>,
 ) -> Vec<FirstAssignmentsDeclaredHIR> {
     let mut new_mir: Vec<FirstAssignmentsDeclaredHIR> = vec![];
@@ -14,11 +14,11 @@ fn make_first_assignments_in_body(
             HIR::Declare { var, typedef, expression, meta_ast, meta_expr } => {
                 declarations_found.insert(var.clone());
                 HIR::Declare { 
-                    var: var.clone(), 
-                    typedef: HIRTypeDef::Provided(typedef.clone()), 
-                    expression: expression.clone(), 
-                    meta_ast: meta_ast.clone(), 
-                    meta_expr: meta_expr.clone()
+                    var, 
+                    typedef: HIRTypeDef::Provided(typedef), 
+                    expression, 
+                    meta_ast, 
+                    meta_expr
                 }
             }
             HIR::Assign {
@@ -30,19 +30,19 @@ fn make_first_assignments_in_body(
                 let var = &path[0];
                 if declarations_found.contains(var) {
                     HIR::Assign {
-                        path: path.clone(), 
-                        expression: expression.clone(), 
-                        meta_ast: meta_ast.clone(), 
-                        meta_expr: meta_expr.clone() 
-                    }      
+                        path, 
+                        expression, 
+                        meta_ast, 
+                        meta_expr 
+                    }
                 } else {
                     declarations_found.insert(var.clone());
                     HIR::Declare {
                         var: var.clone(),
                         typedef:  HIRTypeDef::PendingInference,
-                        expression: expression.clone(),
-                        meta_ast: meta_ast.clone(),
-                        meta_expr: meta_expr.clone(),
+                        expression,
+                        meta_ast,
+                        meta_expr,
                     }
                 }
             }
@@ -51,20 +51,22 @@ fn make_first_assignments_in_body(
                 //create 2 copies of the decls found, so that 2 copies of the scope are created
                 let mut true_branch_scope = declarations_found.clone();
                 let mut false_branch_scope = declarations_found.clone();
+                
                 let true_branch_decls =
                     make_first_assignments_in_body(true_branch, &mut true_branch_scope);
                 let false_branch_decls =
                     make_first_assignments_in_body(false_branch, &mut false_branch_scope);
-                HIR::If(
-                    condition.clone(),
+                
+                    HIR::If(
+                    condition,
                     true_branch_decls,
                     false_branch_decls,
-                    meta.clone(),
+                    meta,
                 )
             }
             HIR::FunctionCall { function, args, meta_ast, meta_expr } => 
-                HIR::FunctionCall { function: function.clone(), args: args.clone(), meta_ast: meta_ast.clone(), meta_expr: meta_expr.clone() },
-            HIR::Return(expr, meta_ast) => HIR::Return(expr.clone(), meta_ast.clone()),
+                HIR::FunctionCall { function, args, meta_ast, meta_expr },
+            HIR::Return(expr, meta_ast) => HIR::Return(expr, meta_ast),
             HIR::EmptyReturn => HIR::EmptyReturn,
             
         };
@@ -76,7 +78,7 @@ fn make_first_assignments_in_body(
 
 fn make_assignments_into_declarations_in_function(
     parameters: &[HIRTypedBoundName<TypeInstanceId>],
-    body: &[UninferredHIR]
+    body: Vec<UninferredHIR>
 ) -> Vec<FirstAssignmentsDeclaredHIR> {
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
@@ -90,12 +92,12 @@ fn make_assignments_into_declarations_in_function(
 
     let mut declarations_found = HashSet::<String>::new();
     for p in parameters {
-        declarations_found.insert(p.name.clone());
+        declarations_found.insert(p.name.to_string());
     }
     make_first_assignments_in_body(body, &mut declarations_found)
 }
 
-pub fn transform_first_assignment_into_declaration(mir: &[GlobalsInferredMIRRoot]) -> Vec<FirstAssignmentsDeclaredHIRRoot> {
+pub fn transform_first_assignment_into_declaration(mir: Vec<GlobalsInferredMIRRoot>) -> Vec<FirstAssignmentsDeclaredHIRRoot> {
     let mut new_mir = vec![];
 
     for node in mir {
@@ -108,15 +110,15 @@ pub fn transform_first_assignment_into_declaration(mir: &[GlobalsInferredMIRRoot
                 meta,
             } => {
                 let new_body = make_assignments_into_declarations_in_function(
-                    parameters,
+                    &parameters,
                     body
                 );
                 HIRRoot::DeclareFunction {
-                    function_name: function_name.clone(),
-                    parameters: parameters.clone(),
+                    function_name,
+                    parameters,
                     body: new_body,
-                    return_type: *return_type,
-                    meta: meta.clone(),
+                    return_type,
+                    meta,
                 }
             }
             _ => todo!("Structs not implemented"),

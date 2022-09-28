@@ -4,7 +4,7 @@ use crate::semantic::{first_assignments, name_registry, type_inference, undeclar
 use crate::types::type_instance_db::{TypeInstanceManager};
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 
-use super::hir::{InferredTypeHIRRoot, StartingHIRRoot, ast_globals_to_hir, FirstAssignmentsDeclaredHIRRoot};
+use super::hir::{InferredTypeHIRRoot, ast_globals_to_hir};
 use super::name_registry::NameRegistry;
 
 pub struct AnalysisResult {
@@ -38,14 +38,14 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
         }
     };
 
-    let first_assignment_hir = first_assignments::transform_first_assignment_into_declaration(&inferred_globals_hir);
+    let first_assignment_hir = first_assignments::transform_first_assignment_into_declaration(inferred_globals_hir);
 
     if let Err(e) = undeclared_vars::detect_undeclared_vars_and_redeclarations(&analysis_result.globals, &first_assignment_hir, &mut analysis_result.type_errors) {
         println!("detect_undeclared_vars_and_redeclarations Err: {e:#?}");
         return analysis_result;
     }
 
-    match type_inference::infer_types(&mut analysis_result.globals, &mut analysis_result.type_db, &first_assignment_hir, &mut analysis_result.type_errors) {
+    match type_inference::infer_types(&mut analysis_result.globals, &mut analysis_result.type_db, first_assignment_hir, &mut analysis_result.type_errors) {
         Ok(final_hir) => analysis_result.hir = final_hir,
         Err(e) => {
             println!("infer_types Err: {e:#?}");
