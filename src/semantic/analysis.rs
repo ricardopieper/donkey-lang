@@ -16,7 +16,7 @@ pub struct AnalysisResult {
 
 pub fn do_analysis(ast: &AST) -> AnalysisResult {
     let mut analysis_result = AnalysisResult {
-        hir:  vec![],
+        hir: vec![],
         type_db:  TypeInstanceManager::new(),
         globals: NameRegistry::new(),
         type_errors: TypeErrors::new()
@@ -29,7 +29,7 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
         &mut analysis_result.type_db,
         &mut analysis_result.globals,
         &mut analysis_result.type_errors,
-        &ast_hir
+        ast_hir
     ) {
         Ok(hir) => hir,
         Err(e) => {

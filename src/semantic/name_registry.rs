@@ -84,13 +84,13 @@ pub fn build_name_registry_and_resolve_signatures(
     type_db: &mut TypeInstanceManager,
     registry: &mut NameRegistry,
     errors: &mut TypeErrors,
-    mir: &[StartingHIRRoot],
+    mir: Vec<StartingHIRRoot>,
 ) -> Result<Vec<GlobalsInferredMIRRoot>, CompilerError> {
     register_builtins(type_db, registry);
     let mut new_mir = vec![];
 
     //first collect all globals by navigating through all functions and assignments
-    for node in mir.iter() {
+    for node in mir.into_iter() {
         let globals_inferred = match node {
             HIRRoot::DeclareFunction {
                 function_name,
@@ -102,9 +102,9 @@ pub fn build_name_registry_and_resolve_signatures(
                 let mut param_types = vec![];
                 let mut resolved_params = vec![];
 
-                for type_def in parameters.iter() {
+                for type_def in parameters {
                     let usage = hir_type_to_usage(
-                        function_name,
+                        &function_name,
                         &type_def.typename,
                         type_db,
                         errors,
@@ -115,22 +115,22 @@ pub fn build_name_registry_and_resolve_signatures(
                         errors
                             .type_construction_failure
                             .push(TypeConstructionFailure {
-                                on_function: (*function_name).to_string(),
+                                on_function: function_name,
                                 error: e,
                             });
                         return Err(CompilerError::TypeInferenceError);
                     }
                     let type_id = constructed.unwrap();
                     resolved_params.push(HIRTypedBoundName {
-                        name: type_def.name.to_string(),
+                        name: type_def.name,
                         typename: type_id
                     });
                     param_types.push(type_id);
                 }
 
                 let usage = hir_type_to_usage(
-                    function_name,
-                    return_type,
+                    &function_name,
+                    &return_type,
                     type_db,
                     errors,
                 )?;
@@ -140,7 +140,7 @@ pub fn build_name_registry_and_resolve_signatures(
                     errors
                         .type_construction_failure
                         .push(TypeConstructionFailure {
-                            on_function: (*function_name).to_string(),
+                            on_function: function_name,
                             error: e,
                         });
                     return Err(CompilerError::TypeInferenceError);
@@ -149,14 +149,14 @@ pub fn build_name_registry_and_resolve_signatures(
 
                 let func_id = type_db.construct_function(&param_types, return_type);
 
-                registry.insert(function_name, func_id);
+                registry.insert(&function_name, func_id);
 
                 HIRRoot::DeclareFunction { 
-                    function_name: function_name.to_string(), 
+                    function_name, 
                     parameters: resolved_params, 
-                    body: body.clone(), 
+                    body, 
                     return_type, 
-                    meta: meta.clone()
+                    meta
                 }
             }
             _ => todo!()
