@@ -126,13 +126,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
             .find(|method| method.name == *method_name);
         if let Some(method) = method {
             let method_type = self.type_db.get_instance(method.function_type);
-
-            //Now we have to resolve each element in the type signature.
-            //Remember that &generics will contain an i32 if we have a __index__(u32): TItem call on arr<i32>
-            //arg is a simple type
-            //In this case, return_type is generic, specifically Type::Simple(Either::Left(GenericParam("TItem")))
             let return_type = method_type.function_return_type.unwrap();
-
             let args = self.infer_expr_array(params)?;
 
             Ok(HIRExpr::MethodCall(
