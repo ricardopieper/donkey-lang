@@ -1,4 +1,3 @@
-
 use std::fmt::Display;
 use std::fmt::Write;
 
@@ -7,7 +6,6 @@ use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
 use crate::types::type_instance_db::TypeInstanceId;
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrivialHIRExpr {
@@ -35,34 +33,33 @@ pub type HIRAstMetadata = AST;
  * For instance, in the type checker, we receive a fully type-inferred HIR instead of receiving one that potentially has
  * types not yet inferred. With generics, we ensure that this is not the case. In fact I had actual problems during development
  * with unexpected uninferred types, and this eliminated them using the Rust type system.
- * 
- * HIR is for the function *bodies*, while `HIRRoot` is for function declarations, struct declarations, etc. 
+ *
+ * HIR is for the function *bodies*, while `HIRRoot` is for function declarations, struct declarations, etc.
  */
 
- //The HIR right after AST transformation, no types. HIRExpr is () because the type certainly is unknown.
+//The HIR right after AST transformation, no types. HIRExpr is () because the type certainly is unknown.
 pub type UninferredHIR = HIR<HIRType, HIRExpr<()>>;
 
-//The HIR after expanding variable assignments into declarations the first time they're assigned. In this case 
+//The HIR after expanding variable assignments into declarations the first time they're assigned. In this case
 //we create them as PendingInference. We also wrap given type declarations in a HIRTypeDef::Provided.
 pub type FirstAssignmentsDeclaredHIR = HIR<HIRTypeDef, HIRExpr<()>>;
 
 //The HIR with types inferred already, ready for typechecking and MIR lowering
-pub type InferredTypeHIR = HIR<TypeInstanceId,  HIRExpr<TypeInstanceId>>;
+pub type InferredTypeHIR = HIR<TypeInstanceId, HIRExpr<TypeInstanceId>>;
 
 //HIR roots right after AST transformation
 pub type StartingHIRRoot = HIRRoot<HIRType, UninferredHIR>;
-//HIR roots after inferring and registering globals, bodies have not changed 
+//HIR roots after inferring and registering globals, bodies have not changed
 pub type GlobalsInferredMIRRoot = HIRRoot<TypeInstanceId, UninferredHIR>;
-//HIR roots now with body changed, first assignments became declarations 
+//HIR roots now with body changed, first assignments became declarations
 pub type FirstAssignmentsDeclaredHIRRoot = HIRRoot<TypeInstanceId, FirstAssignmentsDeclaredHIR>;
 //HIR roots with bodies fully inferred
 pub type InferredTypeHIRRoot = HIRRoot<TypeInstanceId, InferredTypeHIR>;
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRTypeDef {
     PendingInference,
-    Provided(HIRType)
+    Provided(HIRType),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,8 +83,18 @@ pub enum HIRExpr<TExprType> {
         HIRExprMetadata,
     ),
     //func_expr, args:type, return type, metadata
-    FunctionCall(Box<HIRExpr<TExprType>>, Vec<HIRExpr<TExprType>>, TExprType, HIRExprMetadata),
-    UnaryExpression(Operator, Box<HIRExpr<TExprType>>, TExprType, HIRExprMetadata),
+    FunctionCall(
+        Box<HIRExpr<TExprType>>,
+        Vec<HIRExpr<TExprType>>,
+        TExprType,
+        HIRExprMetadata,
+    ),
+    UnaryExpression(
+        Operator,
+        Box<HIRExpr<TExprType>>,
+        TExprType,
+        HIRExprMetadata,
+    ),
     //obj, field, result_type, metadata
     MemberAccess(Box<HIRExpr<TExprType>>, String, TExprType, HIRExprMetadata),
     Array(Vec<HIRExpr<TExprType>>, TExprType, HIRExprMetadata),
@@ -118,7 +125,6 @@ impl From<&ASTType> for HIRType {
         }
     }
 }
-
 
 impl Display for HIRType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -160,8 +166,6 @@ pub struct HIRTypedBoundName<TExprType> {
     pub name: String,
     pub typename: TExprType,
 }
-
-
 
 /*
 The HIR expression is similar to the AST, but can have type information on every node.
@@ -205,7 +209,12 @@ pub enum HIR<TVariableDeclType, TExprType> {
     },
     //condition, true branch, false branch
     //this transforms elifs into else: \n\t if ..
-    If(TExprType, Vec<HIR<TVariableDeclType, TExprType>>, Vec<HIR<TVariableDeclType, TExprType>>, HIRAstMetadata),
+    If(
+        TExprType,
+        Vec<HIR<TVariableDeclType, TExprType>>,
+        Vec<HIR<TVariableDeclType, TExprType>>,
+        HIRAstMetadata,
+    ),
     Return(TExprType, HIRAstMetadata),
     EmptyReturn,
 }
@@ -218,36 +227,20 @@ struct IfTreeNode<TDeclType, TExprType> {
 
 fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
     match expr {
-        Expr::IntegerValue(i) => HIRExpr::Trivial(
-            TrivialHIRExpr::IntegerValue(*i),
-            (),
-            expr.clone(),
-        ),
-        Expr::FloatValue(f) => HIRExpr::Trivial(
-            TrivialHIRExpr::FloatValue(*f),
-            (),
-            expr.clone(),
-        ),
-        Expr::StringValue(s) => HIRExpr::Trivial(
-            TrivialHIRExpr::StringValue(s.clone()),
-            (),
-            expr.clone(),
-        ),
-        Expr::BooleanValue(b) => HIRExpr::Trivial(
-            TrivialHIRExpr::BooleanValue(*b),
-            (),
-            expr.clone(),
-        ),
-        Expr::None => HIRExpr::Trivial(
-            TrivialHIRExpr::None,
-            (),
-            expr.clone(),
-        ),
-        Expr::Variable(name) => HIRExpr::Trivial(
-            TrivialHIRExpr::Variable(name.clone()),
-            (),
-            expr.clone(),
-        ),
+        Expr::IntegerValue(i) => {
+            HIRExpr::Trivial(TrivialHIRExpr::IntegerValue(*i), (), expr.clone())
+        }
+        Expr::FloatValue(f) => HIRExpr::Trivial(TrivialHIRExpr::FloatValue(*f), (), expr.clone()),
+        Expr::StringValue(s) => {
+            HIRExpr::Trivial(TrivialHIRExpr::StringValue(s.clone()), (), expr.clone())
+        }
+        Expr::BooleanValue(b) => {
+            HIRExpr::Trivial(TrivialHIRExpr::BooleanValue(*b), (), expr.clone())
+        }
+        Expr::None => HIRExpr::Trivial(TrivialHIRExpr::None, (), expr.clone()),
+        Expr::Variable(name) => {
+            HIRExpr::Trivial(TrivialHIRExpr::Variable(name.clone()), (), expr.clone())
+        }
         Expr::FunctionCall(fun_expr, args) => match &**fun_expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
                 expr_to_hir_expr(var).into(),
@@ -264,45 +257,26 @@ fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
             ),
             _ => panic!("Cannot lower function call to HIR: not variable or member access"),
         },
-        Expr::IndexAccess(object, index) => {
-           HIRExpr::MethodCall(
-                Box::new(expr_to_hir_expr(object)),
-                "__index__".into(),
-                vec![
-                    expr_to_hir_expr(index)
-                ],
-                (),
-                expr.clone())
-        }
+        Expr::IndexAccess(object, index) => HIRExpr::MethodCall(
+            Box::new(expr_to_hir_expr(object)),
+            "__index__".into(),
+            vec![expr_to_hir_expr(index)],
+            (),
+            expr.clone(),
+        ),
         Expr::BinaryOperation(lhs, op, rhs) => {
             let lhs = expr_to_hir_expr(lhs);
             let rhs = expr_to_hir_expr(rhs);
-            HIRExpr::BinaryOperation(
-                lhs.into(),
-                *op,
-                rhs.into(),
-                (),
-                expr.clone(),
-            )
+            HIRExpr::BinaryOperation(lhs.into(), *op, rhs.into(), (), expr.clone())
         }
         Expr::Parenthesized(_) => panic!("parenthesized not expected"),
         Expr::UnaryExpression(op, rhs) => {
             let rhs = expr_to_hir_expr(rhs);
-            HIRExpr::UnaryExpression(
-                *op,
-                rhs.into(),
-                (),
-                expr.clone(),
-            )
+            HIRExpr::UnaryExpression(*op, rhs.into(), (), expr.clone())
         }
         Expr::MemberAccess(object, member) => {
             let object = expr_to_hir_expr(object);
-            HIRExpr::MemberAccess(
-                object.into(),
-                member.clone(),
-                (),
-                expr.clone(),
-            )
+            HIRExpr::MemberAccess(object.into(), member.clone(), (), expr.clone())
         }
         Expr::Array(items) => {
             let items = items.iter().map(expr_to_hir_expr).collect();
@@ -345,17 +319,14 @@ fn ast_to_hir(ast: &AST, accum: &mut Vec<UninferredHIR>) {
             };
 
             accum.push(decl_hir);
-        }    
+        }
         AST::Return(expr) => match expr {
             None => {
                 accum.push(HIR::EmptyReturn);
             }
             Some(e) => {
                 let result_expr = expr_to_hir_expr(e);
-                accum.push(HIR::Return(
-                    result_expr,
-                    ast.clone(),
-                ));
+                accum.push(HIR::Return(result_expr, ast.clone()));
             }
         },
         AST::StandaloneExpr(expr) => {
@@ -374,7 +345,7 @@ fn ast_to_hir(ast: &AST, accum: &mut Vec<UninferredHIR>) {
                 function: *function.clone(),
                 args: typed_args,
                 meta_ast: ast.clone(),
-                meta_expr: expr.clone()
+                meta_expr: expr.clone(),
             });
         }
         AST::IfStatement {
@@ -407,7 +378,7 @@ fn ast_decl_function_to_hir(
         body: function_body,
         return_type: match return_type {
             Some(x) => x.into(),
-            None => HIRType::Simple("Void".into())
+            None => HIRType::Simple("Void".into()),
         },
         meta: ast.clone(),
     };
@@ -417,10 +388,7 @@ fn ast_decl_function_to_hir(
 }
 
 fn create_type_bound_names(parameters: &[TypeBoundName]) -> Vec<HIRTypedBoundName<HIRType>> {
-    parameters
-        .iter()
-        .map(create_type_bound_name)
-        .collect()
+    parameters.iter().map(create_type_bound_name).collect()
 }
 
 fn create_type_bound_name(param: &TypeBoundName) -> HIRTypedBoundName<HIRType> {
@@ -569,7 +537,7 @@ pub fn ast_globals_to_hir(ast: &AST, accum: &mut Vec<StartingHIRRoot>) {
                 meta: ast.clone(),
             });
         }
-        other => panic!("AST not supported: {other:?}")
+        other => panic!("AST not supported: {other:?}"),
     }
 }
 
@@ -580,7 +548,7 @@ mod tests {
 
     use crate::semantic::hir;
     use crate::semantic::hir_printer::print_hir;
-    
+
     use crate::types::type_instance_db::TypeInstanceManager;
 
     //Parses a single expression

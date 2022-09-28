@@ -1,4 +1,4 @@
-use crate::semantic::hir_printer::{expr_str};
+use crate::semantic::hir_printer::expr_str;
 use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::mir::MIRBlock;
@@ -24,11 +24,7 @@ fn print_mir_block(block: &MIRBlock) -> String {
                 ));
             }
             MIRBlockNode::FunctionCall { function, args, .. } => {
-                let args_str = args
-                    .iter()
-                    .map(expr_str)
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
                 buffer.push_str(&format!("        {}({})\n", function, args_str));
             }
         }
@@ -43,7 +39,7 @@ fn print_mir_block(block: &MIRBlock) -> String {
             gotoblock {}
 ",
                 expr_str(condition), //if condition:
-                true_branch.0,               //gotoblock 0
+                true_branch.0,       //gotoblock 0
                 false_branch.0
             )); //gotoblock 1
         }

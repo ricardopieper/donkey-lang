@@ -1,11 +1,8 @@
 use core::panic;
 
-use super::{
-    vm::instructions::{
-        get_all_instruction_layouts, BitLayout, Instruction, InstructionTable, PartType,
-    },
+use super::vm::instructions::{
+    get_all_instruction_layouts, BitLayout, Instruction, InstructionTable, PartType,
 };
-
 
 pub fn delete_msb_bits(num: u32, bits: u32) -> u32 {
     (num << bits) >> bits
@@ -73,7 +70,6 @@ pub struct InstructionDecoder<'a> {
 }
 
 impl<'a> InstructionDecoder<'a> {
-
     #[allow(clippy::too_many_lines)]
     pub fn decode(&self) -> Instruction {
         let pseudoop = self.layout.instruction_pseudoop;
@@ -410,7 +406,14 @@ mod tests {
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use crate::donkey_vm::{encoder::LayoutHelper, vm::instructions::{AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation, ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes, OperationMode, ShiftDirection, SignFlag}};
+    use crate::donkey_vm::{
+        encoder::LayoutHelper,
+        vm::instructions::{
+            AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation,
+            ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes,
+            OperationMode, ShiftDirection, SignFlag,
+        },
+    };
 
     #[test]
     fn encode_decode_push_immediate32_lshift16() {

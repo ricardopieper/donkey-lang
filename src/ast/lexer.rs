@@ -61,33 +61,33 @@ impl Token {
             Token::LiteralFloat(_) => "float literal",
             Token::LiteralInteger(_) => "integer literal",
             Token::LiteralString(_) => "string literal",
-            Token::Operator(_) =>  "operator",
-            Token::Identifier(_) =>  "identifier",
-            Token::NewLine =>  "new line",
-            Token::Assign =>  "assign",
+            Token::Operator(_) => "operator",
+            Token::Identifier(_) => "identifier",
+            Token::NewLine => "new line",
+            Token::Assign => "assign",
             Token::True | Token::False => "boolean literal",
-            Token::None =>  "none",
-            Token::Comma =>  "comma",
-            Token::Colon =>  "colon",
-            Token::StructDef =>  "struct keyword",
-            Token::IfKeyword =>  "if keyword",
-            Token::ForKeyword =>  "for keyword",
-            Token::RaiseKeyword =>  "raise keyword",
-            Token::ReturnKeyword =>  "return keyword",
-            Token::InKeyword =>  "in keyword",
-            Token::WhileKeyword =>  "while keyword",
-            Token::BreakKeyword =>  "break keyword",
-            Token::ElifKeyword =>  "elif keyword",
-            Token::ElseKeyword =>  "else keyword",
-            Token::DefKeyword =>  "def keyword",
-            Token::OpenParen =>  "open parenthesis",
-            Token::CloseParen =>  "close parenthesis",
-            Token::OpenArrayBracket =>  "open bracket",
-            Token::CloseArrayBracket =>  "close bracket",
-            Token::MemberAccessor =>  "member access (dot)",
-            Token::ArrowRight =>  "arrow right (->)",
-            Token::Indentation =>  "indentation",
-        } 
+            Token::None => "none",
+            Token::Comma => "comma",
+            Token::Colon => "colon",
+            Token::StructDef => "struct keyword",
+            Token::IfKeyword => "if keyword",
+            Token::ForKeyword => "for keyword",
+            Token::RaiseKeyword => "raise keyword",
+            Token::ReturnKeyword => "return keyword",
+            Token::InKeyword => "in keyword",
+            Token::WhileKeyword => "while keyword",
+            Token::BreakKeyword => "break keyword",
+            Token::ElifKeyword => "elif keyword",
+            Token::ElseKeyword => "else keyword",
+            Token::DefKeyword => "def keyword",
+            Token::OpenParen => "open parenthesis",
+            Token::CloseParen => "close parenthesis",
+            Token::OpenArrayBracket => "open bracket",
+            Token::CloseArrayBracket => "close bracket",
+            Token::MemberAccessor => "member access (dot)",
+            Token::ArrowRight => "arrow right (->)",
+            Token::Indentation => "indentation",
+        }
     }
 }
 
@@ -304,7 +304,7 @@ impl Tokenizer {
 
     fn commit_current_token(&mut self) {
         if let PartialToken::UndefinedOrWhitespace = self.cur_partial_token {
-            return
+            return;
         }
         let cur_token = std::mem::replace(
             &mut self.cur_partial_token,
@@ -312,8 +312,6 @@ impl Tokenizer {
         );
         self.final_result.push(cur_token.to_token());
     }
-        
-    
 
     fn clone_buf(&self) -> String {
         self.eater_buf.clone()
@@ -388,7 +386,10 @@ impl Tokenizer {
                     current_spaces += 1;
                     self.next();
                 }
-                assert!(current_spaces % 4 == 0, "Indentation must be a multiple of 4");
+                assert!(
+                    current_spaces % 4 == 0,
+                    "Indentation must be a multiple of 4"
+                );
                 let indents = current_spaces / 4;
                 for _i in 0..indents {
                     self.final_result.push(Token::Indentation);

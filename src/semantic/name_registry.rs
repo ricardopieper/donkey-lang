@@ -4,10 +4,8 @@ use crate::types::type_errors::{TypeConstructionFailure, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::compiler_errors::CompilerError;
-use super::hir::{HIRTypedBoundName, StartingHIRRoot, GlobalsInferredMIRRoot, HIRRoot, HIRType};
-use super::{
-    hir_type_resolution::hir_type_to_usage,
-};
+use super::hir::{GlobalsInferredMIRRoot, HIRRoot, HIRType, HIRTypedBoundName, StartingHIRRoot};
+use super::hir_type_resolution::hir_type_to_usage;
 
 #[derive(Debug, Clone)]
 pub struct PartiallyResolvedFunctionSignature {
@@ -97,18 +95,14 @@ pub fn build_name_registry_and_resolve_signatures(
                 parameters,
                 return_type,
                 body,
-                meta
+                meta,
             } => {
                 let mut param_types = vec![];
                 let mut resolved_params = vec![];
 
                 for type_def in parameters {
-                    let usage = hir_type_to_usage(
-                        &function_name,
-                        &type_def.typename,
-                        type_db,
-                        errors,
-                    )?;
+                    let usage =
+                        hir_type_to_usage(&function_name, &type_def.typename, type_db, errors)?;
 
                     let constructed = type_db.construct_usage(&usage);
                     if let Err(e) = constructed {
@@ -123,17 +117,12 @@ pub fn build_name_registry_and_resolve_signatures(
                     let type_id = constructed.unwrap();
                     resolved_params.push(HIRTypedBoundName {
                         name: type_def.name,
-                        typename: type_id
+                        typename: type_id,
                     });
                     param_types.push(type_id);
                 }
 
-                let usage = hir_type_to_usage(
-                    &function_name,
-                    &return_type,
-                    type_db,
-                    errors,
-                )?;
+                let usage = hir_type_to_usage(&function_name, &return_type, type_db, errors)?;
 
                 let constructed = type_db.construct_usage(&usage);
                 if let Err(e) = constructed {
@@ -151,15 +140,15 @@ pub fn build_name_registry_and_resolve_signatures(
 
                 registry.insert(&function_name, func_id);
 
-                HIRRoot::DeclareFunction { 
-                    function_name, 
-                    parameters: resolved_params, 
-                    body, 
-                    return_type, 
-                    meta
+                HIRRoot::DeclareFunction {
+                    function_name,
+                    parameters: resolved_params,
+                    body,
+                    return_type,
+                    meta,
                 }
             }
-            _ => todo!()
+            _ => todo!(),
         };
         new_mir.push(globals_inferred);
     }

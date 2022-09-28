@@ -466,9 +466,12 @@ pub struct BitLayoutPart {
 fn validate_instruction_sizes(table: &InstructionTable) {
     for layout in table.table.values() {
         let sum: u8 = (5u8) + layout.layout.iter().map(|x| x.length as u8).sum::<u8>() as u8;
-        assert!(sum == 32, "Instruction {ins} has {defined} bits defined instead of required 32!",
-                ins = layout.name,
-                defined = sum);
+        assert!(
+            sum == 32,
+            "Instruction {ins} has {defined} bits defined instead of required 32!",
+            ins = layout.name,
+            defined = sum
+        );
     }
 }
 
@@ -812,7 +815,6 @@ pub fn get_all_instruction_layouts() -> InstructionTable {
         ),
         part!(26 bits, "offset", "instruction offset")
     ));
-
 
     validate_instruction_sizes(&table);
 

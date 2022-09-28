@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use crate::ast::lexer::Operator;
 
-use super::type_constructor_db::{TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeUsage, TypeConstructor};
+use super::type_constructor_db::{
+    TypeConstructor, TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeUsage,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeConstructionError {
@@ -22,7 +24,6 @@ impl TypeInstanceId {
     pub fn size(self, type_db: &TypeInstanceManager) -> usize {
         type_db.get_instance(self).size
     }
-
 }
 
 impl Default for TypeInstanceId {
@@ -88,7 +89,7 @@ pub struct CommonTypeInstances {
 pub struct TypeInstanceManager {
     pub constructors: TypeConstructorDatabase,
     pub types: Vec<TypeInstance>,
-    pub common_types: CommonTypeInstances
+    pub common_types: CommonTypeInstances,
 }
 
 impl TypeInstanceManager {
@@ -98,7 +99,7 @@ impl TypeInstanceManager {
             constructors: TypeConstructorDatabase::new(),
             common_types: CommonTypeInstances {
                 ..Default::default()
-            }
+            },
         };
         item.init_builtin();
         item
@@ -226,7 +227,7 @@ impl TypeInstanceManager {
         }
 
         let id = TypeInstanceId(self.types.len());
-        self.types.push(make_base_instance(id,c, positional_args));
+        self.types.push(make_base_instance(id, c, positional_args));
 
         //build a map of argname => type id
         let mut type_args = HashMap::new();
@@ -279,7 +280,10 @@ impl TypeInstanceManager {
         Ok(id)
     }
 
-    fn make_casts(&mut self, constructor_id: TypeConstructorId) -> Result<Vec<TypeInstanceId>, TypeConstructionError> {
+    fn make_casts(
+        &mut self,
+        constructor_id: TypeConstructorId,
+    ) -> Result<Vec<TypeInstanceId>, TypeConstructionError> {
         let allowed_casts = {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
@@ -293,7 +297,10 @@ impl TypeInstanceManager {
         Ok(allowed_casts)
     }
 
-    fn make_binary_ops(&mut self, constructor_id: TypeConstructorId) -> Result<Vec<(Operator, TypeInstanceId, TypeInstanceId)>, TypeConstructionError> {
+    fn make_binary_ops(
+        &mut self,
+        constructor_id: TypeConstructorId,
+    ) -> Result<Vec<(Operator, TypeInstanceId, TypeInstanceId)>, TypeConstructionError> {
         let rhs_binary_ops = {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
@@ -310,7 +317,10 @@ impl TypeInstanceManager {
         Ok(rhs_binary_ops)
     }
 
-    fn make_unary_ops(&mut self, constructor_id: TypeConstructorId) -> Result<Vec<(Operator, TypeInstanceId)>, TypeConstructionError> {
+    fn make_unary_ops(
+        &mut self,
+        constructor_id: TypeConstructorId,
+    ) -> Result<Vec<(Operator, TypeInstanceId)>, TypeConstructionError> {
         let unary_ops = {
             let constructor = self.constructors.find(constructor_id);
 
@@ -324,7 +334,10 @@ impl TypeInstanceManager {
         Ok(unary_ops)
     }
 
-    fn make_fields(&mut self, constructor_id: TypeConstructorId) -> Result<Vec<TypeInstanceStructField>, TypeConstructionError> {
+    fn make_fields(
+        &mut self,
+        constructor_id: TypeConstructorId,
+    ) -> Result<Vec<TypeInstanceStructField>, TypeConstructionError> {
         let fields = {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
@@ -340,7 +353,12 @@ impl TypeInstanceManager {
         Ok(fields)
     }
 
-    fn make_methods(&mut self, constructor_id: TypeConstructorId, type_args: &HashMap<String, TypeInstanceId>, id: TypeInstanceId) -> Result<Vec<TypeInstanceStructMethod>, TypeConstructionError> {
+    fn make_methods(
+        &mut self,
+        constructor_id: TypeConstructorId,
+        type_args: &HashMap<String, TypeInstanceId>,
+        id: TypeInstanceId,
+    ) -> Result<Vec<TypeInstanceStructMethod>, TypeConstructionError> {
         let methods = {
             let constructor = self.constructors.find(constructor_id);
 
@@ -408,7 +426,11 @@ impl TypeInstanceManager {
     }
 }
 
-fn make_base_instance(id: TypeInstanceId, constructor: &TypeConstructor, positional_args: &[TypeInstanceId]) -> TypeInstance {
+fn make_base_instance(
+    id: TypeInstanceId,
+    constructor: &TypeConstructor,
+    positional_args: &[TypeInstanceId],
+) -> TypeInstance {
     TypeInstance {
         id,
         base: constructor.id,

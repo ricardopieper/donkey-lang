@@ -5,7 +5,7 @@ use crate::{
 
 use std::collections::HashSet;
 
-use super::{name_registry::NameRegistry, hir::{HIRRoot}, compiler_errors::CompilerError};
+use super::{compiler_errors::CompilerError, hir::HIRRoot, name_registry::NameRegistry};
 
 //Returns true if everything is valid
 fn check_expr<T>(
@@ -182,7 +182,7 @@ pub fn detect_undeclared_vars_and_redeclarations<T, T1, T2>(
                 body,
                 errors,
             ) {
-                return Err(CompilerError::TypeInferenceError)
+                return Err(CompilerError::TypeInferenceError);
             }
         };
     }

@@ -1,12 +1,16 @@
-use std::{fs::File, io::{Write, Read}};
+use std::{
+    fs::File,
+    io::{Read, Write},
+};
 
 use crate::donkey_vm::{
     asm::asm_instructions::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
+    encoder::LayoutHelper,
     vm::instructions::{
         AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation,
         ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes,
         OperationMode, SignFlag,
-    }, encoder::LayoutHelper,
+    },
 };
 
 use super::asm_instructions::{
@@ -75,7 +79,10 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
     }
 
     let mnemonics = split_instruction_mnemonic(splitted[0].to_lowercase().as_str());
-    let mnems_str_vec = mnemonics.iter().map(std::string::String::as_str).collect::<Vec<_>>();
+    let mnems_str_vec = mnemonics
+        .iter()
+        .map(std::string::String::as_str)
+        .collect::<Vec<_>>();
 
     let mnems_str = mnems_str_vec.as_slice();
 
@@ -97,11 +104,10 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
             AssemblyInstruction::PushRegister { register }
         }
         ["push", rest @ ..] => {
-
             let bytes = match rest {
                 ["imm"] => 4,
                 ["imm", size] => size.parse::<u8>().unwrap() / 8,
-                _ => panic!("Unrecognized push instruction {rest:?}")
+                _ => panic!("Unrecognized push instruction {rest:?}"),
             };
 
             let immediate: u16 = splitted[1].parse().unwrap();
@@ -118,7 +124,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                 immediate: immediate.to_le_bytes(),
                 shift_size,
             }
-        },
+        }
         ["storeaddr", rest @ ..] => {
             let (bytes, lsm) = match rest {
                 ["rel", size] => {
@@ -239,7 +245,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                     let imm_2bytes: [u8; 2] = immediate.try_into().unwrap();
                     let bytes = size.parse::<u8>().unwrap() / 8;
                     (Some(imm_2bytes), bytes)
-                },
+                }
                 [] => (None, 4),
                 [size] => (None, size.parse::<u8>().unwrap() / 8),
                 _ => panic!("Failed to parse instruction: {mnems_str:?}"),
@@ -346,7 +352,7 @@ pub fn parse_asm(asm: &str) -> Vec<AssemblyInstruction> {
 
 pub struct AsmProgram {
     pub instructions: Vec<AssemblyInstruction>,
-    pub symbol_table: std::collections::HashMap::<String, u32>
+    pub symbol_table: std::collections::HashMap<String, u32>,
 }
 
 pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
@@ -364,7 +370,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
             }
         }
     }
-   
+
     //now we know where labels point to
     for instruction in instructions {
         match instruction {
@@ -421,7 +427,10 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
         }
     }
 
-    AsmProgram { instructions: resolved_instructions, symbol_table: label_offsets }
+    AsmProgram {
+        instructions: resolved_instructions,
+        symbol_table: label_offsets,
+    }
 }
 
 fn load_store(ls: AsmLoadStoreMode) -> (LoadStoreAddressingMode, u32) {
@@ -429,7 +438,10 @@ fn load_store(ls: AsmLoadStoreMode) -> (LoadStoreAddressingMode, u32) {
         AsmLoadStoreMode::StackPop => (LoadStoreAddressingMode::Stack, 0),
         AsmLoadStoreMode::Relative { offset } => {
             if offset > 0 {
-                (LoadStoreAddressingMode::RelativeForward, offset.unsigned_abs())
+                (
+                    LoadStoreAddressingMode::RelativeForward,
+                    offset.unsigned_abs(),
+                )
             } else {
                 (
                     LoadStoreAddressingMode::RelativeBackward,
@@ -509,13 +521,12 @@ fn control_register(sign: AsmControlRegister) -> ControlRegister {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DonkeyProgram { 
+pub struct DonkeyProgram {
     pub instructions: Vec<Instruction>,
-    pub entry_point: usize
+    pub entry_point: usize,
 }
 
 impl DonkeyProgram {
-
     pub fn write_program(&self, out_file: &str) {
         let mut file = File::create(out_file).unwrap();
         let instruction_layout = LayoutHelper::new();
@@ -536,16 +547,18 @@ impl DonkeyProgram {
         file.read_to_end(&mut all_bytes).unwrap();
         let entry_point = u32::from_le_bytes(all_bytes[0..4].try_into().unwrap()) as usize;
         let mut instructions = vec![];
-       for i in (4..all_bytes.len()).step_by(4) {
+        for i in (4..all_bytes.len()).step_by(4) {
             let instruction_bytes = &all_bytes[i..=(i + 3)];
-            let instruction_as_u32 = u32::from_le_bytes(
-                instruction_bytes.try_into().expect("could not get 4 bytes"),
-            );
+            let instruction_as_u32 =
+                u32::from_le_bytes(instruction_bytes.try_into().expect("could not get 4 bytes"));
 
             let decoded = instruction_layout.begin_decode(instruction_as_u32).decode();
             instructions.push(decoded);
         }
-        DonkeyProgram { instructions, entry_point }
+        DonkeyProgram {
+            instructions,
+            entry_point,
+        }
     }
 }
 
@@ -695,13 +708,17 @@ pub fn as_donkey_vm_program(program: &AsmProgram) -> DonkeyProgram {
             }
         })
         .collect();
-    
-    let entry_point = *program.symbol_table.get("FUNC_main")
+
+    let entry_point = *program
+        .symbol_table
+        .get("FUNC_main")
         .or_else(|| program.symbol_table.get("main"))
         .unwrap_or(&0_u32) as usize;
-    
-    DonkeyProgram { instructions, entry_point }
 
+    DonkeyProgram {
+        instructions,
+        entry_point,
+    }
 }
 
 #[cfg(test)]
@@ -711,7 +728,10 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::donkey_vm::asm::{
-        asm_instructions::{AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction},
+        asm_instructions::{
+            AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp, AsmLoadStoreMode,
+            AsmSignFlag, AssemblyInstruction,
+        },
         assembler::{parse_asm, resolve},
     };
 
