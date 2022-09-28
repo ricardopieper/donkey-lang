@@ -1,5 +1,5 @@
 use super::hir::{HIRAstMetadata, HIRExpr, HIRExprMetadata, TrivialHIRExpr};
-use crate::ast::parser::AST;
+use crate::ast::parser::{AST, Expr};
 use crate::types::type_errors::IfStatementNotBoolean;
 use crate::types::type_errors::{AssignContext, CallToNonCallableType, FunctionCallArgumentCountMismatch, FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
@@ -172,28 +172,26 @@ fn get_actual_function_name_with_details(
     meta_ast: &HIRAstMetadata,
     meta_expr: &HIRExprMetadata,
 ) -> FunctionName {
-    if meta_ast.is_none() && meta_expr.is_none() {
-        return FunctionName::Function(function_name.to_string());
-    }
-
-    let expr = match meta_ast.as_ref() {
-        Some(AST::StandaloneExpr(expr)) => expr,
-        _ => meta_expr.as_ref().unwrap(),
+   //@TODO return FunctionName method variant
+    //Prioritize AST standalone expr
+    let expr = match meta_ast {
+        AST::StandaloneExpr(expr) => expr,
+        _ => meta_expr,
     };
 
     match expr {
-        crate::ast::parser::Expr::FunctionCall(function_name, _) => {
+        Expr::FunctionCall(function_name, _) => {
             match &**function_name {
-                crate::ast::parser::Expr::Variable(str) => {
+                Expr::Variable(str) => {
                     return FunctionName::Function(str.to_string())
                 }
-                crate::ast::parser::Expr::MemberAccess(_, member) => {
+                Expr::MemberAccess(_, member) => {
                     return FunctionName::Function(member.to_string())
                 }
                 _ => {}
             };
         }
-        crate::ast::parser::Expr::IndexAccess(_, _) => return FunctionName::IndexAccess,
+        Expr::IndexAccess(_, _) => return FunctionName::IndexAccess,
         _ => {}
     };
 
@@ -245,8 +243,8 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         .collect::<Vec<_>>();
                     let actual_function_name = get_actual_function_name_with_details(
                         called_function,
-                        meta_ast,
-                        expr_metadata,
+                        meta_ast.into(),
+                        expr_metadata.into(),
                     );
                     check_function_arguments_match_param_types(
                         function_name,
@@ -260,6 +258,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     function,
                     args,
                     meta_ast,
+                    meta_expr
                 } => {
                     let function_type = find_variable_and_get_type(function, body_node, scopes, names);
                     let type_data = type_db.get_instance(function_type);
@@ -278,7 +277,7 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         .collect::<Vec<_>>();
 
                     let actual_function_name =
-                        get_actual_function_name_with_details(function, meta_ast, &None);
+                        get_actual_function_name_with_details(function, meta_ast.into(), meta_expr.into());
                         
                     check_function_arguments_match_param_types(
                         function_name,
@@ -329,8 +328,8 @@ fn methods_receive_parameters_of_correct_type(
 
                 let actual_function_name = get_actual_function_name_with_details(
                     &method_function_type_data.name,
-                    meta_ast,
-                    expr_metadata,
+                    meta_ast.into(),
+                    expr_metadata.into(),
                 );
 
                 check_function_arguments_match_param_types(
@@ -433,7 +432,7 @@ mod tests {
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast());
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
-        let mir = hir_to_mir(&analysis_result.final_hir);
+        let mir = hir_to_mir(&analysis_result.hir);
 
         println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
 

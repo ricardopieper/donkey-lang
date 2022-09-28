@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::fmt::Write;
 
 use crate::ast::lexer::Operator;
+use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
 use crate::types::type_instance_db::TypeInstanceId;
@@ -19,27 +20,42 @@ pub enum TrivialHIRExpr {
 }
 
 /**
- * The HIR is great to work with. It simplifies a ton of stuff, reduces the tree depth, reduces recursion,
- * it's overall a good thing IMO. However, it loses some data. Actually, more data is created, more
- * intermediate steps and more structure is added. What happens is that, during type checking,
- * some checks can fail on compiler-generated data, like intermediates. The error message is thus entirely unusable.
+ * The HIR is a lowered form of the original AST, so it may lose some data. For instance, an indexing access
+ * is just a call to __index__. If we don't add metadata to the tree, the compiler will report an incorrect call
+ * to __index__ instead of an incorrect indexing operation, thus the error message is entirely unusable.
  *
  * Therefore, we will add some metadata to the HIR nodes referring to the raw AST and expr nodes. They will carry the context in which
  * the compiler was operating that is closer to the user, and if anything on that context fails, then that is used in the error messages.
  */
-pub type HIRExprMetadata = Option<Expr>;
-pub type HIRAstMetadata = Option<AST>;
+pub type HIRExprMetadata = Expr;
+pub type HIRAstMetadata = AST;
 
+/**
+ * Instead of having just one HIR representation, we have many different representations that are appropriate for each step.
+ * For instance, in the type checker, we receive a fully type-inferred HIR instead of receiving one that potentially has
+ * types not yet inferred. With generics, we ensure that this is not the case. In fact I had actual problems during development
+ * with unexpected uninferred types, and this eliminated them using the Rust type system.
+ * 
+ * HIR is for the function *bodies*, while HIRRoot is for function declarations, struct declarations, etc. 
+ */
 
-pub type StartingHIR = HIR<HIRType, HIRExpr<()>>;
+ //The HIR right after AST transformation, no types. HIRExpr is () because the type certainly is unknown.
+pub type UninferredHIR = HIR<HIRType, HIRExpr<()>>;
+
+//The HIR after expanding variable assignments into declarations the first time they're assigned. In this case 
+//we create them as PendingInference. We also wrap given type declarations in a HIRTypeDef::Provided.
 pub type FirstAssignmentsDeclaredHIR = HIR<HIRTypeDef, HIRExpr<()>>;
-pub type GlobalsInferredMIR = HIR<HIRType, HIRExpr<()>>;
+
+//The HIR with types inferred already, ready for typechecking and MIR lowering
 pub type InferredTypeHIR = HIR<TypeInstanceId,  HIRExpr<TypeInstanceId>>;
 
-
-pub type StartingHIRRoot = HIRRoot<HIRType, StartingHIR>;
+//HIR roots right after AST transformation
+pub type StartingHIRRoot = HIRRoot<HIRType, UninferredHIR>;
+//HIR roots after inferring and registering globals, bodies have not changed 
+pub type GlobalsInferredMIRRoot = HIRRoot<TypeInstanceId, UninferredHIR>;
+//HIR roots now with body changed, first assignments became declarations 
 pub type FirstAssignmentsDeclaredHIRRoot = HIRRoot<TypeInstanceId, FirstAssignmentsDeclaredHIR>;
-pub type GlobalsInferredMIRRoot = HIRRoot<TypeInstanceId, GlobalsInferredMIR>;
+//HIR roots with bodies fully inferred
 pub type InferredTypeHIRRoot = HIRRoot<TypeInstanceId, InferredTypeHIR>;
 
 
@@ -84,6 +100,26 @@ pub enum HIRType {
     //Function(Vec<HIRType>, Box<HIRType>),
 }
 
+//we need to be able to represent complex stuff,
+//like a function that receives a function, whose parameters are generic
+//def func(another_func: Function<List<String>>)
+
+//so we can store TypeIds, but we need it to be accompanied by more data depending on the kind of the type,
+//types such as functions and generics need to be "instanced"
+
+impl From<&ASTType> for HIRType {
+    fn from(typ: &ASTType) -> Self {
+        match typ {
+            ASTType::Simple(name) => Self::Simple(name.clone()),
+            ASTType::Generic(name, generics) => {
+                let hir_generics = generics.iter().map(Self::from).collect::<Vec<_>>();
+                HIRType::Generic(name.clone(), hir_generics)
+            }
+        }
+    }
+}
+
+
 impl Display for HIRType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -127,29 +163,9 @@ pub struct HIRTypedBoundName<TExprType> {
 
 
 
-//we need to be able to represent complex stuff,
-//like a function that receives a function, whose parameters are generic
-//def func(another_func: Function<List<String>>)
-
-//so we can store TypeIds, but we need it to be accompanied by more data depending on the kind of the type,
-//types such as functions and generics need to be "instanced"
-
-impl HIRType {
-    fn from_ast(typ: &ASTType) -> Self {
-        match typ {
-            ASTType::Simple(name) => Self::Simple(name.clone()),
-            ASTType::Generic(name, generics) => {
-                let hir_generics = generics.iter().map(Self::from_ast).collect::<Vec<_>>();
-                HIRType::Generic(name.clone(), hir_generics)
-            }
-        }
-    }
-}
-
 /*
-The HIR expression is similar to the AST, but has type information on every node.
+The HIR expression is similar to the AST, but can have type information on every node.
 */
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRRoot<TGlobalTypes, TBodyType> {
     DeclareFunction {
@@ -161,7 +177,7 @@ pub enum HIRRoot<TGlobalTypes, TBodyType> {
     },
     StructDeclaration {
         struct_name: String,
-        body: Vec<HIRTypedBoundName<TGlobalTypes>>,
+        fields: Vec<HIRTypedBoundName<TGlobalTypes>>,
         meta: HIRAstMetadata,
     },
 }
@@ -184,7 +200,8 @@ pub enum HIR<TVariableDeclType, TExprType> {
     FunctionCall {
         function: TExprType,
         args: Vec<TExprType>,
-        meta: HIRAstMetadata,
+        meta_ast: HIRAstMetadata,
+        meta_expr: HIRExprMetadata,
     },
     //condition, true branch, false branch
     //this transforms elifs into else: \n\t if ..
@@ -199,7 +216,7 @@ struct IfTreeNode<TDeclType, TExprType> {
     body_meta: AST,
 }
 
-pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
+fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
     match expr {
         Expr::IntegerValue(i) => HIRExpr::Trivial(
             TrivialHIRExpr::IntegerValue(*i),
@@ -255,7 +272,7 @@ pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
                     expr_to_hir_expr(index)
                 ],
                 (),
-                Some(expr.clone()))
+                expr.clone())
         }
         Expr::BinaryOperation(lhs, op, rhs) => {
             let lhs = expr_to_hir_expr(lhs);
@@ -294,38 +311,7 @@ pub fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
     }
 }
 
-pub fn ast_globals_to_hir(ast: &AST, accum: &mut Vec<StartingHIRRoot>) {
-    match ast {
-        AST::DeclareFunction {
-            function_name,
-            parameters,
-            body,
-            return_type,
-        } => {
-            ast_decl_function_to_hir(body, function_name, parameters, return_type, ast, accum);
-        }
-        AST::Root(ast_nodes) => {
-            for node in ast_nodes {
-                ast_globals_to_hir(node, accum);
-            }
-        }
-        AST::StructDeclaration { struct_name, body } => {
-            let fields = body.iter().map(|field| HIRTypedBoundName {
-                name: field.name.clone(),
-                typename: HIRType::from_ast(&field.name_type),
-            });
-            accum.push(HIRRoot::StructDeclaration {
-                struct_name: struct_name.clone(),
-                body: fields.collect(),
-                meta: Some(ast.clone()),
-            });
-        }
-        other => panic!("Root AST not supported: {other:?}")
-    }
-}
-
-
-pub fn ast_to_hir(ast: &AST, accum: &mut Vec<StartingHIR>) {
+fn ast_to_hir(ast: &AST, accum: &mut Vec<UninferredHIR>) {
     match ast {
         AST::Declare { var, expression } => {
             //expr: we have to decompose the expression into HIR declarations
@@ -337,12 +323,13 @@ pub fn ast_to_hir(ast: &AST, accum: &mut Vec<StartingHIR>) {
             //for the decomposition.
             let result_expr = expr_to_hir_expr(expression);
 
+            let typedef: HIRType = (&var.name_type).into();
             let decl_hir = HIR::Declare {
                 var: var.name.clone(),
-                typedef: HIRType::from_ast(&var.name_type),
+                typedef,
                 expression: result_expr,
-                meta_expr: Some(expression.clone()),
-                meta_ast: Some(ast.clone()),
+                meta_expr: expression.clone(),
+                meta_ast: ast.clone(),
             };
 
             accum.push(decl_hir);
@@ -353,8 +340,8 @@ pub fn ast_to_hir(ast: &AST, accum: &mut Vec<StartingHIR>) {
             let decl_hir = HIR::Assign {
                 path: path.clone(),
                 expression: result_expr,
-                meta_ast: Some(ast.clone()),
-                meta_expr: Some(expression.clone()),
+                meta_ast: ast.clone(),
+                meta_expr: expression.clone(),
             };
 
             accum.push(decl_hir);
@@ -367,7 +354,7 @@ pub fn ast_to_hir(ast: &AST, accum: &mut Vec<StartingHIR>) {
                 let result_expr = expr_to_hir_expr(e);
                 accum.push(HIR::Return(
                     result_expr,
-                    Some(ast.clone()),
+                    ast.clone(),
                 ));
             }
         },
@@ -386,7 +373,8 @@ pub fn ast_to_hir(ast: &AST, accum: &mut Vec<StartingHIR>) {
             accum.push(HIR::FunctionCall {
                 function: *function.clone(),
                 args: typed_args,
-                meta: Some(ast.clone()),
+                meta_ast: ast.clone(),
+                meta_expr: expr.clone()
             });
         }
         AST::IfStatement {
@@ -412,37 +400,43 @@ fn ast_decl_function_to_hir(
     for node in body {
         ast_to_hir(node, &mut function_body);
     }
-    let decl_hir = HIRRoot::DeclareFunction {
+
+    let decl_hir: StartingHIRRoot = HIRRoot::DeclareFunction {
         function_name: function_name.to_string(),
-        parameters: parameters
-            .iter()
-            .map(|param| {
-                let name = param.name.clone();
-                HIRTypedBoundName {
-                    name,
-                    typename: HIRType::from_ast(&param.name_type),
-                }
-            })
-            .collect(),
+        parameters: create_type_bound_names(parameters),
         body: function_body,
         return_type: match return_type {
-            Some(x) =>HIRType::from_ast(x),
-            None =>HIRType::Simple("Void".into())
+            Some(x) => x.into(),
+            None => HIRType::Simple("Void".into())
         },
-        meta: Some(ast.clone()),
+        meta: ast.clone(),
     };
     accum.push(decl_hir);
     //yes, each function declaration created the intermediares for their body to work, but they don't
     //escape the scope of the function!
 }
 
+fn create_type_bound_names(parameters: &[TypeBoundName]) -> Vec<HIRTypedBoundName<HIRType>> {
+    parameters
+        .iter()
+        .map(create_type_bound_name)
+        .collect()
+}
+
+fn create_type_bound_name(param: &TypeBoundName) -> HIRTypedBoundName<HIRType> {
+    HIRTypedBoundName {
+        name: param.name.clone(),
+        typename: (&param.name_type).into(),
+    }
+}
+
 fn ast_if_to_hir(
     true_branch: &crate::ast::parser::ASTIfStatement,
-    accum: &mut Vec<StartingHIR>,
+    accum: &mut Vec<UninferredHIR>,
     elifs: &[crate::ast::parser::ASTIfStatement],
     final_else: &Option<Vec<AST>>,
     ast: &AST,
-) -> i32 {
+) {
     let true_branch_result_expr = expr_to_hir_expr(&true_branch.expression);
 
     let mut true_body_hir = vec![];
@@ -458,18 +452,14 @@ fn ast_if_to_hir(
       First we have to handle some base cases, i.e. no more elifs ou elses, no more elifs but there is an else, etc.
     */
     if elifs.is_empty() && final_else.is_none() {
-        /* Just like function declarations, the intermediaries created here don't escape the context.
-           This is different than python, where all variables declared are scoped to the entire function;
-        */
-
+        //Just like function declarations, the intermediaries created here don't escape the context.
+        //This is different than python, where all variables declared are scoped to the entire function;
         accum.push(HIR::If(
             true_branch_result_expr,
             true_body_hir,
             vec![],
-            Some(ast.clone()),
+            ast.clone(),
         ));
-
-        0
     } else if elifs.is_empty() && final_else.is_some() {
         //in this case we have a final else, just generate a false branch
         let mut false_body_hir = vec![];
@@ -485,11 +475,10 @@ fn ast_if_to_hir(
                     true_branch_result_expr,
                     true_body_hir,
                     false_body_hir,
-                    Some(ast.clone()),
+                    ast.clone(),
                 ));
             }
         }
-        0
     } else {
         //in this case we have elifs, so we build the "tree"
         //and we don't actually need to store the false body because we'll connect everything later.
@@ -527,7 +516,6 @@ fn ast_if_to_hir(
             }
         }
 
-        //trivialexpr, vec<hir>, vec<hir>
         let mut final_if_chain = None;
 
         if !final_else_body.is_empty() {
@@ -544,19 +532,44 @@ fn ast_if_to_hir(
         //we navigate through the nodes in reverse and build the final HIR tree
         for node in nodes {
             let new_node = match final_if_chain {
-                None => HIR::If(node.condition, node.true_body, vec![], Some(node.body_meta)),
+                None => HIR::If(node.condition, node.true_body, vec![], node.body_meta),
                 Some(current_chain) => HIR::If(
                     node.condition,
                     node.true_body,
                     vec![current_chain],
-                    Some(node.body_meta),
+                    node.body_meta,
                 ),
             };
             final_if_chain = Some(new_node);
         }
         accum.push(final_if_chain.unwrap());
+    }
+}
 
-        0
+pub fn ast_globals_to_hir(ast: &AST, accum: &mut Vec<StartingHIRRoot>) {
+    match ast {
+        AST::DeclareFunction {
+            function_name,
+            parameters,
+            body,
+            return_type,
+        } => {
+            ast_decl_function_to_hir(body, function_name, parameters, return_type, ast, accum);
+        }
+        AST::Root(ast_nodes) => {
+            for node in ast_nodes {
+                ast_globals_to_hir(node, accum);
+            }
+        }
+        AST::StructDeclaration { struct_name, body } => {
+            let fields = create_type_bound_names(body);
+            accum.push(HIRRoot::StructDeclaration {
+                struct_name: struct_name.clone(),
+                fields,
+                meta: ast.clone(),
+            });
+        }
+        other => panic!("AST not supported: {other:?}")
     }
 }
 

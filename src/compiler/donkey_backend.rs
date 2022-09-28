@@ -674,6 +674,7 @@ fn generate_function_decl_block(
                 function: _,
                 args: _,
                 meta_ast: _,
+                meta_expr: _
             } => todo!("Function calls not implemented"),
         }
     }
@@ -810,7 +811,7 @@ mod test {
             let type_err_display = TypeErrorPrinter::new(&analysis_result.type_errors, &analysis_result.type_db);
             panic!("Type errors:\n{}", type_err_display)
         }
-        let mir = hir_to_mir(&analysis_result.final_hir);
+        let mir = hir_to_mir(&analysis_result.hir);
         println!("{}", crate::semantic::mir_printer::print_mir(&mir, &analysis_result.type_db));
         let errors = check_type(&mir, &analysis_result.type_db, &analysis_result.globals);
         

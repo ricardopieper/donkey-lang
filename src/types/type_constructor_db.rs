@@ -234,14 +234,6 @@ impl TypeConstructorDatabase {
         record.methods.push(signature);
     }
 
-    /*pub fn add_field(&mut self, type_id: TypeConstructorId, name: &str, field_type: TypeConstructor) {
-        let record = self.types.get_mut(type_id.0).unwrap();
-        record.fields.push(TypeField {
-            name: name.to_string(),
-            field_type,
-        });
-    }*/
-
     pub fn add_simple_field(
         &mut self,
         type_id: TypeConstructorId,

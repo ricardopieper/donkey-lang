@@ -181,7 +181,7 @@ fn print_hir_str(node: &HIRRoot<impl TypeNamePrinter, HIR<impl TypeNamePrinter, 
             function
         },
         HIRRoot::StructDeclaration {
-            struct_name, body, ..
+            struct_name, fields: body, ..
         } => {
             let mut structdecl = format!("{}struct {}:\n", indent, struct_name);
 

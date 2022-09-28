@@ -1,3 +1,4 @@
+use crate::ast::parser::{AST, Expr};
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, TrivialHIRExpr, HIR};
 
 use crate::semantic::name_registry::NameRegistry;
@@ -142,7 +143,7 @@ fn compute_infer_method_call(
     errors: &mut TypeErrors,
     method_name: &String,
     params: &[HIRExpr<()>],
-    meta: &Option<crate::ast::parser::Expr>
+    meta: &Expr
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
     //compute type of obj
     //find method_name in type of obj
@@ -193,7 +194,7 @@ fn compute_infer_array(
     errors: &mut TypeErrors,
     on_function: &str,
     type_db: &mut TypeInstanceManager,
-    meta: &Option<crate::ast::parser::Expr>,
+    meta: &Expr,
     decls_in_scope: &NameRegistry,
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
     if array_items.is_empty() && type_hint.is_none() {
@@ -248,7 +249,7 @@ fn compute_infer_member_access(
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
     obj: &HIRExpr<()>,
-    meta: &Option<crate::ast::parser::Expr>,
+    meta: &Expr,
     errors: &mut TypeErrors,
     name: &str,
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
@@ -286,7 +287,7 @@ fn compute_infer_unary_expr(
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
     rhs: &HIRExpr<()>,
-    meta: &Option<crate::ast::parser::Expr>,
+    meta: &Expr,
     errors: &mut TypeErrors,
     op: crate::ast::lexer::Operator,
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
@@ -330,7 +331,7 @@ fn compute_infer_function_call(
     on_function: &str,
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
-    meta: &Option<crate::ast::parser::Expr>,
+    meta: &Expr,
     errors: &mut TypeErrors
 ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
     let HIRExpr::Trivial(TrivialHIRExpr::Variable(var), .., fcall_meta) = &fun_expr else {
@@ -380,7 +381,7 @@ fn compute_infer_binop(
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &NameRegistry,
     lhs: &HIRExpr<()>,
-    meta: &Option<crate::ast::parser::Expr>,
+    meta: &Expr,
     errors: &mut TypeErrors,
     rhs: &HIRExpr<()>,
     op: crate::ast::lexer::Operator,
@@ -465,7 +466,8 @@ fn infer_types_in_body(
             HIR::FunctionCall {
                 function,
                 args,
-                meta,
+                meta_ast, 
+                meta_expr,
             } => infer_types_in_fcall(
                 function,
                 args,
@@ -473,7 +475,7 @@ fn infer_types_in_body(
                 type_db,
                 decls_in_scope,
                 errors,
-                meta,
+                meta_ast, meta_expr,
             )?,
             HIR::If(condition, true_branch, false_branch, meta) => {
                 infer_types_in_if_statement_and_blocks(
@@ -504,7 +506,7 @@ fn infer_types_in_return(
     decls_in_scope: &mut NameRegistry,
     expr: &HIRExpr<()>,
     errors: &mut TypeErrors,
-    meta: &Option<crate::ast::parser::AST>,
+    meta: &AST,
 ) -> Result<InferredTypeHIR, CompilerError> {
     let typed_expr =
         compute_and_infer_expr_type(on_function, type_db, decls_in_scope, expr, None, errors)?;
@@ -519,7 +521,7 @@ fn infer_types_in_if_statement_and_blocks(
     errors: &mut TypeErrors,
     false_branch: &[TypeInferenceInputHIR],
     condition: &HIRExpr<()>,
-    meta: &Option<crate::ast::parser::AST>,
+    meta: &AST,
 ) ->  Result<InferredTypeHIR,CompilerError>  {
     let true_branch_inferred = infer_types_in_body(
         on_function,
@@ -558,7 +560,8 @@ fn infer_types_in_fcall(
     type_db: &mut TypeInstanceManager,
     decls_in_scope: &mut NameRegistry,
     errors: &mut TypeErrors,
-    meta: &Option<crate::ast::parser::AST>,
+    meta_ast: &AST,
+    meta_expr: &Expr,
 ) -> Result<InferredTypeHIR,CompilerError> {
 
     let function_arg = compute_and_infer_expr_type(on_function, type_db, decls_in_scope,
@@ -568,7 +571,8 @@ fn infer_types_in_fcall(
     Ok(HIR::FunctionCall {
         function: function_arg,
         args: inferred_args,
-        meta: meta.clone(),
+        meta_ast: meta_ast.clone(),
+        meta_expr: meta_expr.clone(),
     })
 }
 
@@ -579,8 +583,8 @@ fn infer_types_in_assignment(
     expression: &HIRExpr<()>,
     errors: &mut TypeErrors,
     path: &[String],
-    meta_ast: &Option<crate::ast::parser::AST>,
-    meta_expr: &Option<crate::ast::parser::Expr>,
+    meta_ast: &AST,
+    meta_expr: &Expr,
 ) -> Result<InferredTypeHIR, CompilerError> {
     let typed_expr = compute_and_infer_expr_type(
         on_function,
@@ -606,8 +610,8 @@ fn infer_types_in_variable_declaration(
     decls_in_scope: &mut NameRegistry,
     assigned_value: &HIRExpr<()>,
     variable_name: &str,
-    meta_ast: &Option<crate::ast::parser::AST>,
-    meta_expr: &Option<crate::ast::parser::Expr>,
+    meta_ast: &AST,
+    meta_expr: &Expr,
 ) -> Result<InferredTypeHIR, CompilerError> {
     //Type hint takes precedence over expr type
     let variable_chosen = match variable_typedecl {

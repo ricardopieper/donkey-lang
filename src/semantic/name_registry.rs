@@ -47,10 +47,6 @@ impl NameRegistry {
         self.partially_resolved_function_sigs.get(name)
     }
 
-    /*pub fn insert_function_unresolved(&mut self, function_sig: UnresolvedFunction) {
-        self.names.insert(function_sig.name.to_string(), NameRegistryRecord::Function(TypeResolvedState::Unresolved(function_sig)));
-    }*/
-
     pub fn include(&mut self, outer: &NameRegistry) {
         for (k, v) in &outer.names {
             self.names.insert(k.to_string(), *v);

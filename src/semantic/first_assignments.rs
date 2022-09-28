@@ -2,10 +2,10 @@ use crate::{semantic::hir::{HIR, HIRTypedBoundName}, types::type_instance_db::Ty
 
 use std::collections::HashSet;
 
-use super::hir::{StartingHIR, HIRRoot, GlobalsInferredMIR, GlobalsInferredMIRRoot, HIRTypeDef, FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot};
+use super::hir::{UninferredHIR, HIRRoot, GlobalsInferredMIRRoot, HIRTypeDef, FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot};
 
 fn make_first_assignments_in_body(
-    body: &[StartingHIR],
+    body: &[UninferredHIR],
     declarations_found: &mut HashSet<String>,
 ) -> Vec<FirstAssignmentsDeclaredHIR> {
     let mut new_mir: Vec<FirstAssignmentsDeclaredHIR> = vec![];
@@ -62,8 +62,8 @@ fn make_first_assignments_in_body(
                     meta.clone(),
                 )
             }
-            HIR::FunctionCall { function, args, meta } => 
-                HIR::FunctionCall { function: function.clone(), args: args.clone(), meta: meta.clone() },
+            HIR::FunctionCall { function, args, meta_ast, meta_expr } => 
+                HIR::FunctionCall { function: function.clone(), args: args.clone(), meta_ast: meta_ast.clone(), meta_expr: meta_expr.clone() },
             HIR::Return(expr, meta_ast) => HIR::Return(expr.clone(), meta_ast.clone()),
             HIR::EmptyReturn => HIR::EmptyReturn,
             
@@ -76,7 +76,7 @@ fn make_first_assignments_in_body(
 
 fn make_assignments_into_declarations_in_function(
     parameters: &[HIRTypedBoundName<TypeInstanceId>],
-    body: &[GlobalsInferredMIR]
+    body: &[UninferredHIR]
 ) -> Vec<FirstAssignmentsDeclaredHIR> {
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type

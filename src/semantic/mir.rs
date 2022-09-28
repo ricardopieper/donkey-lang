@@ -46,13 +46,14 @@ pub enum MIRBlockNode {
     Assign {
         path: Vec<String>,
         expression: HIRExpr<TypeInstanceId>,
-        meta_ast: Option<AST>,
-        meta_expr: Option<Expr>,
+        meta_ast: AST,
+        meta_expr: Expr,
     },
     FunctionCall {
         function: String,
         args: Vec<HIRExpr<TypeInstanceId>>,
-        meta_ast: Option<AST>,
+        meta_ast: AST,
+        meta_expr: Expr,
     },
     //@TODO Add method call here
 }
@@ -291,14 +292,15 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
             HIR::FunctionCall {
                 function,
                 args,
-                meta,
+                meta_ast, meta_expr
             } => {
                 match &function {
                     HIRExpr::Trivial(TrivialHIRExpr::Variable(var), ..) => {
                         emitter.emit(MIRBlockNode::FunctionCall {
                             function: var.clone(),
                             args: args.clone(),
-                            meta_ast: meta.clone(),
+                            meta_ast: meta_ast.clone(),
+                            meta_expr: meta_expr.clone(),
                         });
                     }
                     other => panic!("{:?} is not a function!", other),
@@ -503,9 +505,9 @@ mod tests {
         let ast = AST::Root(parser.parse_ast());
         println!("AST: {:?}", &ast);
         let analysis_result = crate::semantic::analysis::do_analysis(&ast);
-        println!("HIR: {:?}", &analysis_result.final_hir);
+        println!("HIR: {:?}", &analysis_result.hir);
         (
-            hir_to_mir(&analysis_result.final_hir),
+            hir_to_mir(&analysis_result.hir),
             analysis_result.type_db,
         )
     }

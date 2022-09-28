@@ -399,9 +399,6 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             let offset = memory.native_read::<u32>(reg.sp);
             reg.ip = offset as usize;
         }
-        /*_ => {
-            panic!("Tried to execute unknown instruction {:?}", inst);
-        }*/
     }
     false
 }
