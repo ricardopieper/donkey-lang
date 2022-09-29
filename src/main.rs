@@ -138,14 +138,14 @@ fn compile(file_name: &str) -> DonkeyEmitter {
     let tokens = lexer::tokenize(input.as_str());
     let ast = parser::parse_ast(tokens.unwrap());
     let root = parser::AST::Root(ast);
-    let result = crate::semantic::analysis::do_analysis(&root);
+    let mut result = crate::semantic::analysis::do_analysis(&root);
     print_hir(&result.hir, &result.type_db);
     let mir = hir_to_mir(&result.hir);
     println!("{}", mir_printer::print_mir(&mir, &result.type_db));
-    let errors = check_type(&mir, &result.type_db, &result.globals);
-    if errors.count() > 0 {
-        let printer = TypeErrorPrinter::new(&errors, &result.type_db);
-        println!("{}", printer);
+    let typechecked = check_type(mir, &result.type_db, &result.globals, &mut result.type_errors);
+    if result.type_errors.count() > 0 {
+        let printer = TypeErrorPrinter::new(&mut result.type_errors, &result.type_db);
+        panic!("{}", printer);
     }
-    generate_donkey_vm(&result.type_db, &mir)
+    generate_donkey_vm(&result.type_db, &typechecked.unwrap())
 }

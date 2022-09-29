@@ -5,7 +5,7 @@ use crate::donkey_vm::asm::asm_instructions::{
 };
 use crate::semantic::hir::{HIRExpr, TrivialHIRExpr};
 use crate::semantic::mir::{
-    BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, MIRTypedBoundName,
+    BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, MIRTypedBoundName, TypecheckedExpression,
 };
 use crate::types::type_constructor_db::TypeSign;
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
@@ -607,7 +607,7 @@ fn generate_arith_binexpr_code(
 fn generate_decl_function(
     name: &str,
     parameters: &[MIRTypedBoundName],
-    body: &[MIRBlock],
+    body: &[MIRBlock<TypecheckedExpression>],
     scopes: &[MIRScope],
     bytecode: &mut DonkeyEmitter,
     type_db: &TypeInstanceManager,
@@ -701,7 +701,7 @@ fn generate_decl_function(
 fn generate_function_decl_block(
     parameters: &[MIRTypedBoundName],
     scope_byte_layout: &[HashMap<String, ByteRange>],
-    block: &MIRBlock,
+    block: &MIRBlock<TypecheckedExpression>,
     target_blocks: &HashSet<BlockId>,
     bytecode: &mut DonkeyEmitter,
     type_db: &TypeInstanceManager,
@@ -715,14 +715,14 @@ fn generate_function_decl_block(
         let label = format!("LBL_{}", block.index);
         bytecode.push(AssemblyInstruction::Label { label });
     }
-    for elems in &block.block {
+    for elems in &block.nodes {
         match elems {
             MIRBlockNode::Assign {
                 path, expression, ..
             } if path.len() == 1 => {
                 let var_name = path.first().unwrap();
                 let range = scope.get(var_name).unwrap();
-                let size = generate_expr(type_db, expression, bytecode, scope, *offset_from_bp);
+                let size = generate_expr(type_db, &expression.0, bytecode, scope, *offset_from_bp);
                 *offset_from_bp = size.offset_from_bp;
                 bytecode.push_annotated(
                     AssemblyInstruction::StoreAddress {
@@ -750,7 +750,7 @@ fn generate_function_decl_block(
 
 fn generate_func_block_finish(
     parameters: &[MIRTypedBoundName],
-    block: &MIRBlock,
+    block: &MIRBlock<TypecheckedExpression>,
     type_db: &TypeInstanceManager,
     bytecode: &mut DonkeyEmitter,
     scope: &HashMap<String, ByteRange>,
@@ -759,7 +759,7 @@ fn generate_func_block_finish(
     match &block.finish {
         MIRBlockFinal::If(true_expr, true_branch, false_branch, ..) => {
             let generated_expr =
-                generate_expr(type_db, true_expr, bytecode, scope, *offset_from_bp);
+                generate_expr(type_db, &true_expr.0, bytecode, scope, *offset_from_bp);
             *offset_from_bp = generated_expr.offset_from_bp;
             //generate a jz to the false branch
             //assert that the true branch is just the next one
@@ -780,7 +780,7 @@ fn generate_func_block_finish(
             }
         }
         MIRBlockFinal::Return(expr, _) => {
-            let generated_expr = generate_expr(type_db, expr, bytecode, scope, *offset_from_bp);
+            let generated_expr = generate_expr(type_db, &expr.0, bytecode, scope, *offset_from_bp);
             *offset_from_bp = generated_expr.offset_from_bp;
 
             let mut args_size = 0i32;
@@ -817,7 +817,7 @@ fn generate_func_block_finish(
 
 fn generate_for_top_lvl(
     type_db: &TypeInstanceManager,
-    node: &MIRTopLevelNode,
+    node: &MIRTopLevelNode<TypecheckedExpression>,
     emitter: &mut DonkeyEmitter,
 ) {
     match node {
@@ -837,7 +837,7 @@ fn generate_for_top_lvl(
 
 pub fn generate_donkey_vm(
     type_db: &TypeInstanceManager,
-    mir_top_level_nodes: &[MIRTopLevelNode],
+    mir_top_level_nodes: &[MIRTopLevelNode<TypecheckedExpression>],
 ) -> DonkeyEmitter {
     let mut emitter = DonkeyEmitter::new();
     for mir_node in mir_top_level_nodes {
@@ -862,7 +862,7 @@ mod test {
             },
         },
         semantic::{
-            mir::{hir_to_mir, MIRTopLevelNode},
+            mir::{hir_to_mir, MIRTopLevelNode, TypecheckedExpression},
             type_checker::check_type,
         },
         types::{
@@ -872,7 +872,7 @@ mod test {
     };
 
     pub struct TestContext {
-        mir: Vec<MIRTopLevelNode>,
+        mir: Vec<MIRTopLevelNode<TypecheckedExpression>>,
         database: TypeInstanceManager,
         //globals: NameRegistry,
         type_errors: TypeErrors,
@@ -885,7 +885,7 @@ mod test {
             .unwrap();
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast());
-        let analysis_result = crate::semantic::analysis::do_analysis(&ast);
+        let mut analysis_result = crate::semantic::analysis::do_analysis(&ast);
         if analysis_result.type_errors.count() > 0 {
             let type_err_display =
                 TypeErrorPrinter::new(&analysis_result.type_errors, &analysis_result.type_db);
@@ -896,18 +896,18 @@ mod test {
             "{}",
             crate::semantic::mir_printer::print_mir(&mir, &analysis_result.type_db)
         );
-        let errors = check_type(&mir, &analysis_result.type_db, &analysis_result.globals);
+        let type_checked = check_type(mir, &analysis_result.type_db, &analysis_result.globals, &mut analysis_result.type_errors);
 
-        if errors.count() > 0 {
-            let type_err_display = TypeErrorPrinter::new(&errors, &analysis_result.type_db);
+        if analysis_result.type_errors.count() > 0 {
+            let type_err_display = TypeErrorPrinter::new(&analysis_result.type_errors, &analysis_result.type_db);
             panic!("Type errors:\n{}", type_err_display)
         }
 
         TestContext {
-            mir,
+            mir: type_checked,
             database: analysis_result.type_db,
             //globals: analysis_result.globals,
-            type_errors: errors,
+            type_errors: analysis_result.type_errors,
         }
     }
 

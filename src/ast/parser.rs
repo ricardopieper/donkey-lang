@@ -966,18 +966,22 @@ impl Parser {
                                             op,
                                             Box::new(right_side_index_access),
                                         ));
+                                        was_operand = true;
                                     }
                                     expr => {
                                         let index_access = self.index_access_helper(&expr)?;
                                         self.push_operand(index_access);
+                                        was_operand = true;
                                     }
                                 }
                             }
                         } else {
+                            //this is parsing an array literal!
                             self.new_stack(); //new parsing stack/state
                             self.next(); //move to the first token, out of the open array
                             if let Token::CloseArrayBracket = self.cur() {
                                 self.push_operand(Expr::Array(vec![]));
+                                was_operand = true;
                             } else {
                                 let list_of_exprs = self.parse_comma_sep_list_expr();
                                 match list_of_exprs {
@@ -2989,6 +2993,42 @@ struct SomeStruct:
                 Box::new(Expr::IntegerValue(1)),
             )],
         ))];
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn index_expression_lhs_in_binary_op() {
+        //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
+        let tokens = tokenize("args[1] + 1").unwrap();
+        let result = parse_ast(tokens);
+        let expected = vec![
+            AST::StandaloneExpr(
+                Expr::BinaryOperation(
+                    Expr::IndexAccess(
+                        Expr::Variable("args".into()).into(),
+                        Expr::IntegerValue(1).into()
+                    ).into(),
+                    Operator::Plus,
+                    Expr::IntegerValue(1).into()
+                ))];
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn index_expression_rhs_in_binary_op() {
+        //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
+        let tokens = tokenize("1 + args[1]").unwrap();
+        let result = parse_ast(tokens);
+        let expected = vec![
+            AST::StandaloneExpr(
+                Expr::BinaryOperation(
+                    Expr::IntegerValue(1).into(),
+                    Operator::Plus,
+                    Expr::IndexAccess(
+                        Expr::Variable("args".into()).into(),
+                        Expr::IntegerValue(1).into()
+                    ).into()
+                ))];
         assert_eq!(expected, result);
     }
 

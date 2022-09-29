@@ -1,12 +1,42 @@
-use super::hir::{
+use super::{hir::{
     HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR, InferredTypeHIRRoot,
     TrivialHIRExpr, HIR,
-};
+}, type_name_printer::TypeNamePrinter, mir_printer::PrintableExpression, hir_printer::expr_str};
 
 use crate::{
     ast::parser::{Expr, AST},
-    types::type_instance_db::TypeInstanceId,
+    types::type_instance_db::{TypeInstanceId, TypeInstanceManager},
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypecheckPendingExpression(pub HIRExpr<TypeInstanceId>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypecheckedExpression(pub HIRExpr<TypeInstanceId>);
+
+impl PrintableExpression for TypecheckPendingExpression {
+    fn print_expr(&self) -> String {
+        expr_str(&self.0)
+    }
+}
+
+impl PrintableExpression for TypecheckedExpression {
+    fn print_expr(&self) -> String {
+        expr_str(&self.0)
+    }
+}
+
+impl TypecheckPendingExpression {
+    pub fn get_type(&self) -> TypeInstanceId {
+        self.0.get_type()
+    }
+}
+
+
+impl TypecheckedExpression {
+    pub fn get_type(&self) -> TypeInstanceId {
+        self.0.get_type()
+    }
+}
 
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
@@ -24,11 +54,11 @@ A MIRTopLevelNode is a top-level declaration. They are not executable per se (do
 but represent the main parts of the program.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRTopLevelNode {
+pub enum MIRTopLevelNode<TTypecheckStateExpr> {
     DeclareFunction {
         function_name: String,
         parameters: Vec<MIRTypedBoundName>,
-        body: Vec<MIRBlock>,
+        body: Vec<MIRBlock<TTypecheckStateExpr>>,
         scopes: Vec<MIRScope>,
         return_type: TypeInstanceId,
     },
@@ -44,21 +74,22 @@ pub struct BlockId(pub usize);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ScopeId(pub usize);
 
+
 /*
 A MIRFunctionNode represents nodes inside a block. They can be executed within the context of
 a scope and a block.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRBlockNode {
+pub enum MIRBlockNode<TTypecheckStateExpr> {
     Assign {
         path: Vec<String>,
-        expression: HIRExpr<TypeInstanceId>,
+        expression: TTypecheckStateExpr,
         meta_ast: AST,
         meta_expr: Expr,
     },
     FunctionCall {
         function: String,
-        args: Vec<HIRExpr<TypeInstanceId>>,
+        args: Vec<TTypecheckStateExpr>,
         meta_ast: AST,
         meta_expr: Expr,
     },
@@ -91,11 +122,11 @@ pub struct MIRScope {
 
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRBlockFinal {
+pub enum MIRBlockFinal<TTypecheckStateExpr> {
     //expression, true, else, meta
-    If(HIRExpr<TypeInstanceId>, BlockId, BlockId, HIRAstMetadata),
+    If(TTypecheckStateExpr, BlockId, BlockId, HIRAstMetadata),
     GotoBlock(BlockId),
-    Return(HIRExpr<TypeInstanceId>, HIRAstMetadata),
+    Return(TTypecheckStateExpr, HIRAstMetadata),
     EmptyReturn,
 }
 
@@ -107,20 +138,25 @@ pub enum MIRBlockFinal {
 
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRBlock {
+pub struct MIRBlock<TTypecheckStateExpr> {
     pub index: usize,
     pub scope: ScopeId,
-    pub finish: MIRBlockFinal,
-    pub block: Vec<MIRBlockNode>,
+    pub finish: MIRBlockFinal<TTypecheckStateExpr>,
+    pub nodes: Vec<MIRBlockNode<TTypecheckStateExpr>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MIRMaybeUnfinishedBlock {
     pub index: usize,
     pub scope: ScopeId,
-    pub finish: Option<MIRBlockFinal>,
-    pub block: Vec<MIRBlockNode>,
+    pub finish: Option<MIRBlockFinal<TypecheckPendingExpression>>,
+    pub block: Vec<MIRBlockNode<TypecheckPendingExpression>>,
 }
+
+pub type TypecheckedMIRBlock = MIRBlock<TypecheckedExpression>;
+
+pub type UncheckedMIRBlock = MIRBlock<TypecheckPendingExpression>;
+
 
 struct MIRFunctionEmitter {
     current_scope: ScopeId,
@@ -139,7 +175,7 @@ impl MIRFunctionEmitter {
         }
     }
 
-    fn emit(&mut self, node: MIRBlockNode) {
+    fn emit(&mut self, node: MIRBlockNode<TypecheckPendingExpression>) {
         self.blocks[self.current_block.0].block.push(node);
     }
 
@@ -193,7 +229,7 @@ impl MIRFunctionEmitter {
         meta_ast: HIRAstMetadata,
     ) {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::If(
-            condition,
+            TypecheckPendingExpression(condition),
             true_branch,
             false_branch,
             meta_ast,
@@ -201,14 +237,15 @@ impl MIRFunctionEmitter {
     }
 
     fn finish_with_return(&mut self, expr: HIRExpr<TypeInstanceId>, meta_ast: HIRAstMetadata) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, meta_ast));
+        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(
+            TypecheckPendingExpression(expr), meta_ast));
     }
 
     fn finish_with_empty_return(&mut self) {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::EmptyReturn);
     }
 
-    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock>) {
+    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<TypecheckPendingExpression>>) {
         let blocks = self
             .blocks
             .into_iter()
@@ -221,7 +258,7 @@ impl MIRFunctionEmitter {
                     index: x.index,
                     scope: x.scope,
                     finish: finisher,
-                    block: x.block,
+                    nodes: x.block,
                 }
             })
             .collect::<Vec<_>>();
@@ -247,7 +284,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
             } => {
                 emitter.emit(MIRBlockNode::Assign {
                     path: path.clone(),
-                    expression: expression.clone(),
+                    expression: TypecheckPendingExpression(expression.clone()),
                     meta_ast: meta_ast.clone(),
                     meta_expr: meta_expr.clone(),
                 });
@@ -280,7 +317,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 //and *finally* assign the variable
                 emitter.emit(MIRBlockNode::Assign {
                     path: vec![var.clone()],
-                    expression: expression.clone(),
+                    expression: TypecheckPendingExpression(expression.clone()),
                     meta_ast: meta_ast.clone(),
                     meta_expr: meta_expr.clone(),
                 });
@@ -302,9 +339,12 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
             } => {
                 match &function {
                     HIRExpr::Trivial(TrivialHIRExpr::Variable(var), ..) => {
+
+                        let pending_args = args.iter().map(|x| TypecheckPendingExpression(x.clone())).collect();
+
                         emitter.emit(MIRBlockNode::FunctionCall {
                             function: var.clone(),
-                            args: args.clone(),
+                            args: pending_args,
                             meta_ast: meta_ast.clone(),
                             meta_expr: meta_expr.clone(),
                         });
@@ -433,7 +473,7 @@ pub fn process_hir_funcdecl(
     parameters: &[HIRTypedBoundName<TypeInstanceId>],
     body: &[InferredTypeHIR],
     return_type: TypeInstanceId,
-) -> MIRTopLevelNode {
+) -> MIRTopLevelNode<TypecheckPendingExpression> {
     let mut emitter = MIRFunctionEmitter::new();
 
     //create a new block for the main function decl node
@@ -472,7 +512,7 @@ pub fn process_hir_funcdecl(
     };
 }
 
-pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode> {
+pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode<TypecheckPendingExpression>> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
@@ -506,7 +546,7 @@ mod tests {
     use super::*;
 
     //Parses a single expression
-    fn mir(source: &str) -> (Vec<MIRTopLevelNode>, TypeInstanceManager) {
+    fn mir(source: &str) -> (Vec<MIRTopLevelNode<TypecheckPendingExpression>>, TypeInstanceManager) {
         let tokenized = crate::ast::lexer::Tokenizer::new(source)
             .tokenize()
             .ok()

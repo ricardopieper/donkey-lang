@@ -25,7 +25,7 @@ pub fn operator_str(op: lexer::Operator) -> String {
     }
 }
 
-pub fn expr_str<TExprType>(expr: &HIRExpr<TExprType>) -> String {
+pub fn expr_str<T>(expr: &HIRExpr<T>) -> String {
     match expr {
         HIRExpr::Trivial(trivial, ..) => trivial_expr_str(trivial),
         HIRExpr::FunctionCall(f, args, ..) => {

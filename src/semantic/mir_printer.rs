@@ -6,13 +6,18 @@ use super::mir::MIRBlockNode;
 use super::mir::MIRScope;
 use super::mir::MIRTopLevelNode;
 
-fn print_mir_block(block: &MIRBlock) -> String {
+pub trait PrintableExpression {
+    fn print_expr(&self) -> String;
+}
+
+
+fn print_mir_block<T: PrintableExpression>(block: &MIRBlock<T>) -> String {
     let mut buffer = String::new();
 
     buffer.push_str(&format!("    defblock {}:\n", block.index));
     buffer.push_str(&format!("        usescope {}\n", block.scope.0));
 
-    for node in &block.block {
+    for node in &block.nodes {
         match node {
             MIRBlockNode::Assign {
                 path, expression, ..
@@ -20,11 +25,11 @@ fn print_mir_block(block: &MIRBlock) -> String {
                 buffer.push_str(&format!(
                     "        {} = {}\n",
                     path.join("."),
-                    expr_str(expression)
+                    expression.print_expr()
                 ));
             }
             MIRBlockNode::FunctionCall { function, args, .. } => {
-                let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
+                let args_str = args.iter().map(<T as PrintableExpression>::print_expr).collect::<Vec<_>>().join(", ");
                 buffer.push_str(&format!("        {}({})\n", function, args_str));
             }
         }
@@ -38,7 +43,7 @@ fn print_mir_block(block: &MIRBlock) -> String {
         else:
             gotoblock {}
 ",
-                expr_str(condition), //if condition:
+                condition.print_expr(), //if condition:
                 true_branch.0,       //gotoblock 0
                 false_branch.0
             )); //gotoblock 1
@@ -47,7 +52,7 @@ fn print_mir_block(block: &MIRBlock) -> String {
             buffer.push_str(&format!("        gotoblock {}\n", block.0));
         }
         super::mir::MIRBlockFinal::Return(expr, ..) => {
-            buffer.push_str(&format!("        return {}\n", expr_str(expr)));
+            buffer.push_str(&format!("        return {}\n", expr.print_expr()));
         }
         super::mir::MIRBlockFinal::EmptyReturn => {
             buffer.push_str("        return\n");
@@ -74,7 +79,7 @@ fn print_mir_scope(scope: &MIRScope, type_db: &TypeInstanceManager) -> String {
     buffer
 }
 
-fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> String {
+fn print_mir_str<T: PrintableExpression>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) -> String {
     match node {
         MIRTopLevelNode::DeclareFunction {
             function_name,
@@ -114,7 +119,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> Strin
     }
 }
 
-pub fn print_mir(mir: &[MIRTopLevelNode], type_db: &TypeInstanceManager) -> String {
+pub fn print_mir<T: PrintableExpression>(mir: &[MIRTopLevelNode<T>], type_db: &TypeInstanceManager) -> String {
     let mut buffer = String::new();
     for node in mir {
         buffer.push_str(&print_mir_str(node, type_db));

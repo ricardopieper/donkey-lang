@@ -1,3 +1,4 @@
+use super::compiler_errors::CompilerError;
 use super::hir::{HIRAstMetadata, HIRExpr, HIRExprMetadata, TrivialHIRExpr};
 use crate::ast::parser::{Expr, AST};
 use crate::types::type_errors::IfStatementNotBoolean;
@@ -7,16 +8,43 @@ use crate::types::type_errors::{
 };
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
-use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode};
+use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, TypecheckedExpression, TypecheckPendingExpression, TypecheckedMIRBlock, ScopeId};
 use super::name_registry::NameRegistry;
+
+pub struct MaybeTypechecked {
+    pub is_typechecked: bool,
+    pub previous_check_result: Option<bool>,
+    pub expr: HIRExpr<TypeInstanceId>
+}
+
+impl MaybeTypechecked {
+    pub fn get_type(&self) -> TypeInstanceId {
+        self.expr.get_type()
+    }
+}
+
+pub type MaybeUncheckedMIRBlock = MIRBlock<MaybeTypechecked>;
+
+pub fn typecheck(expr: &mut MaybeTypechecked, current_scope: ScopeId, names: &NameRegistry, type_db: &TypeInstanceManager, errors: &mut TypeErrors) -> Result<(), CompilerError> {
+    if let Some(result) = expr.previous_check_result {
+        return if result {
+            Ok(())
+        } else {
+            Err(CompilerError::TypeCheckError)
+        };
+    } 
+    //TODO all the checkings!
+    expr.is_typechecked = true;
+    Ok(())
+}
 
 fn find_variable_and_get_type(
     name: &str,
-    current_block: &MIRBlock,
+    current_block_scope: ScopeId,
     scopes: &[MIRScope],
     names: &NameRegistry,
 ) -> TypeInstanceId {
-    let mut current_scope = &scopes[current_block.scope.0];
+    let mut current_scope = &scopes[current_block_scope.0];
 
     loop {
         let bound_name = current_scope.boundnames.iter().find(|x| x.name == name);
@@ -39,8 +67,10 @@ fn check_function_arguments_match_param_types(
     function_parameters: &[TypeInstanceId],
     arguments_passed: &[TypeInstanceId],
     type_errors: &mut TypeErrors,
-) {
+) -> Result<(), CompilerError> {
+    let mut found_errors = false;
     if function_parameters.len() != arguments_passed.len() {
+        found_errors = true;
         type_errors
             .function_call_argument_count
             .push(FunctionCallArgumentCountMismatch {
@@ -49,13 +79,13 @@ fn check_function_arguments_match_param_types(
                 expected_count: function_parameters.len(),
                 passed_count: arguments_passed.len(),
             });
-        return;
     }
 
     let zipped = function_parameters.iter().zip(arguments_passed.iter());
 
     for (number, (parameter_type, argument_type)) in zipped.enumerate() {
         if argument_type != parameter_type {
+            found_errors = true;
             type_errors.function_call_mismatches.push(TypeMismatch {
                 on_function: on_function.to_string(),
                 expected: *parameter_type,
@@ -67,60 +97,82 @@ fn check_function_arguments_match_param_types(
             });
         }
     }
+    if found_errors {
+        Err(CompilerError::TypeCheckError)
+    } else {
+        Ok(())
+    }
 }
 
 fn all_paths_return_values_of_correct_type(
     function_name: &str,
-    body: &[MIRBlock],
-    return_type: TypeInstanceId,
+    body: &mut [MaybeUncheckedMIRBlock],
+    function_return_type: TypeInstanceId,
     type_db: &TypeInstanceManager,
     errors: &mut TypeErrors,
-) {
+    names: &NameRegistry
+) -> Result<(), CompilerError> {
+    let mut found_errors = false;
     for body_node in body {
-        if let MIRBlockFinal::Return(return_expr, ..) = &body_node.finish {
+        if let MIRBlockFinal::Return(return_expr, ..) = &mut body_node.finish {
             let expr_type = return_expr.get_type();
-            if return_type != return_expr.get_type() {
+            if function_return_type == expr_type {
+                typecheck(return_expr, body_node.scope, names, type_db, errors)?
+            } else {
                 errors.return_type_mismatches.push(TypeMismatch {
                     context: ReturnTypeContext(),
                     on_function: function_name.to_string(),
-                    expected: return_type,
+                    expected: function_return_type,
                     actual: expr_type,
                 });
+                found_errors = true;
             }
+
         }
         if let MIRBlockFinal::EmptyReturn = &body_node.finish {
-            if return_type != type_db.common_types.void {
+            if function_return_type != type_db.common_types.void {
                 errors.return_type_mismatches.push(TypeMismatch {
                     context: ReturnTypeContext(),
                     on_function: function_name.to_string(),
-                    expected: return_type,
+                    expected: function_return_type,
                     actual: type_db.common_types.void,
                 });
             }
+            found_errors = true;
         }
+    }
+    if found_errors {
+        Err(CompilerError::TypeCheckError)
+    } else {
+        Ok(())
     }
 }
 
 fn all_assignments_correct_type(
     function_name: &str,
-    body: &[MIRBlock],
+    body: &mut [MaybeUncheckedMIRBlock],
     scopes: &[MIRScope],
     names: &NameRegistry,
-    type_errors: &mut TypeErrors,
-) {
-    for body_node in body {
-        for block_node in &body_node.block {
-            match block_node {
+    errors: &mut TypeErrors,
+    type_db: &TypeInstanceManager,
+) -> Result<(), CompilerError> {
+    let mut found_errors = false;
+    for body_block in body {
+
+        for node in &mut body_block.nodes {
+            match node {
                 MIRBlockNode::Assign {
                     path, expression, ..
                 } if path.len() == 1 => {
                     let var = path.first().unwrap();
                     //find variable
-                    let variable_type = find_variable_and_get_type(var, body_node, scopes, names);
+                    let variable_type = find_variable_and_get_type(var, body_block.scope, scopes, names);
                     let expr_type = expression.get_type();
 
-                    if variable_type != expr_type {
-                        type_errors.assign_mismatches.push(TypeMismatch {
+                    if variable_type == expr_type {
+                        typecheck(expression, body_block.scope, names, type_db, errors)?
+                    } else{
+                        errors.assign_mismatches.push(TypeMismatch {
                             on_function: function_name.to_string(),
                             context: AssignContext {
                                 target_variable_name: var.to_string(),
@@ -128,6 +180,7 @@ fn all_assignments_correct_type(
                             expected: variable_type,
                             actual: expr_type,
                         });
+                        found_errors = true;
                     }
                 }
                 MIRBlockNode::Assign { path, .. } if path.len() != 1 => {
@@ -137,26 +190,41 @@ fn all_assignments_correct_type(
             }
         }
     }
+    if found_errors {
+        Err(CompilerError::TypeCheckError)
+    } else {
+        Ok(())
+    }
 }
 
 fn if_statement_exprs_read_from_bool_variable(
     function_name: &str,
-    body: &[MIRBlock],
+    body: &mut [MaybeUncheckedMIRBlock],
     type_db: &TypeInstanceManager,
-    type_errors: &mut TypeErrors,
-) {
+    names: &NameRegistry,
+    errors: &mut TypeErrors,
+) -> Result<(), CompilerError>  {
+    let mut found_errors = false;
     for body_node in body {
-        if let MIRBlockFinal::If(expr, _, _, _) = &body_node.finish {
+        if let MIRBlockFinal::If(expr, _, _, _) = &mut body_node.finish {
             let expr_type = expr.get_type();
-            if expr_type != type_db.common_types.bool {
-                type_errors
+            if expr_type == type_db.common_types.bool {
+                typecheck(expr, body_node.scope, names, type_db, errors)?
+            } else {
+                errors
                     .if_statement_unexpected_type
                     .push(IfStatementNotBoolean {
                         on_function: function_name.to_string(),
                         actual_type: expr_type,
                     });
+                found_errors = true;
             }
         }
+    }
+    if found_errors {
+        Err(CompilerError::TypeCheckError)
+    } else {
+        Ok(())
     }
 }
 
@@ -199,16 +267,16 @@ fn get_actual_function_name_with_details(
 }
 
 fn function_calls_are_actually_callable_and_parameters_are_correct_type(
-    body: &[MIRBlock],
+    body: &mut [MaybeUncheckedMIRBlock],
     scopes: &[MIRScope],
     names: &NameRegistry,
     function_name: &str,
     type_db: &TypeInstanceManager,
-    type_errors: &mut TypeErrors,
-) {
-    //
+    errors: &mut TypeErrors,
+) -> Result<(), CompilerError>  {
+    let mut found_errors = false;
     for body_node in body {
-        for block_node in &body_node.block {
+        for block_node in &mut body_node.nodes {
             match block_node {
                 MIRBlockNode::Assign {
                     path,
@@ -221,15 +289,18 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                         "Assign to path len > 2 not supported in type checker yet!"
                     );
 
+                    typecheck(expression, body_node.scope, names, type_db, errors)?;
+
                     //on assigns, we need to check if's a function call.
-                    let HIRExpr::FunctionCall(call_expr, args, _return_type, expr_metadata) = expression else {
+                    let HIRExpr::FunctionCall(call_expr, args, _, expr_metadata) = &expression.expr else {
                         continue; //other cases handled elsewhere
                     };
 
                     let type_id = call_expr.get_type();
                     let type_data = type_db.get_instance(type_id);
                     if !type_data.is_function {
-                        type_errors.call_non_callable.push(CallToNonCallableType {
+                        found_errors = true;
+                        errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
                             actual_type: call_expr.get_type(),
                         });
@@ -247,15 +318,17 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     let actual_function_name = get_actual_function_name_with_details(
                         called_function,
                         meta_ast,
-                        expr_metadata,
+                        &expr_metadata,
                     );
-                    check_function_arguments_match_param_types(
+                    if let Err(_) = check_function_arguments_match_param_types(
                         function_name,
                         &actual_function_name,
                         &type_data.function_args,
                         &passed_types,
-                        type_errors,
-                    );
+                        errors,
+                    ) {
+                        found_errors = true;
+                    }
                 }
                 MIRBlockNode::FunctionCall {
                     function,
@@ -264,47 +337,63 @@ fn function_calls_are_actually_callable_and_parameters_are_correct_type(
                     meta_expr,
                 } => {
                     let function_type =
-                        find_variable_and_get_type(function, body_node, scopes, names);
+                        find_variable_and_get_type(function, body_node.scope, scopes, names);
                     let type_data = type_db.get_instance(function_type);
 
                     if !type_data.is_function {
-                        type_errors.call_non_callable.push(CallToNonCallableType {
+                        found_errors = true;
+                        errors.call_non_callable.push(CallToNonCallableType {
                             on_function: function_name.to_string(),
                             actual_type: function_type,
                         });
                         continue;
                     }
 
+                    for arg in args.iter_mut() {
+                        if let Err(_) = typecheck(arg, body_node.scope, names, type_db, errors) {
+                            found_errors = true;
+                        }
+                    }
+
                     let passed = args
                         .iter()
-                        .map(HIRExpr::<TypeInstanceId>::get_type)
+                        .map(|x| x.expr.get_type())
                         .collect::<Vec<_>>();
 
                     let actual_function_name =
                         get_actual_function_name_with_details(function, meta_ast, meta_expr);
 
-                    check_function_arguments_match_param_types(
+                    if let Err(_) = check_function_arguments_match_param_types(
                         function_name,
                         &actual_function_name,
                         &type_data.function_args,
                         &passed,
-                        type_errors,
-                    );
+                        errors,
+                    ) {
+                        found_errors = true;
+                    }
                 }
             }
         }
     }
+
+    if found_errors {
+        Err(CompilerError::TypeCheckError)
+    } else {
+        Ok(())
+    }
 }
 
 fn methods_receive_parameters_of_correct_type(
-    body: &[MIRBlock],
+    body: &mut [MaybeUncheckedMIRBlock],
     function_name: &str,
     type_db: &TypeInstanceManager,
-    type_errors: &mut TypeErrors,
-) {
-    //
+    errors: &mut TypeErrors,
+    names: &NameRegistry,
+) -> Result<(), CompilerError>  {
+    let mut found_errors = false;
     for body_node in body {
-        for block_node in &body_node.block {
+        for block_node in &mut body_node.nodes {
             if let MIRBlockNode::Assign {
                 path,
                 expression,
@@ -312,13 +401,17 @@ fn methods_receive_parameters_of_correct_type(
                 meta_expr: _,
             } = block_node
             {
+                if let Err(_) = typecheck(expression, body_node.scope, names, type_db, errors) {
+                    found_errors = true;
+                }
+
                 assert!(
                     path.len() <= 1,
                     "Assign to path len > 2 not supported in type checker yet!"
                 );
 
                 //on assigns, we need to check if's a function call.
-                let HIRExpr::MethodCall(object_expr, method, args, _, expr_metadata) = expression else {
+                let HIRExpr::MethodCall(object_expr, method, args, _, expr_metadata) = &expression.expr else {
                     continue; //other cases handled elsewhere
                 };
 
@@ -341,77 +434,156 @@ fn methods_receive_parameters_of_correct_type(
                 let actual_function_name = get_actual_function_name_with_details(
                     &method_function_type_data.name,
                     meta_ast,
-                    expr_metadata,
+                    &expr_metadata,
                 );
 
-                check_function_arguments_match_param_types(
+                if let Err(_) = check_function_arguments_match_param_types(
                     function_name,
                     &actual_function_name,
                     &method_function_type_data.function_args,
                     &passed_types,
-                    type_errors,
-                );
+                    errors,
+                ) {
+                    found_errors = true;
+                }
             }
         }
+    }
+    if found_errors {
+        Err(CompilerError::TypeCheckError)
+    } else {
+        Ok(())
     }
 }
 
 fn type_check_function(
     function_name: &str,
-    body: &[MIRBlock],
+    body: Vec<MIRBlock<TypecheckPendingExpression>>,
     scopes: &[MIRScope],
     return_type: TypeInstanceId,
     globals: &NameRegistry,
     type_db: &TypeInstanceManager,
     type_errors: &mut TypeErrors,
-) {
-    all_paths_return_values_of_correct_type(function_name, body, return_type, type_db, type_errors);
-    all_assignments_correct_type(function_name, body, scopes, globals, type_errors);
+) -> Result<Vec<TypecheckedMIRBlock>, CompilerError> {
+
+    let mut to_check = map_blocks(body, |item| {
+        Ok(MaybeTypechecked {
+            previous_check_result: None,
+            is_typechecked: false,
+            expr: item.0    
+        })
+    }).unwrap();
+
+    all_paths_return_values_of_correct_type(function_name, &mut to_check, return_type, type_db, type_errors, globals)?;
+    all_assignments_correct_type(function_name, &mut to_check, scopes, globals, type_errors, type_db)?;
     function_calls_are_actually_callable_and_parameters_are_correct_type(
-        body,
+        &mut to_check,
         scopes,
         globals,
         function_name,
         type_db,
         type_errors,
-    );
-    methods_receive_parameters_of_correct_type(body, function_name, type_db, type_errors);
+    )?;
+    methods_receive_parameters_of_correct_type(&mut to_check, function_name, type_db, type_errors, globals)?;
+    if_statement_exprs_read_from_bool_variable(function_name, &mut to_check, type_db, globals, type_errors)?;
 
-    if_statement_exprs_read_from_bool_variable(function_name, body, type_db, type_errors);
+
+    map_blocks(to_check, |item| {
+        if item.is_typechecked {
+            Ok(TypecheckedExpression(item.expr))
+        } else {
+            Err(())
+        }
+    }).map_err(|_| CompilerError::TypeCheckError)
+
 }
 
+fn map_blocks<TFunc, TIn, TOut>(body: Vec<MIRBlock<TIn>>, mapper: TFunc) -> Result<Vec<MIRBlock<TOut>>, ()> 
+    where TFunc: Fn(TIn) -> Result<TOut, ()> + Copy {
+    let mapped: Result<Vec<MIRBlock<TOut>>, ()> = body.into_iter()
+        .map(|block| -> Result<MIRBlock<TOut>, ()> {
+            let nodes: Result<Vec<_>, _> = block.nodes.into_iter().map(|node| -> Result<MIRBlockNode<TOut>, ()> { 
+                map_node(node, mapper)
+            }).collect();
+
+            Ok(MIRBlock { 
+                index: block.index, 
+                scope: block.scope, 
+                finish: match block.finish {
+                    MIRBlockFinal::If(expr, btrue, bfalse, meta) => {
+                        MIRBlockFinal::If(mapper(expr)?, btrue, bfalse, meta)
+                    }
+                    MIRBlockFinal::GotoBlock(b) => MIRBlockFinal::GotoBlock(b),
+                    MIRBlockFinal::Return(expr, meta) => MIRBlockFinal::Return(mapper(expr)?, meta),
+                    MIRBlockFinal::EmptyReturn => MIRBlockFinal::EmptyReturn,
+                },
+                nodes: nodes?
+            })
+        })
+        .collect();
+    mapped
+}
+
+fn map_node<TFunc, TIn, TOut>(node: MIRBlockNode<TIn>, mapper: TFunc) -> Result<MIRBlockNode<TOut>, ()> 
+    where TFunc: Fn(TIn) -> Result<TOut, ()> {
+    Ok(match node {
+        MIRBlockNode::Assign { path, expression, meta_ast, meta_expr } => 
+            MIRBlockNode::Assign { 
+                path, 
+                expression: mapper(expression)?, 
+                meta_ast, 
+                meta_expr
+            },
+        MIRBlockNode::FunctionCall { function, args, meta_ast, meta_expr } => {
+            let args: Result<_, _> = args.into_iter().map(|arg| -> Result<TOut, ()> { mapper(arg) }).collect();
+            
+            let fcall = MIRBlockNode::FunctionCall { 
+                function, 
+                args: args?,
+                meta_ast, 
+                meta_expr 
+            };
+            fcall
+        }
+    })
+}
+
+
 pub fn check_type(
-    top_nodes: &[MIRTopLevelNode],
+    top_nodes: Vec<MIRTopLevelNode<TypecheckPendingExpression>>,
     type_db: &TypeInstanceManager,
     names: &NameRegistry,
-) -> TypeErrors {
-    let mut type_errors = TypeErrors::new();
+    errors: &mut TypeErrors
+) -> Result<Vec<MIRTopLevelNode<TypecheckedExpression>>, CompilerError> {
+
+    let mut new_mir = vec![];
 
     for node in top_nodes {
         match node {
             MIRTopLevelNode::DeclareFunction {
                 function_name,
-                parameters: _,
+                parameters,
                 body,
                 scopes,
                 return_type,
             } => {
-                type_check_function(
-                    function_name,
+                let checked_body = type_check_function(
+                    &function_name,
                     body,
-                    scopes,
-                    *return_type,
+                    &scopes,
+                    return_type,
                     names,
                     type_db,
-                    &mut type_errors,
-                );
+                    errors,
+                )?;
+                new_mir.push(MIRTopLevelNode::DeclareFunction { function_name, parameters, body: checked_body, scopes, return_type });
             }
             MIRTopLevelNode::StructDeclaration { .. } => {
                 todo!("Not done yet!")
             }
         }
     }
-    type_errors
+    return Ok(new_mir);
 }
 
 #[cfg(test)]
@@ -426,9 +598,10 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     pub struct TestContext {
-        mir: Vec<MIRTopLevelNode>,
+        mir: Vec<MIRTopLevelNode<TypecheckPendingExpression>>,
         database: TypeInstanceManager,
         globals: NameRegistry,
+        errors: TypeErrors
     }
 
     fn prepare(source: &str) -> TestContext {
@@ -445,21 +618,22 @@ mod tests {
 
         TestContext {
             mir,
+            errors: analysis_result.type_errors,
             database: analysis_result.type_db,
             globals: analysis_result.globals,
         }
     }
 
     //Parses a single expression
-    fn run_test(ctx: &TestContext) -> (TypeErrors, &TypeInstanceManager) {
-        let errors = check_type(&ctx.mir, &ctx.database, &ctx.globals);
-        if errors.count() > 0 {
-            println!("{}", TypeErrorPrinter::new(&errors, &ctx.database));
+    fn run_test(mut ctx: TestContext) -> (TypeErrors, TypeInstanceManager) {
+        check_type(ctx.mir, &ctx.database, &ctx.globals, &mut ctx.errors);
+        if ctx.errors.count() > 0 {
+            println!("{}", TypeErrorPrinter::new(&mut ctx.errors, &ctx.database));
         } else {
             println!("No errors found!");
         }
 
-        (errors, &ctx.database)
+        (ctx.errors, ctx.database)
     }
 
     #[test]
@@ -471,7 +645,7 @@ def main():
 ",
         );
 
-        let (err, _) = run_test(&ctx);
+        let (err, _) = run_test(ctx);
         assert_eq!(0, err.count());
     }
 
@@ -484,7 +658,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&ctx);
+        let (err, db) = run_test(ctx);
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
@@ -500,7 +674,7 @@ def main() -> i32:
     return 1
 ",
         );
-        let (err, _) = run_test(&ctx);
+        let (err, _) = run_test(ctx);
         assert_eq!(0, err.count());
     }
 
@@ -512,7 +686,7 @@ def main() -> i32:
     return
     ",
         );
-        let (err, db) = run_test(&ctx);
+        let (err, db) = run_test(ctx);
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
         assert_eq!(err.return_type_mismatches[0].actual, db.common_types.void);
@@ -528,7 +702,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&ctx);
+        let (err, db) = run_test(ctx);
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
         assert_eq!(err.assign_mismatches[0].actual, db.common_types.string);
@@ -546,7 +720,7 @@ def main():
     x: i32 = test()
 ",
         );
-        let (err, _) = run_test(&ctx);
+        let (err, _) = run_test(ctx);
         assert_eq!(0, err.count());
     }
 
@@ -562,7 +736,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&ctx);
+        let (err, db) = run_test(ctx);
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
@@ -582,7 +756,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&ctx);
+        let (err, db) = run_test(ctx);
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
@@ -602,7 +776,7 @@ def main():
 ",
         );
 
-        let (err, _db) = run_test(&ctx);
+        let (err, _db) = run_test(ctx);
 
         assert_eq!(0, err.count());
     }
@@ -618,7 +792,7 @@ def main():
     test(1, 1.0)
 ",
         );
-        let (err, _db) = run_test(&ctx);
+        let (err, _db) = run_test(ctx);
         assert_eq!(0, err.count());
     }
 
@@ -636,7 +810,7 @@ def main():
 ",
         );
 
-        let (err, _db) = run_test(&ctx);
+        let (err, _db) = run_test(ctx);
 
         assert_eq!(0, err.count());
     }
@@ -654,7 +828,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&ctx);
+        let (err, db) = run_test(ctx);
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.function_call_mismatches.len());
@@ -682,7 +856,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&ctx);
+        let (err, db) = run_test(ctx);
 
         assert_eq!(2, err.count());
         assert_eq!(2, err.function_call_mismatches.len());
@@ -710,9 +884,8 @@ def main():
     x: i32 = \"some str\"
 ",
         );
-        let (err, db) = run_test(&ctx);
-        let printer = TypeErrorPrinter::new(&err, db);
-        let error_msg = format!("{}", printer);
+        let (err, db) = run_test(ctx);
+        let error_msg = print_error(err, db);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
     }
@@ -726,9 +899,8 @@ def main():
     x = \"abc\"
 ",
         );
-        let (err, db) = run_test(&ctx);
-        let printer = TypeErrorPrinter::new(&err, db);
-        let error_msg = format!("{}", printer);
+        let (err, db) = run_test(ctx);
+        let error_msg = print_error(err, db);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
     }
@@ -742,10 +914,91 @@ def main(args: array<str>):
 ",
         );
 
-        let (err, db) = run_test(&ctx);
-        let printer = TypeErrorPrinter::new(&err, db);
-        let error_msg = format!("{}", printer);
+        let (err, db) = run_test(ctx);
+        let error_msg = print_error(err, db);
         let expected = "Function argument type mismatch: In function main, on index operator, parameter on position 0 has incorrect type: Expected u32 but passed str\n";
         assert_eq!(error_msg, expected);
+    }
+
+    fn print_error(err: TypeErrors, db: TypeInstanceManager) -> String {
+        let printer = TypeErrorPrinter::new(&err, &db);
+        let error_msg = format!("{}", printer);
+        error_msg
+    }
+
+    #[test]
+    fn sum_different_numeric_types_not_allowed() {
+        let ctx = prepare(
+            "
+def main():
+    x = 1 + 1.0
+",
+        );
+
+        let (err, db) = run_test(ctx);
+        assert_eq!(1, err.count());
+
+        let error_msg = print_error(err, db);
+        let expected = "In function main, binary operator + not found for types: i32 + f32\n";
+        assert_eq!(error_msg, expected);
+    }
+
+    #[test]
+    fn multiply_different_numeric_types_not_allowed() {
+        let ctx = prepare(
+            "
+def main():
+    x = 1 * 1.0
+",
+        );
+
+        let (err, db) = run_test(ctx);
+        assert_eq!(1, err.count());
+
+        let error_msg = print_error(err, db);
+        let expected = "In function main, binary operator * not found for types: i32 * f32\n";
+        assert_eq!(error_msg, expected);
+    }
+
+    #[test]
+    fn binary_operation_type_err_in_subexpression() {
+        let ctx = prepare(
+            "
+def main():
+    x = 1.0 * (1.0 + 1)
+",
+        );
+
+        let (err, _) = run_test(ctx);
+        assert_eq!(1, err.count());
+        assert_eq!(1, err.binary_op_not_found.len());
+    }
+
+    #[test]
+    fn binary_operation_type_err_in_subexpression_complex() {
+        let ctx = prepare(
+            "
+def main():
+    x = 1.0 * (1.0 + (2.3 * \"lmao\") / 87.1)
+",
+        );
+
+        let (err, _) = run_test(ctx);
+        assert_eq!(1, err.count());
+        assert_eq!(1, err.binary_op_not_found.len());
+    }
+
+    #[test]
+    fn binary_operation_type_err_in_subexpression_index_wrong_type() {
+        let ctx = prepare(
+            "
+def main(args: array<f32>):
+    x = 1.0 * (1.0 + (2.3 * args[1.0]) / 87.1)
+",
+        );
+
+        let (err, _) = run_test(ctx);
+        assert_eq!(1, err.count());
+        assert_eq!(1, err.binary_op_not_found.len());
     }
 }
