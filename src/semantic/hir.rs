@@ -62,42 +62,46 @@ pub enum HIRTypeDef {
     Provided(HIRType),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)] pub struct NotChecked;
+#[derive(Debug, Clone, PartialEq, Eq)] pub struct Checked;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HIRExpr<TExprType> {
+pub enum HIRExpr<TExprType, TTypechecked = NotChecked> {
     Trivial(TrivialHIRExpr, TExprType, HIRExprMetadata),
     #[allow(dead_code)]
-    Cast(Box<HIRExpr<TExprType>>, TExprType, HIRExprMetadata),
+    Cast(Box<HIRExpr<TExprType, TTypechecked>>, TExprType, HIRExprMetadata),
     BinaryOperation(
-        Box<HIRExpr<TExprType>>,
+        Box<HIRExpr<TExprType, TTypechecked>>,
         Operator,
-        Box<HIRExpr<TExprType>>,
+        Box<HIRExpr<TExprType, TTypechecked>>,
         TExprType,
         HIRExprMetadata,
     ),
     //obj_expr, method_name, args:type, return type, metadata
     MethodCall(
-        Box<HIRExpr<TExprType>>,
+        Box<HIRExpr<TExprType, TTypechecked>>,
         String,
-        Vec<HIRExpr<TExprType>>,
+        Vec<HIRExpr<TExprType, TTypechecked>>,
         TExprType,
         HIRExprMetadata,
     ),
     //func_expr, args:type, return type, metadata
     FunctionCall(
-        Box<HIRExpr<TExprType>>,
-        Vec<HIRExpr<TExprType>>,
+        Box<HIRExpr<TExprType, TTypechecked>>,
+        Vec<HIRExpr<TExprType, TTypechecked>>,
         TExprType,
         HIRExprMetadata,
     ),
     UnaryExpression(
         Operator,
-        Box<HIRExpr<TExprType>>,
+        Box<HIRExpr<TExprType, TTypechecked>>,
         TExprType,
         HIRExprMetadata,
     ),
     //obj, field, result_type, metadata
-    MemberAccess(Box<HIRExpr<TExprType>>, String, TExprType, HIRExprMetadata),
-    Array(Vec<HIRExpr<TExprType>>, TExprType, HIRExprMetadata),
+    MemberAccess(Box<HIRExpr<TExprType, TTypechecked>>, String, TExprType, HIRExprMetadata),
+    Array(Vec<HIRExpr<TExprType, TTypechecked>>, TExprType, HIRExprMetadata),
+    #[allow(dead_code)] TypecheckTag(TTypechecked)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +150,8 @@ impl Display for HIRType {
     }
 }
 
-impl HIRExpr<TypeInstanceId> {
+
+impl<T> HIRExpr<TypeInstanceId, T> {
     pub fn get_type(&self) -> TypeInstanceId {
         *match self {
             HIRExpr::Trivial(.., t, _)
@@ -157,6 +162,7 @@ impl HIRExpr<TypeInstanceId> {
             | HIRExpr::MemberAccess(.., t, _)
             | HIRExpr::Array(.., t, _)
             | HIRExpr::MethodCall(.., t, _) => t,
+            HIRExpr::TypecheckTag(_) => unreachable!(),
         }
     }
 }

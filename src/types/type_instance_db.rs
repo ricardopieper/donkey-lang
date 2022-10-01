@@ -92,6 +92,12 @@ pub struct TypeInstanceManager {
     pub common_types: CommonTypeInstances,
 }
 
+pub enum FieldOrMethod<'type_db> {
+    Field(&'type_db TypeInstanceStructField),
+    Method(&'type_db TypeInstanceStructMethod),
+    NotFound
+}
+
 impl TypeInstanceManager {
     pub fn new() -> TypeInstanceManager {
         let mut item = TypeInstanceManager {
@@ -107,6 +113,17 @@ impl TypeInstanceManager {
 
     pub fn get_instance(&self, id: TypeInstanceId) -> &TypeInstance {
         &self.types[id.0]
+    }
+
+    pub fn find_field_or_method<'this>(&'this self, id: TypeInstanceId, name: &str) -> FieldOrMethod<'this> {
+        let instance = self.get_instance(id);
+        if let Some(field) = instance.fields.iter().find(|x| x.name == name) {
+            return FieldOrMethod::Field(field)
+        }
+        if let Some(method) = instance.methods.iter().find(|x| x.name == name) {
+            return FieldOrMethod::Method(method)
+        }
+        FieldOrMethod::NotFound
     }
 
     pub fn construct_function(

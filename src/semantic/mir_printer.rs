@@ -1,4 +1,4 @@
-use crate::semantic::hir_printer::expr_str;
+
 use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::mir::MIRBlock;

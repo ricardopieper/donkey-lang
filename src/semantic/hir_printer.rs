@@ -25,7 +25,7 @@ pub fn operator_str(op: lexer::Operator) -> String {
     }
 }
 
-pub fn expr_str<T>(expr: &HIRExpr<T>) -> String {
+pub fn expr_str<T, T1>(expr: &HIRExpr<T, T1>) -> String {
     match expr {
         HIRExpr::Trivial(trivial, ..) => trivial_expr_str(trivial),
         HIRExpr::FunctionCall(f, args, ..) => {
@@ -52,6 +52,7 @@ pub fn expr_str<T>(expr: &HIRExpr<T>) -> String {
             format!("{}.{}", expr_str(obj), elem)
         }
         HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".to_string(),
+        HIRExpr::TypecheckTag(_) => unreachable!(),
     }
 }
 

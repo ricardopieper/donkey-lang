@@ -3,7 +3,7 @@ use crate::donkey_vm::asm::asm_instructions::{
     Annotation, AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp,
     AsmIntegerCompareBinaryOp, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction,
 };
-use crate::semantic::hir::{HIRExpr, TrivialHIRExpr};
+use crate::semantic::hir::{HIRExpr, TrivialHIRExpr, Checked};
 use crate::semantic::mir::{
     BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, MIRTypedBoundName, TypecheckedExpression,
 };
@@ -285,7 +285,7 @@ struct ExprGenerated {
     offset_from_bp: u32,
 }
 
-fn generate_function_jump_lbl(expr: &HIRExpr<TypeInstanceId>) -> String {
+fn generate_function_jump_lbl(expr: &HIRExpr<TypeInstanceId, Checked>) -> String {
     match &expr {
         HIRExpr::Trivial(TrivialHIRExpr::Variable(var_name), ..) => format!("FUNC_{}", var_name),
         _ => {
@@ -299,7 +299,7 @@ fn generate_function_jump_lbl(expr: &HIRExpr<TypeInstanceId>) -> String {
 
 fn generate_expr(
     type_db: &TypeInstanceManager,
-    expression: &HIRExpr<TypeInstanceId>,
+    expression: &HIRExpr<TypeInstanceId, Checked>,
     bytecode: &mut DonkeyEmitter,
     scope: &HashMap<String, ByteRange>,
     offset_from_bp: u32,
@@ -339,6 +339,7 @@ fn generate_expr(
         HIRExpr::MemberAccess(_, _, _, _) => todo!("member access not implemented"),
         HIRExpr::Array(_, _, _) => todo!("arrays not implemented"),
         HIRExpr::MethodCall(_, _, _, _, _) => todo!("method call not implemented"),
+        HIRExpr::TypecheckTag(_) => unreachable!(),
     }
 }
 
@@ -347,9 +348,9 @@ fn generate_function_call_code(
     return_type: TypeInstanceId,
     offset_from_bp: u32,
     bytecode: &mut DonkeyEmitter,
-    args: &[HIRExpr<TypeInstanceId>],
+    args: &[HIRExpr<TypeInstanceId, Checked>],
     scope: &HashMap<String, ByteRange>,
-    function_expr: &HIRExpr<TypeInstanceId>,
+    function_expr: &HIRExpr<TypeInstanceId, Checked>,
 ) -> ExprGenerated {
     let return_size = return_type.size(type_db);
     let mut offset_from_bp_arg = offset_from_bp + return_size as u32;
@@ -453,10 +454,10 @@ fn generate_function_call_code(
 
 fn generate_compare_binexpr_code(
     type_db: &TypeInstanceManager,
-    rhs: &HIRExpr<TypeInstanceId>,
+    rhs: &HIRExpr<TypeInstanceId, Checked>,
     bytecode: &mut DonkeyEmitter,
     scope: &HashMap<String, ByteRange>,
-    lhs: &HIRExpr<TypeInstanceId>,
+    lhs: &HIRExpr<TypeInstanceId, Checked>,
     op: Operator,
     offset_from_bp: u32,
 ) -> ExprGenerated {
@@ -514,10 +515,10 @@ fn is_float(lhs_type: TypeInstanceId, type_db: &TypeInstanceManager) -> bool {
 
 fn generate_bitwise_binexpr_code(
     type_db: &TypeInstanceManager,
-    rhs: &HIRExpr<TypeInstanceId>,
+    rhs: &HIRExpr<TypeInstanceId, Checked>,
     bytecode: &mut DonkeyEmitter,
     scope: &HashMap<String, ByteRange>,
-    lhs: &HIRExpr<TypeInstanceId>,
+    lhs: &HIRExpr<TypeInstanceId, Checked>,
     op: Operator,
     offset_from_bp: u32,
 ) -> ExprGenerated {
@@ -557,10 +558,10 @@ fn generate_bitwise_binexpr_code(
 
 fn generate_arith_binexpr_code(
     type_db: &TypeInstanceManager,
-    rhs: &HIRExpr<TypeInstanceId>,
+    rhs: &HIRExpr<TypeInstanceId, Checked>,
     bytecode: &mut DonkeyEmitter,
     scope: &HashMap<String, ByteRange>,
-    lhs: &HIRExpr<TypeInstanceId>,
+    lhs: &HIRExpr<TypeInstanceId, Checked>,
     op: Operator,
     offset_from_bp: u32,
 ) -> ExprGenerated {
@@ -722,7 +723,7 @@ fn generate_function_decl_block(
             } if path.len() == 1 => {
                 let var_name = path.first().unwrap();
                 let range = scope.get(var_name).unwrap();
-                let size = generate_expr(type_db, &expression.0, bytecode, scope, *offset_from_bp);
+                let size = generate_expr(type_db, expression, bytecode, scope, *offset_from_bp);
                 *offset_from_bp = size.offset_from_bp;
                 bytecode.push_annotated(
                     AssemblyInstruction::StoreAddress {
@@ -759,7 +760,7 @@ fn generate_func_block_finish(
     match &block.finish {
         MIRBlockFinal::If(true_expr, true_branch, false_branch, ..) => {
             let generated_expr =
-                generate_expr(type_db, &true_expr.0, bytecode, scope, *offset_from_bp);
+                generate_expr(type_db, true_expr, bytecode, scope, *offset_from_bp);
             *offset_from_bp = generated_expr.offset_from_bp;
             //generate a jz to the false branch
             //assert that the true branch is just the next one
@@ -780,7 +781,7 @@ fn generate_func_block_finish(
             }
         }
         MIRBlockFinal::Return(expr, _) => {
-            let generated_expr = generate_expr(type_db, &expr.0, bytecode, scope, *offset_from_bp);
+            let generated_expr = generate_expr(type_db, expr, bytecode, scope, *offset_from_bp);
             *offset_from_bp = generated_expr.offset_from_bp;
 
             let mut args_size = 0i32;
@@ -896,12 +897,10 @@ mod test {
             "{}",
             crate::semantic::mir_printer::print_mir(&mir, &analysis_result.type_db)
         );
-        let type_checked = check_type(mir, &analysis_result.type_db, &analysis_result.globals, &mut analysis_result.type_errors);
-
-        if analysis_result.type_errors.count() > 0 {
+        let Ok(type_checked) = check_type(mir, &analysis_result.type_db, &analysis_result.globals, &mut analysis_result.type_errors) else {
             let type_err_display = TypeErrorPrinter::new(&analysis_result.type_errors, &analysis_result.type_db);
             panic!("Type errors:\n{}", type_err_display)
-        }
+        };
 
         TestContext {
             mir: type_checked,

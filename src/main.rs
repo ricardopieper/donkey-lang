@@ -1,6 +1,5 @@
 #![allow(incomplete_features)]
 #![feature(assert_matches)]
-#![feature(let_else)]
 #![feature(let_chains)]
 #![feature(generic_const_exprs)]
 #![feature(slice_as_chunks)]
@@ -144,7 +143,7 @@ fn compile(file_name: &str) -> DonkeyEmitter {
     println!("{}", mir_printer::print_mir(&mir, &result.type_db));
     let typechecked = check_type(mir, &result.type_db, &result.globals, &mut result.type_errors);
     if result.type_errors.count() > 0 {
-        let printer = TypeErrorPrinter::new(&mut result.type_errors, &result.type_db);
+        let printer = TypeErrorPrinter::new(&result.type_errors, &result.type_db);
         panic!("{}", printer);
     }
     generate_donkey_vm(&result.type_db, &typechecked.unwrap())

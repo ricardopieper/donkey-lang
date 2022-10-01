@@ -103,6 +103,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
             HIRExpr::MethodCall(obj, method_name, params, _, meta) => {
                 self.compute_infer_method_call(*obj, method_name, params, meta)
             }
+            HIRExpr::TypecheckTag(_) => todo!(),
         }
     }
 

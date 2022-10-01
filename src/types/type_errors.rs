@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
 use crate::{
-    ast::lexer::Operator,
-    semantic::{hir::HIRType, hir_printer::operator_str, type_checker::FunctionName},
+    ast::{lexer::Operator, parser::Expr},
+    semantic::{hir::{HIRType, HIRExpr, NotChecked}, hir_printer::{operator_str, expr_str}, type_checker::FunctionName},
 };
 
 use super::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
@@ -88,9 +88,13 @@ impl TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
                 )
             }
             FunctionName::Method {
-                function_name: _,
-                type_name: _,
-            } => todo!("method calls not fully implemented"),
+                function_name,
+                type_name,
+            } =>  
+                write!(f,  "Function argument type mismatch: In function {on_function}, on call to method {function_name} of {type_name}, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
+                    on_function = self.on_function,
+                    position = self.context.argument_position
+                )
         }
     }
 }
@@ -192,6 +196,52 @@ impl TypeErrorDisplay for UnexpectedTypeFound {
     }
 }
 
+
+pub struct OutOfTypeBounds {
+    pub on_function: String,
+    pub expr: HIRExpr<TypeInstanceId>
+}
+
+impl TypeErrorDisplay for OutOfTypeBounds {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "In function {on_function}, value {expr} is out of bounds for type {type}. You can try extracting this value to a different variable and assign a larger type.",
+            on_function = self.on_function,
+            expr = expr_str(&self.expr),
+            type = self.expr.get_type().as_string(type_db),
+        )
+    }
+}
+
+
+pub struct InvalidCast {
+    pub on_function: String,
+    pub expr: HIRExpr<TypeInstanceId>,
+    pub cast_to: TypeInstanceId
+}
+
+impl TypeErrorDisplay for InvalidCast {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "In function {on_function}, value {expr} of type {type} cannot be casted to {cast_type}",
+            on_function = self.on_function,
+            expr = expr_str(&self.expr),
+            type = self.expr.get_type().as_string(type_db),
+            cast_type = self.cast_to.as_string(type_db),
+        )
+    }
+}
+
 pub struct BinaryOperatorNotFound {
     pub on_function: String,
     pub lhs: TypeInstanceId,
@@ -278,6 +328,27 @@ impl TypeErrorDisplay for InsufficientTypeInformationForArray {
     }
 }
 
+
+pub struct ArrayExpressionsNotAllTheSameType {
+    pub on_function: String,
+    pub expected_type: TypeInstanceId
+}
+
+impl TypeErrorDisplay for ArrayExpressionsNotAllTheSameType {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "In function {on_function}, expresins in array expected to be of type {type_name} but an expression of a different type was found",
+            on_function = self.on_function,
+            type_name = self.expected_type.as_string(type_db)
+        )
+    }
+}
+
 pub struct IfStatementNotBoolean {
     pub on_function: String,
     pub actual_type: TypeInstanceId,
@@ -314,6 +385,31 @@ impl TypeErrorDisplay for TypeInferenceFailure {
             "In function {on_function}, type inference failed for variable {variable}",
             on_function = self.on_function,
             variable = self.variable,
+        )
+    }
+}
+
+
+pub struct UnexpectedTypeInferenceMismatch {
+    pub on_function: String,
+    pub inferred: TypeInstanceId,
+    pub checked: TypeInstanceId,
+    pub expr: HIRExpr<TypeInstanceId, NotChecked>
+}
+
+impl TypeErrorDisplay for UnexpectedTypeInferenceMismatch {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "Type inference/check bug: In function {on_function}, type inferred for expression {expr_str} was {inferred_type}, but type checker detected {checked_type}",
+            on_function = self.on_function,
+            expr_str = expr_str(&self.expr),
+            inferred_type = self.inferred.as_string(type_db),
+            checked_type = self.checked.as_string(type_db)
         )
     }
 }
@@ -431,7 +527,11 @@ make_type_errors!(
     unary_op_not_found: Vec<UnaryOperatorNotFound>,
     field_or_method_not_found: Vec<FieldOrMethodNotFound>,
     insufficient_array_type_info: Vec<InsufficientTypeInformationForArray>,
+    array_expressions_not_all_the_same_type: Vec<ArrayExpressionsNotAllTheSameType>,
     if_statement_unexpected_type: Vec<IfStatementNotBoolean>,
     type_inference_failure: Vec<TypeInferenceFailure>,
-    type_construction_failure: Vec<TypeConstructionFailure>
+    type_construction_failure: Vec<TypeConstructionFailure>,
+    out_of_bounds: Vec<OutOfTypeBounds>,
+    invalid_casts: Vec<InvalidCast>,
+    type_inference_check_mismatch: Vec<UnexpectedTypeInferenceMismatch>
 );

@@ -1,40 +1,26 @@
 use super::{hir::{
     HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR, InferredTypeHIRRoot,
-    TrivialHIRExpr, HIR,
-}, type_name_printer::TypeNamePrinter, mir_printer::PrintableExpression, hir_printer::expr_str};
+    TrivialHIRExpr, HIR, NotChecked, Checked,
+}, mir_printer::PrintableExpression, hir_printer::expr_str};
 
 use crate::{
     ast::parser::{Expr, AST},
-    types::type_instance_db::{TypeInstanceId, TypeInstanceManager},
+    types::type_instance_db::{TypeInstanceId},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypecheckPendingExpression(pub HIRExpr<TypeInstanceId>);
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypecheckedExpression(pub HIRExpr<TypeInstanceId>);
+pub type TypecheckPendingExpression = HIRExpr<TypeInstanceId, NotChecked>;
+
+pub type TypecheckedExpression = HIRExpr<TypeInstanceId, Checked>;
 
 impl PrintableExpression for TypecheckPendingExpression {
     fn print_expr(&self) -> String {
-        expr_str(&self.0)
+        expr_str(self)
     }
 }
 
 impl PrintableExpression for TypecheckedExpression {
     fn print_expr(&self) -> String {
-        expr_str(&self.0)
-    }
-}
-
-impl TypecheckPendingExpression {
-    pub fn get_type(&self) -> TypeInstanceId {
-        self.0.get_type()
-    }
-}
-
-
-impl TypecheckedExpression {
-    pub fn get_type(&self) -> TypeInstanceId {
-        self.0.get_type()
+        expr_str(self)
     }
 }
 
@@ -155,9 +141,6 @@ pub struct MIRMaybeUnfinishedBlock {
 
 pub type TypecheckedMIRBlock = MIRBlock<TypecheckedExpression>;
 
-pub type UncheckedMIRBlock = MIRBlock<TypecheckPendingExpression>;
-
-
 struct MIRFunctionEmitter {
     current_scope: ScopeId,
     current_block: BlockId,
@@ -229,7 +212,7 @@ impl MIRFunctionEmitter {
         meta_ast: HIRAstMetadata,
     ) {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::If(
-            TypecheckPendingExpression(condition),
+            condition,
             true_branch,
             false_branch,
             meta_ast,
@@ -237,8 +220,7 @@ impl MIRFunctionEmitter {
     }
 
     fn finish_with_return(&mut self, expr: HIRExpr<TypeInstanceId>, meta_ast: HIRAstMetadata) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(
-            TypecheckPendingExpression(expr), meta_ast));
+        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, meta_ast));
     }
 
     fn finish_with_empty_return(&mut self) {
@@ -284,7 +266,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
             } => {
                 emitter.emit(MIRBlockNode::Assign {
                     path: path.clone(),
-                    expression: TypecheckPendingExpression(expression.clone()),
+                    expression: expression.clone(),
                     meta_ast: meta_ast.clone(),
                     meta_expr: meta_expr.clone(),
                 });
@@ -317,7 +299,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 //and *finally* assign the variable
                 emitter.emit(MIRBlockNode::Assign {
                     path: vec![var.clone()],
-                    expression: TypecheckPendingExpression(expression.clone()),
+                    expression: expression.clone(),
                     meta_ast: meta_ast.clone(),
                     meta_expr: meta_expr.clone(),
                 });
@@ -340,7 +322,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 match &function {
                     HIRExpr::Trivial(TrivialHIRExpr::Variable(var), ..) => {
 
-                        let pending_args = args.iter().map(|x| TypecheckPendingExpression(x.clone())).collect();
+                        let pending_args = args.iter().map(std::clone::Clone::clone).collect();
 
                         emitter.emit(MIRBlockNode::FunctionCall {
                             function: var.clone(),

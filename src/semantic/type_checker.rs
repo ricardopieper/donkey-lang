@@ -1,236 +1,31 @@
+use std::collections::HashSet;
+
 use super::compiler_errors::CompilerError;
-use super::hir::{HIRAstMetadata, HIRExpr, HIRExprMetadata, TrivialHIRExpr};
+use super::hir::{Checked, HIRExpr, NotChecked, TrivialHIRExpr};
+use super::hir_printer::expr_str;
+use crate::ast::lexer::Operator;
 use crate::ast::parser::{Expr, AST};
-use crate::types::type_errors::IfStatementNotBoolean;
 use crate::types::type_errors::{
-    AssignContext, CallToNonCallableType, FunctionCallArgumentCountMismatch, FunctionCallContext,
-    ReturnTypeContext, TypeErrors, TypeMismatch,
+    ArrayExpressionsNotAllTheSameType, AssignContext, FunctionCallArgumentCountMismatch,
+    FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
+    UnexpectedTypeInferenceMismatch,
 };
-use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
+use crate::types::type_errors::{
+    BinaryOperatorNotFound, FieldOrMethodNotFound, IfStatementNotBoolean, InvalidCast,
+    OutOfTypeBounds, UnexpectedTypeFound,
+};
+use crate::types::type_instance_db::{FieldOrMethod, TypeInstanceId, TypeInstanceManager, CommonTypeInstances};
 
-use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, TypecheckedExpression, TypecheckPendingExpression, TypecheckedMIRBlock, ScopeId};
+use super::mir::{
+    BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, ScopeId,
+    TypecheckPendingExpression, TypecheckedExpression, TypecheckedMIRBlock,
+};
 use super::name_registry::NameRegistry;
-
-pub struct MaybeTypechecked {
-    pub is_typechecked: bool,
-    pub previous_check_result: Option<bool>,
-    pub expr: HIRExpr<TypeInstanceId>
-}
-
-impl MaybeTypechecked {
-    pub fn get_type(&self) -> TypeInstanceId {
-        self.expr.get_type()
-    }
-}
-
-pub type MaybeUncheckedMIRBlock = MIRBlock<MaybeTypechecked>;
-
-pub fn typecheck(expr: &mut MaybeTypechecked, current_scope: ScopeId, names: &NameRegistry, type_db: &TypeInstanceManager, errors: &mut TypeErrors) -> Result<(), CompilerError> {
-    if let Some(result) = expr.previous_check_result {
-        return if result {
-            Ok(())
-        } else {
-            Err(CompilerError::TypeCheckError)
-        };
-    } 
-    //TODO all the checkings!
-    expr.is_typechecked = true;
-    Ok(())
-}
-
-fn find_variable_and_get_type(
-    name: &str,
-    current_block_scope: ScopeId,
-    scopes: &[MIRScope],
-    names: &NameRegistry,
-) -> TypeInstanceId {
-    let mut current_scope = &scopes[current_block_scope.0];
-
-    loop {
-        let bound_name = current_scope.boundnames.iter().find(|x| x.name == name);
-        if let Some(name_and_type) = bound_name {
-            return name_and_type.typename;
-        }
-        if current_scope.index == 0 {
-            break;
-        }
-        current_scope = &scopes[current_scope.index - 1];
-    }
-
-    //try find in the global scope
-    return *names.get(name).unwrap();
-}
-
-fn check_function_arguments_match_param_types(
-    on_function: &str,
-    function_called: &FunctionName,
-    function_parameters: &[TypeInstanceId],
-    arguments_passed: &[TypeInstanceId],
-    type_errors: &mut TypeErrors,
-) -> Result<(), CompilerError> {
-    let mut found_errors = false;
-    if function_parameters.len() != arguments_passed.len() {
-        found_errors = true;
-        type_errors
-            .function_call_argument_count
-            .push(FunctionCallArgumentCountMismatch {
-                on_function: on_function.to_string(),
-                called_function_name: function_called.clone(),
-                expected_count: function_parameters.len(),
-                passed_count: arguments_passed.len(),
-            });
-    }
-
-    let zipped = function_parameters.iter().zip(arguments_passed.iter());
-
-    for (number, (parameter_type, argument_type)) in zipped.enumerate() {
-        if argument_type != parameter_type {
-            found_errors = true;
-            type_errors.function_call_mismatches.push(TypeMismatch {
-                on_function: on_function.to_string(),
-                expected: *parameter_type,
-                actual: *argument_type,
-                context: FunctionCallContext {
-                    called_function_name: function_called.clone(),
-                    argument_position: number,
-                },
-            });
-        }
-    }
-    if found_errors {
-        Err(CompilerError::TypeCheckError)
-    } else {
-        Ok(())
-    }
-}
-
-fn all_paths_return_values_of_correct_type(
-    function_name: &str,
-    body: &mut [MaybeUncheckedMIRBlock],
-    function_return_type: TypeInstanceId,
-    type_db: &TypeInstanceManager,
-    errors: &mut TypeErrors,
-    names: &NameRegistry
-) -> Result<(), CompilerError> {
-    let mut found_errors = false;
-    for body_node in body {
-        if let MIRBlockFinal::Return(return_expr, ..) = &mut body_node.finish {
-            let expr_type = return_expr.get_type();
-            if function_return_type == expr_type {
-                typecheck(return_expr, body_node.scope, names, type_db, errors)?
-            } else {
-                errors.return_type_mismatches.push(TypeMismatch {
-                    context: ReturnTypeContext(),
-                    on_function: function_name.to_string(),
-                    expected: function_return_type,
-                    actual: expr_type,
-                });
-                found_errors = true;
-            }
-
-        }
-        if let MIRBlockFinal::EmptyReturn = &body_node.finish {
-            if function_return_type != type_db.common_types.void {
-                errors.return_type_mismatches.push(TypeMismatch {
-                    context: ReturnTypeContext(),
-                    on_function: function_name.to_string(),
-                    expected: function_return_type,
-                    actual: type_db.common_types.void,
-                });
-            }
-            found_errors = true;
-        }
-    }
-    if found_errors {
-        Err(CompilerError::TypeCheckError)
-    } else {
-        Ok(())
-    }
-}
-
-fn all_assignments_correct_type(
-    function_name: &str,
-    body: &mut [MaybeUncheckedMIRBlock],
-    scopes: &[MIRScope],
-    names: &NameRegistry,
-    errors: &mut TypeErrors,
-    type_db: &TypeInstanceManager,
-) -> Result<(), CompilerError> {
-    let mut found_errors = false;
-    for body_block in body {
-
-        for node in &mut body_block.nodes {
-            match node {
-                MIRBlockNode::Assign {
-                    path, expression, ..
-                } if path.len() == 1 => {
-                    let var = path.first().unwrap();
-                    //find variable
-                    let variable_type = find_variable_and_get_type(var, body_block.scope, scopes, names);
-                    let expr_type = expression.get_type();
-
-                    if variable_type == expr_type {
-                        typecheck(expression, body_block.scope, names, type_db, errors)?
-                    } else{
-                        errors.assign_mismatches.push(TypeMismatch {
-                            on_function: function_name.to_string(),
-                            context: AssignContext {
-                                target_variable_name: var.to_string(),
-                            },
-                            expected: variable_type,
-                            actual: expr_type,
-                        });
-                        found_errors = true;
-                    }
-                }
-                MIRBlockNode::Assign { path, .. } if path.len() != 1 => {
-                    todo!("Typecheck for path assignments of length > 1 not implemented yet")
-                }
-                _ => {}
-            }
-        }
-    }
-    if found_errors {
-        Err(CompilerError::TypeCheckError)
-    } else {
-        Ok(())
-    }
-}
-
-fn if_statement_exprs_read_from_bool_variable(
-    function_name: &str,
-    body: &mut [MaybeUncheckedMIRBlock],
-    type_db: &TypeInstanceManager,
-    names: &NameRegistry,
-    errors: &mut TypeErrors,
-) -> Result<(), CompilerError>  {
-    let mut found_errors = false;
-    for body_node in body {
-        if let MIRBlockFinal::If(expr, _, _, _) = &mut body_node.finish {
-            let expr_type = expr.get_type();
-            if expr_type == type_db.common_types.bool {
-                typecheck(expr, body_node.scope, names, type_db, errors)?
-            } else {
-                errors
-                    .if_statement_unexpected_type
-                    .push(IfStatementNotBoolean {
-                        on_function: function_name.to_string(),
-                        actual_type: expr_type,
-                    });
-                found_errors = true;
-            }
-        }
-    }
-    if found_errors {
-        Err(CompilerError::TypeCheckError)
-    } else {
-        Ok(())
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionName {
     Function(String),
+    #[allow(dead_code)]
     IndexAccess,
     #[allow(dead_code)]
     Method {
@@ -239,323 +34,628 @@ pub enum FunctionName {
     },
 }
 
-fn get_actual_function_name_with_details(
-    function_name: &str,
-    meta_ast: &HIRAstMetadata,
-    meta_expr: &HIRExprMetadata,
-) -> FunctionName {
-    //@TODO return FunctionName method variant
-    //Prioritize AST standalone expr
-    let expr = match meta_ast {
-        AST::StandaloneExpr(expr) => expr,
-        _ => meta_expr,
-    };
-
-    match expr {
-        Expr::FunctionCall(function_name, _) => {
-            match &**function_name {
-                Expr::Variable(str) => return FunctionName::Function(str.to_string()),
-                Expr::MemberAccess(_, member) => return FunctionName::Function(member.to_string()),
-                _ => {}
-            };
-        }
-        Expr::IndexAccess(_, _) => return FunctionName::IndexAccess,
-        _ => {}
-    };
-
-    FunctionName::Function(function_name.to_string())
+pub struct TypeCheckContext<'compiler_context, 'check_target> {
+    names: &'compiler_context NameRegistry,
+    type_db: &'compiler_context TypeInstanceManager,
+    errors: &'compiler_context mut TypeErrors,
+    on_function: &'check_target str,
 }
 
-fn function_calls_are_actually_callable_and_parameters_are_correct_type(
-    body: &mut [MaybeUncheckedMIRBlock],
-    scopes: &[MIRScope],
-    names: &NameRegistry,
-    function_name: &str,
-    type_db: &TypeInstanceManager,
-    errors: &mut TypeErrors,
-) -> Result<(), CompilerError>  {
-    let mut found_errors = false;
-    for body_node in body {
-        for block_node in &mut body_node.nodes {
-            match block_node {
-                MIRBlockNode::Assign {
-                    path,
-                    expression,
-                    meta_ast,
-                    meta_expr: _,
-                } => {
-                    assert!(
-                        path.len() <= 1,
-                        "Assign to path len > 2 not supported in type checker yet!"
-                    );
+impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'check_target> {
+    //We will check that function arguments and index operators are receiving the correct types.
+    //Binary operators are actually certainly correct, since type inference will report errors if it can't find an appropriate operator.
+    //We might implement sanity checks here, to prevent bugs in the type inference propagating to the backend code.
+    //We also assert that literal types are within bounds.
+    pub fn typecheck(
+        &mut self,
+        expr: &HIRExpr<TypeInstanceId, NotChecked>,
+        current_scope: ScopeId,
+    ) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        match expr {
+            HIRExpr::Trivial(trivial, type_id, meta) => {
+                self.check_trivial_expr_value_bounds(trivial, type_id, &self.type_db.common_types, expr, meta)
+            }
+            HIRExpr::Cast(expr, cast_to, meta) => {
+                self.check_expr_cast(expr, current_scope, cast_to, meta)
+            }
+            HIRExpr::BinaryOperation(lhs, op, rhs, expr_type, meta) => {
+                self.check_fun_expr_bin_op(lhs, current_scope, rhs, *op, expr_type, meta)
+            }
+            HIRExpr::MethodCall(obj, name, args, return_type, meta) => {
+                self.check_expr_method_call(current_scope, obj, name, args, return_type, meta)
+            }
+            HIRExpr::FunctionCall(function_expr, args, return_type, meta) => {
+                self.check_expr_function_call(function_expr, current_scope, args, return_type, meta)
+            }
+            HIRExpr::UnaryExpression(op, rhs, inferred_type, meta) => {
+                self.check_expr_unary(rhs, current_scope, op, inferred_type, meta)
+            }
+            HIRExpr::MemberAccess(obj, member, inferred_type, meta) => {
+                self.check_expr_member_access(obj, current_scope, member, inferred_type, meta)
+            }
+            HIRExpr::Array(expr_array, inferred_type, meta) => {
+                self.check_expr_array(expr_array, current_scope, inferred_type, meta)
+            }
+            HIRExpr::TypecheckTag(_) => unreachable!(),
+        }
+    }
 
-                    typecheck(expression, body_node.scope, names, type_db, errors)?;
+    fn check_expr_function_call(&mut self, function_expr: &Box<HIRExpr<TypeInstanceId>>, current_scope: ScopeId, args: &Vec<HIRExpr<TypeInstanceId>>, return_type: &TypeInstanceId, meta: &Expr) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        let function_type_id = function_expr.get_type();
+        let function_name = FunctionName::Function(expr_str(function_expr));
+        let checked_func = self.typecheck(function_expr, current_scope)?;
+        let checked_args =
+            self.function_call_check(current_scope, function_type_id, function_name, args)?;
+        Ok(HIRExpr::FunctionCall(
+            checked_func.into(),
+            checked_args,
+            *return_type,
+            meta.clone(),
+        ))
+    }
 
-                    //on assigns, we need to check if's a function call.
-                    let HIRExpr::FunctionCall(call_expr, args, _, expr_metadata) = &expression.expr else {
-                        continue; //other cases handled elsewhere
-                    };
+    fn check_expr_method_call(&mut self, current_scope: ScopeId, obj: &Box<HIRExpr<TypeInstanceId>>, name: &String, args: &Vec<HIRExpr<TypeInstanceId>>, return_type: &TypeInstanceId, meta: &Expr) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        let (checked_obj, checked_args) =
+            self.method_call_check(current_scope, obj, name, args)?;
+        Ok(HIRExpr::MethodCall(
+            checked_obj.into(),
+            name.to_string(),
+            checked_args,
+            *return_type,
+            meta.clone(),
+        ))
+    }
 
-                    let type_id = call_expr.get_type();
-                    let type_data = type_db.get_instance(type_id);
-                    if !type_data.is_function {
-                        found_errors = true;
-                        errors.call_non_callable.push(CallToNonCallableType {
-                            on_function: function_name.to_string(),
-                            actual_type: call_expr.get_type(),
+    fn check_expr_array(&mut self, expr_array: &Vec<HIRExpr<TypeInstanceId>>, current_scope: ScopeId, inferred_type: &TypeInstanceId, meta: &Expr) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        let all_array_exprs_checked = expr_array
+            .iter()
+            .map(|expr| self.typecheck(expr, current_scope))
+            .collect::<Result<Vec<_>, _>>()?;
+        let all_types = all_array_exprs_checked
+            .iter()
+            .map(|x| x.get_type())
+            .collect::<HashSet<_>>();
+        let all_types_are_the_same = all_types.len() <= 1;
+        if !all_types_are_the_same {
+            self.errors.array_expressions_not_all_the_same_type.push(
+                ArrayExpressionsNotAllTheSameType {
+                    on_function: self.on_function.to_string(),
+                    expected_type: all_array_exprs_checked[0].get_type(),
+                },
+            );
+            Err(CompilerError::TypeCheckError)
+        } else {
+            Ok(HIRExpr::Array(
+                all_array_exprs_checked,
+                *inferred_type,
+                meta.clone(),
+            ))
+        }
+    }
+
+    fn check_expr_member_access(
+        &mut self,
+        obj: &Box<HIRExpr<TypeInstanceId>>,
+        current_scope: ScopeId,
+        member: &String,
+        inferred_type: &TypeInstanceId,
+        meta: &Expr,
+    ) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        let checked_obj = self.typecheck(obj, current_scope)?;
+        let member_type = match self
+            .type_db
+            .find_field_or_method(checked_obj.get_type(), member)
+        {
+            FieldOrMethod::Field(f) => f.field_type,
+            FieldOrMethod::Method(m) => m.function_type,
+            FieldOrMethod::NotFound => {
+                self.errors
+                    .field_or_method_not_found
+                    .push(FieldOrMethodNotFound {
+                        on_function: self.on_function.to_string(),
+                        object_type: obj.get_type(),
+                        field_or_method: member.to_string(),
+                    });
+                return Err(CompilerError::TypeCheckError);
+            }
+        };
+        if member_type != checked_obj.get_type() {
+            self.errors
+                .type_inference_check_mismatch
+                .push(UnexpectedTypeInferenceMismatch {
+                    on_function: self.on_function.to_string(),
+                    inferred: *inferred_type,
+                    checked: checked_obj.get_type(),
+                    expr: *obj.clone(),
+                });
+            return Err(CompilerError::TypeCheckError);
+        } else {
+            Ok(HIRExpr::MemberAccess(
+                checked_obj.clone().into(),
+                member.clone(),
+                *inferred_type,
+                meta.clone(),
+            ))
+        }
+    }
+
+    fn check_expr_unary(
+        &mut self,
+        rhs: &Box<HIRExpr<TypeInstanceId>>,
+        current_scope: ScopeId,
+        op: &Operator,
+        inferred_type: &TypeInstanceId,
+        meta: &Expr,
+    ) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        let checked_rhs = self.typecheck(rhs, current_scope)?;
+        let rhs_type = self.type_db.get_instance(checked_rhs.get_type());
+        let found_op = rhs_type
+            .rhs_binary_ops
+            .iter()
+            .find(|(rhs_op, rhs_type, result_type)| {
+                rhs_op == op && *rhs_type == checked_rhs.get_type() && result_type == inferred_type
+            });
+        if let Some(_) = found_op {
+            Ok(HIRExpr::UnaryExpression(
+                *op,
+                checked_rhs.into(),
+                *inferred_type,
+                meta.clone(),
+            ))
+        } else {
+            self.errors.unary_op_not_found.push(UnaryOperatorNotFound {
+                on_function: self.on_function.to_string(),
+                rhs: rhs.get_type(),
+                operator: *op,
+            });
+            Err(CompilerError::TypeCheckError)
+        }
+    }
+
+    fn check_fun_expr_bin_op(
+        &mut self,
+        lhs: &Box<HIRExpr<TypeInstanceId>>,
+        current_scope: ScopeId,
+        rhs: &Box<HIRExpr<TypeInstanceId>>,
+        op: Operator,
+        expr_type: &TypeInstanceId,
+        meta: &Expr,
+    ) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        let checked_lhs = self.typecheck(lhs, current_scope)?;
+        let checked_rhs = self.typecheck(rhs, current_scope)?;
+        let lhs_type = self.type_db.get_instance(checked_lhs.get_type());
+        if let Some(_t) = lhs_type
+            .rhs_binary_ops
+            .iter()
+            .find(|(rhs_op, rhs_type, result_type)| {
+                *rhs_op == op && *rhs_type == checked_rhs.get_type() && result_type == expr_type
+            })
+        {
+            Ok(HIRExpr::BinaryOperation(
+                checked_lhs.into(),
+                op,
+                checked_rhs.into(),
+                *expr_type,
+                meta.clone(),
+            ))
+        } else {
+            self.errors
+                .binary_op_not_found
+                .push(BinaryOperatorNotFound {
+                    on_function: self.on_function.to_string(),
+                    lhs: lhs.get_type(),
+                    rhs: rhs.get_type(),
+                    operator: op,
+                });
+            Err(CompilerError::TypeCheckError)
+        }
+    }
+
+    fn check_expr_cast(
+        &mut self,
+        expr: &Box<HIRExpr<TypeInstanceId>>,
+        current_scope: ScopeId,
+        cast_to: &TypeInstanceId,
+        meta: &crate::ast::parser::Expr,
+    ) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        let checked = self.typecheck(expr, current_scope)?;
+        //is type of expr castable to cast_to?
+        let type_data = self.type_db.get_instance(expr.get_type());
+        if type_data.allowed_casts.contains(cast_to) {
+            Ok(HIRExpr::Cast(checked.into(), *cast_to, meta.clone()))
+        } else {
+            self.errors.invalid_casts.push(InvalidCast {
+                on_function: self.on_function.to_string(),
+                expr: *expr.clone(),
+                cast_to: *cast_to,
+            });
+            Err(CompilerError::TypeCheckError)
+        }
+    }
+
+    fn check_trivial_expr_value_bounds(
+        &mut self,
+        trivial: &TrivialHIRExpr,
+        type_id: &TypeInstanceId,
+        common_types: &CommonTypeInstances,
+        expr: &HIRExpr<TypeInstanceId>,
+        meta: &Expr,
+    ) -> Result<HIRExpr<TypeInstanceId, Checked>, CompilerError> {
+        let is_properly_typed = match trivial {
+            TrivialHIRExpr::IntegerValue(i) => {
+                let is_within_bounds = if *type_id == common_types.i32 {
+                    *i >= i128::from(i32::MIN) && *i <= i128::from(i32::MAX)
+                } else if *type_id == common_types.i64 {
+                    *i >= i128::from(i64::MIN) && *i <= i128::from(i64::MAX)
+                } else if *type_id == common_types.u32 {
+                    *i >= i128::from(u32::MIN) && *i <= i128::from(u32::MAX)
+                } else if *type_id == common_types.u64 {
+                    *i >= i128::from(u64::MIN) && *i <= i128::from(u64::MAX)
+                } else {
+                    self.errors.unexpected_types.push(UnexpectedTypeFound {
+                        on_function: self.on_function.to_string(),
+                        type_def: *type_id,
+                    });
+                    return Err(CompilerError::TypeCheckError);
+                };
+                if is_within_bounds {
+                    true
+                } else {
+                    self.errors.out_of_bounds.push(OutOfTypeBounds {
+                        on_function: self.on_function.to_string(),
+                        expr: expr.clone(),
+                    });
+                    false
+                }
+            }
+            TrivialHIRExpr::FloatValue(f) => {
+                let f = f.0;
+                let is_within_bounds = if *type_id == common_types.f32 {
+                    f >= f64::from(f32::MIN) && f <= f64::from(f32::MAX)
+                } else if *type_id == common_types.f64 {
+                    true
+                } else {
+                    self.errors.unexpected_types.push(UnexpectedTypeFound {
+                        on_function: self.on_function.to_string(),
+                        type_def: *type_id,
+                    });
+                    return Err(CompilerError::TypeCheckError);
+                };
+                if is_within_bounds {
+                    true
+                } else {
+                    self.errors.out_of_bounds.push(OutOfTypeBounds {
+                        on_function: self.on_function.to_string(),
+                        expr: expr.clone(),
+                    });
+                    false
+                }
+            } //these are all ok, though None is not really implemented right now...
+            TrivialHIRExpr::StringValue(_)
+            | TrivialHIRExpr::BooleanValue(_)
+            | TrivialHIRExpr::Variable(_)
+            | TrivialHIRExpr::None => true,
+        };
+        if is_properly_typed {
+            Ok(HIRExpr::Trivial(trivial.clone(), *type_id, meta.clone()))
+        } else {
+            Err(CompilerError::TypeCheckError)
+        }
+    }
+
+    //lmao
+    fn method_call_check(
+        &mut self,
+        current_scope: ScopeId,
+        obj: &HIRExpr<TypeInstanceId>,
+        name: &String,
+        args: &[HIRExpr<TypeInstanceId>],
+    ) -> Result<(TypecheckedExpression, Vec<TypecheckedExpression>), CompilerError> {
+        dbg!(obj);
+        let checked_method = self.typecheck(obj, current_scope)?;
+        let obj_type = self.type_db.get_instance(checked_method.get_type());
+
+        let function_type = if let Some(ftype) = obj_type.methods.iter().find(|x| &x.name == name) {
+            self.type_db.get_instance(ftype.function_type)
+        } else {
+            self.errors
+                .field_or_method_not_found
+                .push(FieldOrMethodNotFound {
+                    on_function: self.on_function.to_string(),
+                    object_type: checked_method.get_type(),
+                    field_or_method: name.to_string(),
+                });
+            return Err(CompilerError::TypeCheckError);
+        };
+
+        let checked_args = args
+            .iter()
+            .map(|arg| self.typecheck(arg, current_scope))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if function_type.function_args.len() != checked_args.len() {
+            self.errors
+                .function_call_argument_count
+                .push(FunctionCallArgumentCountMismatch {
+                    on_function: self.on_function.to_string(),
+                    called_function_name: FunctionName::Method {
+                        function_name: name.to_string(),
+                        type_name: obj_type.name.to_string(),
+                    },
+                    expected_count: function_type.function_args.len(),
+                    passed_count: checked_args.len(),
+                });
+            return Err(CompilerError::TypeCheckError);
+        };
+
+        let checked_arg_types = checked_args
+            .iter()
+            .map(HIRExpr::<TypeInstanceId, Checked>::get_type);
+        let has_invalid_arg = function_type
+            .function_args
+            .iter()
+            .zip(checked_arg_types)
+            .enumerate()
+            .find(|(_index, (expected, actual))| *expected != actual);
+
+        if let Some((arg_pos, types)) = has_invalid_arg {
+            self.errors.function_call_mismatches.push(TypeMismatch {
+                on_function: self.on_function.to_string(),
+                context: FunctionCallContext {
+                    called_function_name: FunctionName::Method {
+                        function_name: name.to_string(),
+                        type_name: obj_type.name.to_string(),
+                    },
+                    argument_position: arg_pos,
+                },
+                expected: *types.0,
+                actual: types.1,
+            });
+            return Err(CompilerError::TypeCheckError);
+        }
+        Ok((checked_method, checked_args))
+    }
+
+    fn function_call_check(
+        &mut self,
+        current_scope: ScopeId,
+        function_type: TypeInstanceId,
+        function_name: FunctionName,
+        args: &[HIRExpr<TypeInstanceId>],
+    ) -> Result<Vec<TypecheckedExpression>, CompilerError> {
+        let function_type = self.type_db.get_instance(function_type);
+        let checked_args = args
+            .iter()
+            .map(|arg| self.typecheck(arg, current_scope))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if function_type.function_args.len() != checked_args.len() {
+            self.errors
+                .function_call_argument_count
+                .push(FunctionCallArgumentCountMismatch {
+                    on_function: self.on_function.to_string(),
+                    called_function_name: function_name,
+                    expected_count: function_type.function_args.len(),
+                    passed_count: checked_args.len(),
+                });
+            return Err(CompilerError::TypeCheckError);
+        };
+
+        let checked_arg_types = checked_args
+            .iter()
+            .map(HIRExpr::<TypeInstanceId, Checked>::get_type);
+        let arg_pairs = function_type.function_args.iter().zip(checked_arg_types);
+
+        let mut has_errors = false;
+        for (index, (expected, actual)) in arg_pairs.enumerate() {
+            if *expected != actual {
+                self.errors.function_call_mismatches.push(TypeMismatch {
+                    on_function: self.on_function.to_string(),
+                    context: FunctionCallContext {
+                        called_function_name: function_name.clone(),
+                        argument_position: index,
+                    },
+                    expected: *expected,
+                    actual,
+                });
+                has_errors = true;
+            }
+        }
+
+        if has_errors {
+            return Err(CompilerError::TypeCheckError);
+        }
+        Ok(checked_args)
+    }
+
+    fn type_check_function(
+        &mut self,
+        body: Vec<MIRBlock<TypecheckPendingExpression>>,
+        scopes: &[MIRScope],
+        return_type: TypeInstanceId,
+    ) -> Result<Vec<TypecheckedMIRBlock>, CompilerError> {
+        let mut has_errors = false;
+        let mut new_body = vec![];
+
+        for block in body {
+            let scope = block.scope;
+            let index = block.index;
+            let mut new_blocks = vec![];
+            let new_finish = match block.finish {
+                MIRBlockFinal::If(expr, goto_true, goto_false, ast_meta) => self
+                    .check_if_statement_expression(
+                        block.scope,
+                        &expr,
+                        goto_true,
+                        goto_false,
+                        ast_meta,
+                    )?,
+                MIRBlockFinal::GotoBlock(id) => MIRBlockFinal::GotoBlock(id),
+                MIRBlockFinal::Return(return_expr, ast_meta) => {
+                    let checked_return_expr = self.typecheck(&return_expr, block.scope)?;
+                    let expr_type = return_expr.get_type();
+                    if return_type == expr_type {
+                        MIRBlockFinal::Return(checked_return_expr, ast_meta.clone())
+                    } else {
+                        self.errors.return_type_mismatches.push(TypeMismatch {
+                            context: ReturnTypeContext(),
+                            on_function: self.on_function.to_string(),
+                            expected: return_type,
+                            actual: expr_type,
                         });
-                        continue;
-                    }
-
-                    let HIRExpr::Trivial(TrivialHIRExpr::Variable(called_function), ..) = &**call_expr else {
-                        panic!("Cannot call function that is not named: anonymous functions not supported yet")
-                    };
-
-                    let passed_types = args
-                        .iter()
-                        .map(HIRExpr::<TypeInstanceId>::get_type)
-                        .collect::<Vec<_>>();
-                    let actual_function_name = get_actual_function_name_with_details(
-                        called_function,
-                        meta_ast,
-                        &expr_metadata,
-                    );
-                    if let Err(_) = check_function_arguments_match_param_types(
-                        function_name,
-                        &actual_function_name,
-                        &type_data.function_args,
-                        &passed_types,
-                        errors,
-                    ) {
-                        found_errors = true;
+                        return Err(CompilerError::TypeCheckError);
                     }
                 }
-                MIRBlockNode::FunctionCall {
-                    function,
-                    args,
-                    meta_ast,
-                    meta_expr,
-                } => {
-                    let function_type =
-                        find_variable_and_get_type(function, body_node.scope, scopes, names);
-                    let type_data = type_db.get_instance(function_type);
-
-                    if !type_data.is_function {
-                        found_errors = true;
-                        errors.call_non_callable.push(CallToNonCallableType {
-                            on_function: function_name.to_string(),
-                            actual_type: function_type,
+                MIRBlockFinal::EmptyReturn => {
+                    if return_type == self.type_db.common_types.void {
+                        MIRBlockFinal::EmptyReturn
+                    } else {
+                        self.errors.return_type_mismatches.push(TypeMismatch {
+                            context: ReturnTypeContext(),
+                            on_function: self.on_function.to_string(),
+                            expected: return_type,
+                            actual: self.type_db.common_types.void,
                         });
-                        continue;
+                        return Err(CompilerError::TypeCheckError);
                     }
+                }
+            };
 
-                    for arg in args.iter_mut() {
-                        if let Err(_) = typecheck(arg, body_node.scope, names, type_db, errors) {
-                            found_errors = true;
+            for node in block.nodes {
+                match node {
+                    MIRBlockNode::Assign {
+                        path,
+                        expression,
+                        meta_ast,
+                        meta_expr,
+                    } if path.len() == 1 => {
+                        let var = path.first().unwrap();
+                        //find variable
+                        let variable_type =
+                            self.find_variable_and_get_type(var, block.scope, scopes);
+                        let expr_type = expression.get_type();
+
+                        if variable_type == expr_type {
+                            let typechecked_value = self.typecheck(&expression, block.scope)?;
+                            new_blocks.push(MIRBlockNode::Assign {
+                                path,
+                                expression: typechecked_value,
+                                meta_ast,
+                                meta_expr,
+                            });
+                        } else {
+                            self.errors.assign_mismatches.push(TypeMismatch {
+                                on_function: self.on_function.to_string(),
+                                context: AssignContext {
+                                    target_variable_name: var.to_string(),
+                                },
+                                expected: variable_type,
+                                actual: expr_type,
+                            });
+                            has_errors = true;
                         }
                     }
-
-                    let passed = args
-                        .iter()
-                        .map(|x| x.expr.get_type())
-                        .collect::<Vec<_>>();
-
-                    let actual_function_name =
-                        get_actual_function_name_with_details(function, meta_ast, meta_expr);
-
-                    if let Err(_) = check_function_arguments_match_param_types(
-                        function_name,
-                        &actual_function_name,
-                        &type_data.function_args,
-                        &passed,
-                        errors,
-                    ) {
-                        found_errors = true;
+                    MIRBlockNode::Assign { .. } => {
+                        todo!("Typecheck for path assignments of length > 1 not implemented yet")
+                    }
+                    MIRBlockNode::FunctionCall {
+                        function,
+                        args,
+                        meta_ast,
+                        meta_expr,
+                    } => {
+                        let function_type =
+                            self.find_variable_and_get_type(&function, block.scope, scopes);
+                        match self.function_call_check(
+                            block.scope,
+                            function_type,
+                            FunctionName::Function(function.to_string()),
+                            &args,
+                        ) {
+                            Ok(checked_args) => {
+                                new_blocks.push(MIRBlockNode::FunctionCall {
+                                    function,
+                                    args: checked_args,
+                                    meta_ast,
+                                    meta_expr,
+                                });
+                            }
+                            Err(_) => {
+                                has_errors = true;
+                            }
+                        }
                     }
                 }
             }
-        }
-    }
 
-    if found_errors {
-        Err(CompilerError::TypeCheckError)
-    } else {
-        Ok(())
-    }
-}
-
-fn methods_receive_parameters_of_correct_type(
-    body: &mut [MaybeUncheckedMIRBlock],
-    function_name: &str,
-    type_db: &TypeInstanceManager,
-    errors: &mut TypeErrors,
-    names: &NameRegistry,
-) -> Result<(), CompilerError>  {
-    let mut found_errors = false;
-    for body_node in body {
-        for block_node in &mut body_node.nodes {
-            if let MIRBlockNode::Assign {
-                path,
-                expression,
-                meta_ast,
-                meta_expr: _,
-            } = block_node
-            {
-                if let Err(_) = typecheck(expression, body_node.scope, names, type_db, errors) {
-                    found_errors = true;
-                }
-
-                assert!(
-                    path.len() <= 1,
-                    "Assign to path len > 2 not supported in type checker yet!"
-                );
-
-                //on assigns, we need to check if's a function call.
-                let HIRExpr::MethodCall(object_expr, method, args, _, expr_metadata) = &expression.expr else {
-                    continue; //other cases handled elsewhere
-                };
-
-                let object_expr_type = object_expr.get_type();
-                let object_type_data = type_db.get_instance(object_expr_type);
-
-                let method = object_type_data
-                    .methods
-                    .iter()
-                    .find(|m| &m.name == method)
-                    .unwrap();
-
-                let method_function_type_data = type_db.get_instance(method.function_type);
-
-                let passed_types = args
-                    .iter()
-                    .map(HIRExpr::<TypeInstanceId>::get_type)
-                    .collect::<Vec<_>>();
-
-                let actual_function_name = get_actual_function_name_with_details(
-                    &method_function_type_data.name,
-                    meta_ast,
-                    &expr_metadata,
-                );
-
-                if let Err(_) = check_function_arguments_match_param_types(
-                    function_name,
-                    &actual_function_name,
-                    &method_function_type_data.function_args,
-                    &passed_types,
-                    errors,
-                ) {
-                    found_errors = true;
-                }
+            if has_errors {
+                return Err(CompilerError::TypeCheckError);
             }
+
+            new_body.push(MIRBlock {
+                index,
+                scope,
+                finish: new_finish,
+                nodes: new_blocks,
+            });
         }
+
+        Ok(new_body)
     }
-    if found_errors {
-        Err(CompilerError::TypeCheckError)
-    } else {
-        Ok(())
+
+    fn find_variable_and_get_type(
+        &mut self,
+        name: &str,
+        current_block_scope: ScopeId,
+        scopes: &[MIRScope],
+    ) -> TypeInstanceId {
+        let mut current_scope = &scopes[current_block_scope.0];
+
+        loop {
+            let bound_name = current_scope.boundnames.iter().find(|x| x.name == name);
+            if let Some(name_and_type) = bound_name {
+                return name_and_type.typename;
+            }
+            if current_scope.index == 0 {
+                break;
+            }
+            current_scope = &scopes[current_scope.index - 1];
+        }
+
+        //try find in the global scope
+        return *self.names.get(name).unwrap();
     }
-}
 
-fn type_check_function(
-    function_name: &str,
-    body: Vec<MIRBlock<TypecheckPendingExpression>>,
-    scopes: &[MIRScope],
-    return_type: TypeInstanceId,
-    globals: &NameRegistry,
-    type_db: &TypeInstanceManager,
-    type_errors: &mut TypeErrors,
-) -> Result<Vec<TypecheckedMIRBlock>, CompilerError> {
-
-    let mut to_check = map_blocks(body, |item| {
-        Ok(MaybeTypechecked {
-            previous_check_result: None,
-            is_typechecked: false,
-            expr: item.0    
-        })
-    }).unwrap();
-
-    all_paths_return_values_of_correct_type(function_name, &mut to_check, return_type, type_db, type_errors, globals)?;
-    all_assignments_correct_type(function_name, &mut to_check, scopes, globals, type_errors, type_db)?;
-    function_calls_are_actually_callable_and_parameters_are_correct_type(
-        &mut to_check,
-        scopes,
-        globals,
-        function_name,
-        type_db,
-        type_errors,
-    )?;
-    methods_receive_parameters_of_correct_type(&mut to_check, function_name, type_db, type_errors, globals)?;
-    if_statement_exprs_read_from_bool_variable(function_name, &mut to_check, type_db, globals, type_errors)?;
-
-
-    map_blocks(to_check, |item| {
-        if item.is_typechecked {
-            Ok(TypecheckedExpression(item.expr))
+    fn check_if_statement_expression(
+        &mut self,
+        current_scope: ScopeId,
+        expr: &HIRExpr<TypeInstanceId>,
+        goto_true: BlockId,
+        goto_false: BlockId,
+        ast: AST,
+    ) -> Result<MIRBlockFinal<HIRExpr<TypeInstanceId, Checked>>, CompilerError> {
+        let expr_checked = self.typecheck(expr, current_scope)?;
+        let expr_type = expr.get_type();
+        Ok(if expr_type == self.type_db.common_types.bool {
+            MIRBlockFinal::If(expr_checked, goto_true, goto_false, ast)
         } else {
-            Err(())
-        }
-    }).map_err(|_| CompilerError::TypeCheckError)
-
-}
-
-fn map_blocks<TFunc, TIn, TOut>(body: Vec<MIRBlock<TIn>>, mapper: TFunc) -> Result<Vec<MIRBlock<TOut>>, ()> 
-    where TFunc: Fn(TIn) -> Result<TOut, ()> + Copy {
-    let mapped: Result<Vec<MIRBlock<TOut>>, ()> = body.into_iter()
-        .map(|block| -> Result<MIRBlock<TOut>, ()> {
-            let nodes: Result<Vec<_>, _> = block.nodes.into_iter().map(|node| -> Result<MIRBlockNode<TOut>, ()> { 
-                map_node(node, mapper)
-            }).collect();
-
-            Ok(MIRBlock { 
-                index: block.index, 
-                scope: block.scope, 
-                finish: match block.finish {
-                    MIRBlockFinal::If(expr, btrue, bfalse, meta) => {
-                        MIRBlockFinal::If(mapper(expr)?, btrue, bfalse, meta)
-                    }
-                    MIRBlockFinal::GotoBlock(b) => MIRBlockFinal::GotoBlock(b),
-                    MIRBlockFinal::Return(expr, meta) => MIRBlockFinal::Return(mapper(expr)?, meta),
-                    MIRBlockFinal::EmptyReturn => MIRBlockFinal::EmptyReturn,
-                },
-                nodes: nodes?
-            })
+            self.errors
+                .if_statement_unexpected_type
+                .push(IfStatementNotBoolean {
+                    on_function: self.on_function.to_string(),
+                    actual_type: expr_type,
+                });
+            return Err(CompilerError::TypeCheckError);
         })
-        .collect();
-    mapped
+    }
 }
-
-fn map_node<TFunc, TIn, TOut>(node: MIRBlockNode<TIn>, mapper: TFunc) -> Result<MIRBlockNode<TOut>, ()> 
-    where TFunc: Fn(TIn) -> Result<TOut, ()> {
-    Ok(match node {
-        MIRBlockNode::Assign { path, expression, meta_ast, meta_expr } => 
-            MIRBlockNode::Assign { 
-                path, 
-                expression: mapper(expression)?, 
-                meta_ast, 
-                meta_expr
-            },
-        MIRBlockNode::FunctionCall { function, args, meta_ast, meta_expr } => {
-            let args: Result<_, _> = args.into_iter().map(|arg| -> Result<TOut, ()> { mapper(arg) }).collect();
-            
-            let fcall = MIRBlockNode::FunctionCall { 
-                function, 
-                args: args?,
-                meta_ast, 
-                meta_expr 
-            };
-            fcall
-        }
-    })
-}
-
 
 pub fn check_type(
     top_nodes: Vec<MIRTopLevelNode<TypecheckPendingExpression>>,
     type_db: &TypeInstanceManager,
     names: &NameRegistry,
-    errors: &mut TypeErrors
+    errors: &mut TypeErrors,
 ) -> Result<Vec<MIRTopLevelNode<TypecheckedExpression>>, CompilerError> {
-
     let mut new_mir = vec![];
 
     for node in top_nodes {
@@ -567,23 +667,28 @@ pub fn check_type(
                 scopes,
                 return_type,
             } => {
-                let checked_body = type_check_function(
-                    &function_name,
-                    body,
-                    &scopes,
-                    return_type,
+                let mut context = TypeCheckContext {
                     names,
                     type_db,
                     errors,
-                )?;
-                new_mir.push(MIRTopLevelNode::DeclareFunction { function_name, parameters, body: checked_body, scopes, return_type });
+                    on_function: &function_name,
+                };
+
+                let checked_body = context.type_check_function(body, &scopes, return_type)?;
+                new_mir.push(MIRTopLevelNode::DeclareFunction {
+                    function_name,
+                    parameters,
+                    body: checked_body,
+                    scopes,
+                    return_type,
+                });
             }
             MIRTopLevelNode::StructDeclaration { .. } => {
                 todo!("Not done yet!")
             }
         }
     }
-    return Ok(new_mir);
+    Ok(new_mir)
 }
 
 #[cfg(test)]
@@ -601,7 +706,7 @@ mod tests {
         mir: Vec<MIRTopLevelNode<TypecheckPendingExpression>>,
         database: TypeInstanceManager,
         globals: NameRegistry,
-        errors: TypeErrors
+        errors: TypeErrors,
     }
 
     fn prepare(source: &str) -> TestContext {
@@ -626,13 +731,14 @@ mod tests {
 
     //Parses a single expression
     fn run_test(mut ctx: TestContext) -> (TypeErrors, TypeInstanceManager) {
-        check_type(ctx.mir, &ctx.database, &ctx.globals, &mut ctx.errors);
+        if check_type(ctx.mir, &ctx.database, &ctx.globals, &mut ctx.errors).is_err() {
+            println!("Type errors:");
+        }
         if ctx.errors.count() > 0 {
-            println!("{}", TypeErrorPrinter::new(&mut ctx.errors, &ctx.database));
+            println!("{}", TypeErrorPrinter::new(&ctx.errors, &ctx.database));
         } else {
             println!("No errors found!");
         }
-
         (ctx.errors, ctx.database)
     }
 
@@ -885,7 +991,7 @@ def main():
 ",
         );
         let (err, db) = run_test(ctx);
-        let error_msg = print_error(err, db);
+        let error_msg = print_error(&err, &db);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
     }
@@ -900,7 +1006,7 @@ def main():
 ",
         );
         let (err, db) = run_test(ctx);
-        let error_msg = print_error(err, db);
+        let error_msg = print_error(&err, &db);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
     }
@@ -915,13 +1021,13 @@ def main(args: array<str>):
         );
 
         let (err, db) = run_test(ctx);
-        let error_msg = print_error(err, db);
+        let error_msg = print_error(&err, &db);
         let expected = "Function argument type mismatch: In function main, on index operator, parameter on position 0 has incorrect type: Expected u32 but passed str\n";
         assert_eq!(error_msg, expected);
     }
 
-    fn print_error(err: TypeErrors, db: TypeInstanceManager) -> String {
-        let printer = TypeErrorPrinter::new(&err, &db);
+    fn print_error(err: &TypeErrors, db: &TypeInstanceManager) -> String {
+        let printer = TypeErrorPrinter::new(err, db);
         let error_msg = format!("{}", printer);
         error_msg
     }
@@ -938,7 +1044,7 @@ def main():
         let (err, db) = run_test(ctx);
         assert_eq!(1, err.count());
 
-        let error_msg = print_error(err, db);
+        let error_msg = print_error(&err, &db);
         let expected = "In function main, binary operator + not found for types: i32 + f32\n";
         assert_eq!(error_msg, expected);
     }
@@ -955,7 +1061,7 @@ def main():
         let (err, db) = run_test(ctx);
         assert_eq!(1, err.count());
 
-        let error_msg = print_error(err, db);
+        let error_msg = print_error(&err, &db);
         let expected = "In function main, binary operator * not found for types: i32 * f32\n";
         assert_eq!(error_msg, expected);
     }
@@ -999,6 +1105,6 @@ def main(args: array<f32>):
 
         let (err, _) = run_test(ctx);
         assert_eq!(1, err.count());
-        assert_eq!(1, err.binary_op_not_found.len());
+        assert_eq!(1, err.function_call_mismatches.len());
     }
 }

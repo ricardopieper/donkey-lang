@@ -2801,7 +2801,7 @@ def function(x: i32,y: u32,z: MyType):
         }];
         assert_eq!(expected, result);
     }
-
+    
     #[test]
     fn return_nothing() {
         let tokens = tokenize(
@@ -3001,16 +3001,15 @@ struct SomeStruct:
         //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
         let tokens = tokenize("args[1] + 1").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![
-            AST::StandaloneExpr(
-                Expr::BinaryOperation(
-                    Expr::IndexAccess(
-                        Expr::Variable("args".into()).into(),
-                        Expr::IntegerValue(1).into()
-                    ).into(),
-                    Operator::Plus,
-                    Expr::IntegerValue(1).into()
-                ))];
+        let expected = vec![AST::StandaloneExpr(Expr::BinaryOperation(
+            Expr::IndexAccess(
+                Expr::Variable("args".into()).into(),
+                Expr::IntegerValue(1).into(),
+            )
+            .into(),
+            Operator::Plus,
+            Expr::IntegerValue(1).into(),
+        ))];
         assert_eq!(expected, result);
     }
 
@@ -3019,16 +3018,15 @@ struct SomeStruct:
         //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
         let tokens = tokenize("1 + args[1]").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![
-            AST::StandaloneExpr(
-                Expr::BinaryOperation(
-                    Expr::IntegerValue(1).into(),
-                    Operator::Plus,
-                    Expr::IndexAccess(
-                        Expr::Variable("args".into()).into(),
-                        Expr::IntegerValue(1).into()
-                    ).into()
-                ))];
+        let expected = vec![AST::StandaloneExpr(Expr::BinaryOperation(
+            Expr::IntegerValue(1).into(),
+            Operator::Plus,
+            Expr::IndexAccess(
+                Expr::Variable("args".into()).into(),
+                Expr::IntegerValue(1).into(),
+            )
+            .into(),
+        ))];
         assert_eq!(expected, result);
     }
 
