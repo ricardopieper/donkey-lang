@@ -45,8 +45,8 @@ pub enum NumberOfBytes {
 }
 
 impl NumberOfBytes {
-    pub fn get_bytes(self) -> u8 {
-        2u8.pow(u32::from(self as u8))
+    pub fn get_bytes<T>(self) -> T where T: From<u8> {
+        2u8.pow(u32::from(self as u8)).into()
     }
 }
 

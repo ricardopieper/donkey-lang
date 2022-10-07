@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::{
-    ast::{lexer::Operator, parser::Expr},
+    ast::lexer::Operator,
     semantic::{hir::{HIRType, HIRExpr, NotChecked}, hir_printer::{operator_str, expr_str}, type_checker::FunctionName},
 };
 

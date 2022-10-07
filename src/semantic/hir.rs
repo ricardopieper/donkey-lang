@@ -104,6 +104,12 @@ pub enum HIRExpr<TExprType, TTypechecked = NotChecked> {
     #[allow(dead_code)] TypecheckTag(TTypechecked)
 }
 
+impl<TExpr, TTypechecked> HIRExpr<TExpr, TTypechecked> {
+    pub fn is_trivial_integer(&self) -> bool {
+        matches!(self, HIRExpr::Trivial(TrivialHIRExpr::IntegerValue(_), _, _))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRType {
     Simple(String),

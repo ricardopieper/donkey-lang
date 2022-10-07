@@ -1,5 +1,3 @@
-use core::panic;
-
 use super::vm::instructions::{
     get_all_instruction_layouts, BitLayout, Instruction, InstructionTable, PartType,
 };
@@ -255,7 +253,7 @@ impl LayoutHelper {
                 immediate,
             } => self
                 .begin_encode("push_imm")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("lshift", u32::from(lshift.get_shift_size()))
                 .encode_bytes("immediate lsb", immediate)
                 .make(),
@@ -265,7 +263,7 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("loadaddr")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("mode", u32::from(mode.get_bit_pattern()))
                 .encode("operand", *operand)
                 .make(),
@@ -275,7 +273,7 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("storeaddr")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("mode", u32::from(mode.get_bit_pattern()))
                 .encode("operand", *operand as u32)
                 .make(),
@@ -287,7 +285,7 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("shift")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("direction", u32::from(direction.get_bit_pattern()))
                 .encode("mode", u32::from(mode.get_bit_pattern()))
                 .encode("keep sign", u32::from(sign.get_bit_pattern()))
@@ -301,7 +299,7 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("bitwise")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("operation", u32::from(operation.get_bit_pattern()))
                 .encode("mode", u32::from(mode.get_bit_pattern()))
                 .encode("sign", u32::from(sign.get_bit_pattern()))
@@ -315,7 +313,7 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("integer_binary_op")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("operation", u32::from(operation.get_bit_pattern()))
                 .encode("sign", u32::from(sign.get_bit_pattern()))
                 .encode("mode", u32::from(mode.get_bit_pattern()))
@@ -329,7 +327,7 @@ impl LayoutHelper {
                 operand,
             } => self
                 .begin_encode("integer_compare")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("operation", u32::from(operation.get_bit_pattern()))
                 .encode("sign", u32::from(sign.get_bit_pattern()))
                 .encode("mode", u32::from(mode.get_bit_pattern()))
@@ -337,12 +335,12 @@ impl LayoutHelper {
                 .make(),
             Instruction::FloatArithmetic { bytes, operation } => self
                 .begin_encode("float_binary_op")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("operation", u32::from(operation.get_bit_pattern()))
                 .make(),
             Instruction::FloatCompare { bytes, operation } => self
                 .begin_encode("float_compare_op")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .encode("operation", u32::from(operation.get_bit_pattern()))
                 .make(),
             Instruction::PushFromRegister { control_register } => self
@@ -355,7 +353,7 @@ impl LayoutHelper {
                 .make(),
             Instruction::Pop { bytes } => self
                 .begin_encode("pop")
-                .encode("num bytes", u32::from(bytes.get_bytes()))
+                .encode("num bytes", bytes.get_bytes())
                 .make(),
             Instruction::Call { source, offset } => self
                 .begin_encode("call")

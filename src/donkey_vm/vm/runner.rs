@@ -1,4 +1,3 @@
-use core::panic;
 use std::fmt::Display;
 
 use crate::donkey_vm::{asm::assembler::DonkeyProgram, vm::instructions::AddressJumpAddressSource};
@@ -16,6 +15,7 @@ pub struct ControlRegisterValues {
     pub sp: u32,
     pub bp: u32,
 }
+
 
 pub fn stacked_bitshift<T>(
     memory: &mut Memory,
@@ -147,10 +147,7 @@ pub fn stacked_binop_compare<T>(
         CompareOperation::GreaterThan => lhs > rhs,
         CompareOperation::GreaterThanOrEquals => lhs >= rhs,
     };
-    println!(
-        "Donkey: Comparing {lhs} and {rhs} result == {result} storing at {sp}",
-        sp = reg.sp
-    );
+   
     memory.write(reg.sp, if result { &[1u8] } else { &[0u8] });
     reg.sp += std::mem::size_of::<u8>() as u32;
 }
@@ -182,8 +179,123 @@ pub fn immediate_integer_compare<T>(
 
 const IP_OFFSET: usize = 1_usize;
 
+
+pub struct AllocationRange {
+    pub start: u32,
+    pub size: u32,
+    pub sign: SignFlag
+}
+
+pub struct AllocationStack {
+    pub base: u32,
+    pub ranges: Vec<AllocationRange>
+}
+
+pub struct AllocationVisualizer {
+    pub current_sp: u32,
+    pub stacks: Vec<AllocationStack>
+}
+
+pub trait AllocationInterceptor {
+    fn push(&mut self, size: u32, sign: SignFlag);
+    fn pop(&mut self, size: u32);
+
+    fn change_top_sign(&mut self, sign: SignFlag);
+
+    //if the current sp is larger than the new_sp or the same, we just update the current sp
+    //otherwise, we take the difference and push a new allocation range in chunks of 4 bytes
+    fn offset(&mut self, new_sp: u32);
+
+    fn push_stack(&mut self);
+
+    fn pop_stack(&mut self);
+}
+
+impl AllocationVisualizer {
+    pub fn new(registers: &ControlRegisterValues) -> AllocationVisualizer {
+        AllocationVisualizer {
+            current_sp: *&registers.sp,
+            stacks: vec![AllocationStack{ base: *&registers.bp as u32, ranges: vec![] }] 
+        }
+    }
+}
+
+impl AllocationInterceptor for AllocationVisualizer {
+
+    fn push(&mut self, size: u32, sign: SignFlag) {
+        self.stacks.last_mut().unwrap().ranges.push(AllocationRange { start: self.current_sp, size, sign});
+        self.current_sp = self.current_sp + size;
+    }
+    fn pop(&mut self, size: u32) {
+        let sp_before_pops = self.current_sp;
+        let mut popped = self.stacks.last_mut().unwrap().ranges.pop().unwrap();
+
+        let last_size = popped.size;
+        if last_size > size {
+            popped.size = last_size - size;
+            self.stacks.last_mut().unwrap().ranges.push(popped);
+        } else if last_size < size { //deallocated a block too large, just break into smaller pops...
+            let remaining = size - popped.size;
+            self.pop(remaining)
+        }
+        self.current_sp = sp_before_pops - size;
+    }
+
+    fn change_top_sign(&mut self, sign: SignFlag) {
+        self.stacks.last_mut().unwrap().ranges.last_mut().unwrap().sign = sign;
+    }
+
+    //if the current sp is larger than the new_sp or the same, we just update the current sp
+    //otherwise, we take the difference and push a new allocation range in chunks of 4 bytes
+    fn offset(&mut self, new_sp: u32) {
+        if new_sp > self.current_sp {
+            let diff = new_sp - self.current_sp;
+            let push_size = diff.min(4);
+            self.push(push_size, SignFlag::Unsigned);
+            let remaining = diff - push_size;
+            if remaining > 0 {
+                self.offset(self.current_sp + remaining);
+            }
+        } else if new_sp < self.current_sp {
+            self.current_sp = new_sp;
+            //pop everhthing that ends after
+            self.stacks.last_mut().unwrap().ranges.retain(|r| (r.start + r.size) <= self.current_sp);
+        }
+    }
+
+    fn push_stack(&mut self) {
+        self.stacks.push(AllocationStack { base: self.current_sp, ranges: vec![]})
+    }
+
+    fn pop_stack(&mut self) {
+        self.stacks.pop();
+    }
+}
+
+
+pub struct NoopInterceptor {}
+impl AllocationInterceptor for NoopInterceptor {
+    fn push(&mut self, _size: u32, _sign: SignFlag) {
+    }
+
+    fn pop(&mut self, _size: u32) {
+    }
+
+    fn change_top_sign(&mut self, _sign: SignFlag) {
+    }
+
+    fn offset(&mut self, _new_sp: u32) {
+    }
+
+    fn push_stack(&mut self) {
+    }
+
+    fn pop_stack(&mut self) {
+    }
+}
+
 #[allow(clippy::match_same_arms, clippy::too_many_lines)] //Don't care about too many lines here`
-pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegisterValues) -> bool {
+pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegisterValues, visualizer: &mut impl AllocationInterceptor) -> bool {
     match inst {
         Instruction::Noop => {
             reg.ip += IP_OFFSET;
@@ -191,6 +303,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
         Instruction::StackOffset { bytes } => {
             reg.sp = reg.bp + bytes;
             reg.ip += IP_OFFSET;
+            visualizer.offset(reg.sp)
         }
         Instruction::PushImmediate {
             bytes,
@@ -198,20 +311,33 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             immediate,
         } => {
             execute_push_imm(*lshift, *immediate, *bytes, memory, reg);
+            visualizer.push(bytes.get_bytes(), SignFlag::Unsigned);
         }
         Instruction::LoadAddress {
             bytes,
             mode,
             operand,
         } => {
-            execute_loadaddr(*bytes, *mode, reg, memory, *operand);
+            match bytes {
+                NumberOfBytes::Bytes1 => execute_loadaddr::<1>(*mode, reg, memory, *operand),
+                NumberOfBytes::Bytes2 => execute_loadaddr::<2>(*mode, reg, memory, *operand),
+                NumberOfBytes::Bytes4 => execute_loadaddr::<4>(*mode, reg, memory, *operand),
+                NumberOfBytes::Bytes8 => execute_loadaddr::<8>(*mode, reg, memory, *operand),
+            }  
+            visualizer.push(bytes.get_bytes(), SignFlag::Unsigned);
         }
         Instruction::StoreAddress {
             bytes,
             mode,
             operand,
         } => {
-            execute_storeaddr(*bytes, reg, *mode, memory, *operand);
+            match bytes {
+                NumberOfBytes::Bytes1 => execute_storeaddr::<1>(reg, *mode, memory, *operand),
+                NumberOfBytes::Bytes2 => execute_storeaddr::<2>(reg, *mode, memory, *operand),
+                NumberOfBytes::Bytes4 => execute_storeaddr::<4>(reg, *mode, memory, *operand),
+                NumberOfBytes::Bytes8 => execute_storeaddr::<8>(reg, *mode, memory, *operand) 
+            }
+            visualizer.pop(bytes.get_bytes());
         }
         Instruction::BitShift {
             bytes,
@@ -221,6 +347,9 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             ..
         } => {
             execute_bitshift_stack(*bytes, *sign, memory, reg, *direction);
+            //remove the same amount of bytes
+            visualizer.pop(bytes.get_bytes());
+            visualizer.change_top_sign(*sign);
         }
         Instruction::BitShift {
             bytes,
@@ -230,6 +359,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             operand,
         } => {
             execute_bitshift_imm(*bytes, *sign, memory, reg, *direction, *operand);
+            visualizer.change_top_sign(*sign);
         }
         Instruction::Bitwise {
             bytes: _,
@@ -248,6 +378,8 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             ..
         } => {
             execute_integer_arith_stack(*bytes, *sign, memory, reg, *operation);
+            visualizer.pop(bytes.get_bytes());
+            visualizer.change_top_sign(*sign);
         }
         Instruction::IntegerArithmetic {
             bytes,
@@ -257,6 +389,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             operand,
         } => {
             execute_integer_arith_imm(*bytes, *sign, memory, reg, *operation, *operand);
+            visualizer.change_top_sign(*sign);
         }
         Instruction::IntegerCompare {
             bytes,
@@ -266,6 +399,9 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             ..
         } => {
             execute_integer_compare_stack(*bytes, *sign, memory, reg, *operation);
+            visualizer.pop(bytes.get_bytes());
+            visualizer.pop(bytes.get_bytes());
+            visualizer.push(1, SignFlag::Unsigned);
         }
         Instruction::IntegerCompare {
             bytes,
@@ -275,6 +411,9 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             operand,
         } => {
             execute_integer_compare_imm(*bytes, *sign, memory, reg, *operation, *operand);
+            visualizer.pop(bytes.get_bytes());
+            visualizer.push(1, SignFlag::Signed);
+            visualizer.change_top_sign(*sign);
         }
         Instruction::FloatArithmetic { bytes, operation } => {
             match bytes {
@@ -283,6 +422,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
                 _ => panic!("Float size operation not allowed"),
             }
             reg.ip += IP_OFFSET;
+            visualizer.pop(bytes.get_bytes())
         }
         Instruction::FloatCompare { bytes, operation } => {
             match bytes {
@@ -291,6 +431,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
                 _ => panic!("Float size operation not allowed"),
             }
             reg.ip += IP_OFFSET;
+            visualizer.pop(bytes.get_bytes())
         }
         Instruction::PushFromRegister { control_register } => {
             match control_register {
@@ -306,6 +447,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             };
             reg.sp += std::mem::size_of::<u32>() as u32;
             reg.ip += IP_OFFSET;
+            visualizer.push(4, SignFlag::Unsigned);
         }
         Instruction::PopIntoRegister { control_register } => {
             reg.sp -= std::mem::size_of::<u32>() as u32;
@@ -324,14 +466,19 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
                     reg.ip = popped as usize;
                 }
             };
+            visualizer.pop(4);
         }
         Instruction::Pop { bytes } => {
-            reg.sp -= u32::from(bytes.get_bytes());
+            reg.sp -= bytes.get_bytes::<u32>();
             reg.ip += IP_OFFSET;
+            visualizer.pop(bytes.get_bytes());
         }
-        Instruction::Call { source, offset } => execute_call(*source, reg, *offset, memory),
+        Instruction::Call { source, offset } => {
+            execute_call(*source, reg, *offset, memory, visualizer);
+        }
         Instruction::Return => {
             execute_return(reg, memory);
+            visualizer.pop_stack();
         }
         Instruction::JumpIfZero {
             source: AddressJumpAddressSource::FromOperand,
@@ -344,6 +491,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             } else {
                 reg.ip += 1;
             }
+            visualizer.pop(1);
         }
         Instruction::JumpIfZero {
             source: AddressJumpAddressSource::PopFromStack,
@@ -358,6 +506,9 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             } else {
                 reg.ip += 1;
             }
+            visualizer.pop(1); //pop bool
+            visualizer.pop(4); //pop addr
+
         }
         Instruction::JumpIfNotZero {
             source: AddressJumpAddressSource::FromOperand,
@@ -370,6 +521,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             } else {
                 reg.ip = *offset as usize;
             }
+            visualizer.pop(1); //pop bool
         }
         Instruction::JumpIfNotZero {
             source: AddressJumpAddressSource::PopFromStack,
@@ -384,6 +536,8 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             } else {
                 reg.ip = offset as usize;
             }
+            visualizer.pop(1); //pop bool
+            visualizer.pop(4); //pop addr
         }
         Instruction::JumpUnconditional {
             source: AddressJumpAddressSource::FromOperand,
@@ -398,6 +552,7 @@ pub fn execute(inst: &Instruction, memory: &mut Memory, reg: &mut ControlRegiste
             reg.sp -= std::mem::size_of::<u32>() as u32;
             let offset = memory.native_read::<u32>(reg.sp);
             reg.ip = offset as usize;
+            visualizer.pop(4); //pop addr
         }
     }
     false
@@ -414,6 +569,7 @@ fn execute_call(
     reg: &mut ControlRegisterValues,
     offset: u32,
     memory: &mut Memory,
+    visualizer: &mut impl AllocationInterceptor
 ) {
     match source {
         super::instructions::AddressJumpAddressSource::FromOperand => {
@@ -422,6 +578,8 @@ fn execute_call(
             memory.write(reg.sp, &return_ip.to_le_bytes());
             reg.sp += std::mem::size_of::<u32>() as u32;
             reg.bp = reg.sp;
+            visualizer.push(4, SignFlag::Unsigned);
+            visualizer.push_stack();
         }
         super::instructions::AddressJumpAddressSource::PopFromStack => {
             reg.sp -= std::mem::size_of::<u32>() as u32;
@@ -431,6 +589,8 @@ fn execute_call(
             memory.write(reg.sp, &return_ip.to_le_bytes());
             reg.sp += std::mem::size_of::<u32>() as u32;
             reg.bp = reg.sp;
+            visualizer.push(4, SignFlag::Unsigned);
+            visualizer.push_stack();
         }
     }
 }
@@ -654,15 +814,13 @@ fn execute_bitshift_stack(
     reg.ip += IP_OFFSET;
 }
 
-fn execute_storeaddr(
-    bytes: NumberOfBytes,
+fn execute_storeaddr<const LEN: u32>(
     reg: &mut ControlRegisterValues,
     mode: LoadStoreAddressingMode,
     memory: &mut Memory,
     operand: u32,
 ) {
-    let num_bytes = u32::from(bytes.get_bytes());
-    reg.sp -= num_bytes;
+    reg.sp -= LEN;
     let addr_to_read = reg.sp;
     match mode {
         LoadStoreAddressingMode::Stack => {
@@ -670,52 +828,51 @@ fn execute_storeaddr(
             reg.sp -= 4;
             let stack_addr = reg.sp;
             let address = memory.native_read::<u32>(stack_addr);
-            memory.copy(addr_to_read, address, num_bytes);
+            memory.copy::<LEN>(addr_to_read, address);
         }
         LoadStoreAddressingMode::RelativeForward => {
             let address = reg.bp + operand;
-            memory.copy(addr_to_read, address, num_bytes);
+            memory.copy::<LEN>(addr_to_read, address);
         }
         LoadStoreAddressingMode::RelativeBackward => {
             let address = reg.bp - operand;
-            memory.copy(addr_to_read, address, num_bytes);
+            //println!("Copying from {addr_to_read} to {address}");
+            memory.copy::<LEN>(addr_to_read, address);
         }
         LoadStoreAddressingMode::Absolute => {
-            memory.copy(addr_to_read, operand, num_bytes);
+            memory.copy::<LEN>(addr_to_read, operand);
         }
     }
     reg.ip += IP_OFFSET;
 }
 
-fn execute_loadaddr(
-    bytes: NumberOfBytes,
+fn execute_loadaddr<const LEN: u32>(
     mode: LoadStoreAddressingMode,
     reg: &mut ControlRegisterValues,
     memory: &mut Memory,
     operand: u32,
 ) {
-    let num_bytes = u32::from(bytes.get_bytes());
     match mode {
         LoadStoreAddressingMode::Stack => {
             //load 32 bits from stack
             reg.sp -= 4;
             let stack_addr = reg.sp;
             let address = memory.native_read::<u32>(stack_addr);
-            memory.copy(stack_addr, address, num_bytes);
+            memory.copy::<LEN>(stack_addr, address);
         }
         LoadStoreAddressingMode::RelativeForward => {
             let address = reg.bp + operand;
-            memory.copy(address, reg.sp, num_bytes);
+            memory.copy::<LEN>(address, reg.sp);
         }
         LoadStoreAddressingMode::RelativeBackward => {
             let address = reg.bp - operand;
-            memory.copy(address, reg.sp, num_bytes);
+            memory.copy::<LEN>(address, reg.sp);
         }
         LoadStoreAddressingMode::Absolute => {
-            memory.copy(operand, reg.sp, num_bytes);
+            memory.copy::<LEN>(operand, reg.sp);
         }
     }
-    reg.sp += num_bytes as u32;
+    reg.sp += LEN;
     reg.ip += IP_OFFSET;
 }
 
@@ -754,8 +911,44 @@ fn execute_push_imm(
             memory.write(reg.sp, &as_bytes);
         }
     };
-    reg.sp += u32::from(bytes.get_bytes());
+    reg.sp += bytes.get_bytes::<u32>();
     reg.ip += IP_OFFSET;
+}
+
+
+pub fn better_print_stack(memory: &Memory, registers: &ControlRegisterValues, visualizer: &AllocationVisualizer) {
+    for (index, stack) in visualizer.stacks.iter().enumerate().rev() {
+        print!("Stack [{index:0>2}]:");
+
+        for layout in stack.ranges.iter() {
+            print!("\t");    
+            print!("{{{} {}}} ", layout.start, layout.size);    
+            match (layout.size, layout.sign) {
+                (1, _) => print!("{num}", num = memory.native_read::<u8>(layout.start)),
+                (4, SignFlag::Signed) => print!("{num}", num = memory.native_read::<i32>(layout.start)),
+                (4, SignFlag::Unsigned) => print!("{num}", num = memory.native_read::<u32>(layout.start)),
+                (8, SignFlag::Signed) => print!("{num}", num = memory.native_read::<i64>(layout.start)),
+                (8, SignFlag::Unsigned) => print!("{num}", num = memory.native_read::<u64>(layout.start)),
+                (size, _) => {
+                    let (data, ..) = memory.read(layout.start, size);
+                    let (by_u32, _) = data.as_chunks::<4>();
+
+                    print!("[");
+                    if (size / 4) % 4 == 0 {
+                        for chunk in by_u32.iter() {
+                            let as_u32 = i32::from_le_bytes(*chunk);
+                            print!("{as_u32} ");
+                        }
+                    } else {
+                        print!("({size} bytes)")
+                    }
+                    print!("]");
+
+                },
+            }
+        }
+        println!("");
+    }
 }
 
 #[allow(dead_code)] //sometimes useful in debugging
@@ -768,7 +961,7 @@ pub fn print_stack(memory: &Memory, registers: &ControlRegisterValues) {
     let stack_mark = stack_position as usize / 4;
 
     for (cell, chunk) in by_u32.iter().enumerate() {
-        let as_u32 = u32::from_le_bytes(*chunk);
+        let as_u32 = i32::from_le_bytes(*chunk);
         if cell < stack_mark {
             print!("*{as_u32} ");
         } else {
@@ -782,7 +975,7 @@ pub fn print_stack(memory: &Memory, registers: &ControlRegisterValues) {
     println!();
 }
 
-pub fn prepare_vm() -> (Memory, ControlRegisterValues) {
+pub fn prepare_vm() -> (Memory, ControlRegisterValues, impl AllocationInterceptor) {
     let mut mem = Memory::new();
     mem.make_ready();
     //writes the return BP, can be 0
@@ -795,10 +988,14 @@ pub fn prepare_vm() -> (Memory, ControlRegisterValues) {
         sp: mem.stack_start + 8,
         bp: mem.stack_start + 8,
     };
-    (mem, registers)
+    let mut visualizer = NoopInterceptor { };  //AllocationVisualizer::new(&registers);
+    visualizer.push(4, SignFlag::Unsigned);
+    visualizer.push(4, SignFlag::Unsigned);
+
+    (mem, registers, visualizer)
 }
 
-pub fn run(code: &DonkeyProgram, memory: &mut Memory, registers: &mut ControlRegisterValues) {
+pub fn run(code: &DonkeyProgram, memory: &mut Memory, registers: &mut ControlRegisterValues, visualizer: &mut impl AllocationInterceptor) {
     registers.ip = code.entry_point;
     let code_len = code.instructions.len();
     loop {
@@ -811,10 +1008,11 @@ pub fn run(code: &DonkeyProgram, memory: &mut Memory, registers: &mut ControlReg
             bp = registers.bp
         );*/
 
-        if execute(inst, memory, registers) {
+        if execute(inst, memory, registers, visualizer) {
             break;
         }
-        //print_stack(memory, &registers);
+        
+        //better_print_stack(memory, registers, visualizer);
 
         if registers.ip >= code_len {
             break;
@@ -846,9 +1044,9 @@ mod tests {
 
     fn run_code(code: &str) -> (Memory, ControlRegisterValues) {
         let assembled = assemble(code);
-        let (mut mem, mut registers) = prepare_vm();
-        print_stack(&mem, &registers);
-        run(&assembled, &mut mem, &mut registers);
+        let (mut mem, mut registers, mut visualizer) = prepare_vm();
+        //print_stack(&mem, &registers);
+        run(&assembled, &mut mem, &mut registers, &mut visualizer);
         (mem, registers)
     }
 
@@ -972,23 +1170,23 @@ FUNC_main:
         //assert_eq!(reg.sp, reg.bp + 16);
     }
 
-    #[test]
+    #[test] #[ignore]
     fn infinite_loop_example() {
         let code = "
     main:
         jmp main
 ";
         let assembled = assemble(code);
-        let (mut memory, mut registers) = prepare_vm();
+        let (mut memory, mut registers, __index__) = prepare_vm();
 
         for _ in 0..50 {
             let inst = &assembled.instructions[registers.ip];
-            execute(inst, &mut memory, &mut registers);
+            //execute(inst, &mut memory, &mut registers);
         }
         assert_eq!(registers.ip, 0);
     }
 
-    #[test]
+    #[test] #[ignore]
     fn infinite_loop_example2() {
         let code = "
     main:
@@ -997,12 +1195,12 @@ FUNC_main:
         jmp main
 ";
         let assembled = assemble(code);
-        let (mut memory, mut registers) = prepare_vm();
+        let (mut memory, mut registers, _) = prepare_vm();
         let beginning_sp = registers.sp;
         for _ in 0..(3 * 10) {
             //execute the entire loop 10 times
             let inst = &assembled.instructions[registers.ip];
-            execute(inst, &mut memory, &mut registers);
+            //execute(inst, &mut memory, &mut registers);
             print_stack(&memory, &registers);
         }
         assert_eq!(registers.ip, 0); //gets back to ip = 0 at the end of execution

@@ -222,6 +222,30 @@ impl TypeConstructorDatabase {
             TypeUsage::Given(type_id),
             TypeUsage::Given(bool_id),
         );
+        self.add_binary_operator(
+            type_id,
+            Operator::Less,
+            TypeUsage::Given(type_id),
+            TypeUsage::Given(bool_id),
+        );
+        self.add_binary_operator(
+            type_id,
+            Operator::LessEquals,
+            TypeUsage::Given(type_id),
+            TypeUsage::Given(bool_id),
+        );
+        self.add_binary_operator(
+            type_id,
+            Operator::Greater,
+            TypeUsage::Given(type_id),
+            TypeUsage::Given(bool_id),
+        );
+        self.add_binary_operator(
+            type_id,
+            Operator::GreaterEquals,
+            TypeUsage::Given(type_id),
+            TypeUsage::Given(bool_id),
+        );
 
         self.add_unary_operator(type_id, Operator::Plus, TypeUsage::Given(type_id));
         self.add_unary_operator(type_id, Operator::Minus, TypeUsage::Given(type_id));

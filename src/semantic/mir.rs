@@ -1,3 +1,5 @@
+use std::ops::Not;
+
 use super::{hir::{
     HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR, InferredTypeHIRRoot,
     TrivialHIRExpr, HIR, NotChecked, Checked,
@@ -9,16 +11,9 @@ use crate::{
 };
 
 pub type TypecheckPendingExpression = HIRExpr<TypeInstanceId, NotChecked>;
-
 pub type TypecheckedExpression = HIRExpr<TypeInstanceId, Checked>;
 
-impl PrintableExpression for TypecheckPendingExpression {
-    fn print_expr(&self) -> String {
-        expr_str(self)
-    }
-}
-
-impl PrintableExpression for TypecheckedExpression {
+impl<T> PrintableExpression for  HIRExpr<TypeInstanceId, T> {
     fn print_expr(&self) -> String {
         expr_str(self)
     }
@@ -66,18 +61,19 @@ A MIRFunctionNode represents nodes inside a block. They can be executed within t
 a scope and a block.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRBlockNode<TTypecheckStateExpr> {
+pub enum MIRBlockNode<TTypecheckState> {
     Assign {
         path: Vec<String>,
-        expression: TTypecheckStateExpr,
+        expression: HIRExpr<TypeInstanceId, TTypecheckState>,
         meta_ast: AST,
         meta_expr: Expr,
     },
     FunctionCall {
         function: String,
-        args: Vec<TTypecheckStateExpr>,
+        args: Vec<HIRExpr<TypeInstanceId, TTypecheckState>>,
         meta_ast: AST,
         meta_expr: Expr,
+        return_type: TypeInstanceId
     },
     //@TODO Add method call here
 }
@@ -108,11 +104,11 @@ pub struct MIRScope {
 
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRBlockFinal<TTypecheckStateExpr> {
+pub enum MIRBlockFinal<TTypecheckState> {
     //expression, true, else, meta
-    If(TTypecheckStateExpr, BlockId, BlockId, HIRAstMetadata),
+    If(HIRExpr<TypeInstanceId,TTypecheckState>, BlockId, BlockId, HIRAstMetadata),
     GotoBlock(BlockId),
-    Return(TTypecheckStateExpr, HIRAstMetadata),
+    Return(HIRExpr<TypeInstanceId,TTypecheckState>, HIRAstMetadata),
     EmptyReturn,
 }
 
@@ -124,22 +120,22 @@ pub enum MIRBlockFinal<TTypecheckStateExpr> {
 
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRBlock<TTypecheckStateExpr> {
+pub struct MIRBlock<TTypecheckState> {
     pub index: usize,
     pub scope: ScopeId,
-    pub finish: MIRBlockFinal<TTypecheckStateExpr>,
-    pub nodes: Vec<MIRBlockNode<TTypecheckStateExpr>>,
+    pub finish: MIRBlockFinal<TTypecheckState>,
+    pub nodes: Vec<MIRBlockNode<TTypecheckState>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MIRMaybeUnfinishedBlock {
     pub index: usize,
     pub scope: ScopeId,
-    pub finish: Option<MIRBlockFinal<TypecheckPendingExpression>>,
-    pub block: Vec<MIRBlockNode<TypecheckPendingExpression>>,
+    pub finish: Option<MIRBlockFinal<NotChecked>>,
+    pub block: Vec<MIRBlockNode<NotChecked>>,
 }
 
-pub type TypecheckedMIRBlock = MIRBlock<TypecheckedExpression>;
+pub type TypecheckedMIRBlock = MIRBlock<Checked>;
 
 struct MIRFunctionEmitter {
     current_scope: ScopeId,
@@ -158,7 +154,7 @@ impl MIRFunctionEmitter {
         }
     }
 
-    fn emit(&mut self, node: MIRBlockNode<TypecheckPendingExpression>) {
+    fn emit(&mut self, node: MIRBlockNode<NotChecked>) {
         self.blocks[self.current_block.0].block.push(node);
     }
 
@@ -227,7 +223,7 @@ impl MIRFunctionEmitter {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::EmptyReturn);
     }
 
-    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<TypecheckPendingExpression>>) {
+    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<NotChecked>>) {
         let blocks = self
             .blocks
             .into_iter()
@@ -317,11 +313,11 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 function,
                 args,
                 meta_ast,
-                meta_expr,
+                meta_expr
             } => {
                 match &function {
-                    HIRExpr::Trivial(TrivialHIRExpr::Variable(var), ..) => {
-
+                    HIRExpr::Trivial(TrivialHIRExpr::Variable(var), function_type, ..) => {
+                        dbg!(function_type);
                         let pending_args = args.iter().map(std::clone::Clone::clone).collect();
 
                         emitter.emit(MIRBlockNode::FunctionCall {
@@ -329,6 +325,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                             args: pending_args,
                             meta_ast: meta_ast.clone(),
                             meta_expr: meta_expr.clone(),
+                            return_type: *function_type
                         });
                     }
                     other => panic!("{:?} is not a function!", other),
@@ -455,7 +452,7 @@ pub fn process_hir_funcdecl(
     parameters: &[HIRTypedBoundName<TypeInstanceId>],
     body: &[InferredTypeHIR],
     return_type: TypeInstanceId,
-) -> MIRTopLevelNode<TypecheckPendingExpression> {
+) -> MIRTopLevelNode<NotChecked> {
     let mut emitter = MIRFunctionEmitter::new();
 
     //create a new block for the main function decl node
@@ -494,7 +491,7 @@ pub fn process_hir_funcdecl(
     };
 }
 
-pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode<TypecheckPendingExpression>> {
+pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode<NotChecked>> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
@@ -528,7 +525,7 @@ mod tests {
     use super::*;
 
     //Parses a single expression
-    fn mir(source: &str) -> (Vec<MIRTopLevelNode<TypecheckPendingExpression>>, TypeInstanceManager) {
+    fn mir(source: &str) -> (Vec<MIRTopLevelNode<NotChecked>>, TypeInstanceManager) {
         let tokenized = crate::ast::lexer::Tokenizer::new(source)
             .tokenize()
             .ok()

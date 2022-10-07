@@ -11,7 +11,7 @@ pub trait PrintableExpression {
 }
 
 
-fn print_mir_block<T: PrintableExpression>(block: &MIRBlock<T>) -> String {
+fn print_mir_block<T>(block: &MIRBlock<T>) -> String {
     let mut buffer = String::new();
 
     buffer.push_str(&format!("    defblock {}:\n", block.index));
@@ -29,7 +29,7 @@ fn print_mir_block<T: PrintableExpression>(block: &MIRBlock<T>) -> String {
                 ));
             }
             MIRBlockNode::FunctionCall { function, args, .. } => {
-                let args_str = args.iter().map(<T as PrintableExpression>::print_expr).collect::<Vec<_>>().join(", ");
+                let args_str = args.iter().map(|x| x.print_expr()).collect::<Vec<_>>().join(", ");
                 buffer.push_str(&format!("        {}({})\n", function, args_str));
             }
         }
@@ -79,7 +79,7 @@ fn print_mir_scope(scope: &MIRScope, type_db: &TypeInstanceManager) -> String {
     buffer
 }
 
-fn print_mir_str<T: PrintableExpression>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) -> String {
+fn print_mir_str<T>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) -> String {
     match node {
         MIRTopLevelNode::DeclareFunction {
             function_name,
@@ -119,7 +119,7 @@ fn print_mir_str<T: PrintableExpression>(node: &MIRTopLevelNode<T>, type_db: &Ty
     }
 }
 
-pub fn print_mir<T: PrintableExpression>(mir: &[MIRTopLevelNode<T>], type_db: &TypeInstanceManager) -> String {
+pub fn print_mir<T>(mir: &[MIRTopLevelNode<T>], type_db: &TypeInstanceManager) -> String {
     let mut buffer = String::new();
     for node in mir {
         buffer.push_str(&print_mir_str(node, type_db));

@@ -35,9 +35,17 @@ macro_rules! impl_native_read {
     ($type:ty) => {
         impl NativeNumericType<$type> for $type {
             fn from_bytes(data: &[u8]) -> $type {
-                let mut as_bytes = (0 as $type).to_le_bytes();
-                as_bytes[0..(data.len() as usize)].copy_from_slice(data);
-                <$type>::from_le_bytes(as_bytes)
+                if data.len() == std::mem::size_of::<$type>() {
+                    unsafe {
+                        <$type>::from_le_bytes(
+                            *(data.as_ptr() as *const [u8; std::mem::size_of::<$type>()]))
+                    }
+                } else {
+                    let mut as_bytes = (0 as $type).to_le_bytes();
+                    as_bytes[0..(data.len() as usize)].copy_from_slice(data);
+                    <$type>::from_le_bytes(as_bytes)
+                }
+                
             }
             fn from_exact_bytes(data: [u8; std::mem::size_of::<$type>()]) -> $type {
                 <$type>::from_le_bytes(data)
@@ -162,6 +170,15 @@ impl Memory {
         }
     }
 
+    pub fn read_size<const SIZE: usize>(&self, address: u32) -> ([u8; SIZE], bool, u32, u32) {
+        let index = address & 0x0000_ffff;
+        if index as u32 + SIZE as u32 > PAGE_SIZE as u32 {
+            panic!("Page faulted! implementation missing");
+        } else {
+            self.read_const::<SIZE>(address)
+        }
+    }
+
     //reads an address-sized value u32 from memory.
     pub fn native_read<T: NativeNumericType<T>>(&self, address: u32) -> T {
         let (read_bytes, _, _, _) = self.read(address, std::mem::size_of::<T>() as u32);
@@ -185,7 +202,7 @@ impl Memory {
 
     fn read_page_fault(&self, address: u32, len: u32) -> (&[u8], bool, u32, u32) {
         let page = self.get_page(address).as_ref();
-
+        eprintln!("Page fault read");
         match page {
             Some(p) => {
                 let index = (address & 0x0000_ffff) as usize;
@@ -203,6 +220,23 @@ impl Memory {
                 panic!("Read from unallocated page")
             }
         }
+    }
+
+    fn read_const<const SIZE: usize>(&self, address: u32) -> ([u8; SIZE], bool, u32, u32) {
+        let page = self.get_page(address).as_ref();
+        assert!(page.is_some(), "Read from unallocated page {address}");
+        let index = (address & 0x0000_ffff) as usize;
+
+        (
+            unsafe {
+                let ptr = page.as_ref().unwrap().as_ptr();
+                let offsetted = ptr.add(index);
+                (&*std::ptr::slice_from_raw_parts(offsetted, SIZE)).try_into().unwrap_unchecked()
+            },
+            false,
+            0,
+            0,
+        )
     }
 
     fn read_normal(&self, address: u32, len: u32) -> (&[u8], bool, u32, u32) {
@@ -278,7 +312,7 @@ impl Memory {
         }
     }
 
-    pub fn copy(&mut self, address_from: u32, address_to: u32, len: u32) {
+    pub fn copy_dynamic(&mut self, address_from: u32, address_to: u32, len: u32) {
         //will this write page fault?
         let index_from = address_from & 0x0000_ffff;
         let index_to = address_to & 0x0000_ffff;
@@ -303,21 +337,137 @@ impl Memory {
             deref.offset(index_to as isize)
         };
 
-        for i in 0..read_size as isize {
+        if read_size == 4 {
             unsafe {
-                *ptr_to.offset(i) = *ptr_from.offset(i);
-                //       println!("Set byte {to} = {from} ({from_value})", to = address_to + i as u32, from = address_from + i as u32, from_value = *ptr_from.offset(i) );
+                let u32_ptr_to = ptr_to as *mut u32;
+                let u32_ptr_from = ptr_from as *mut u32;
+                *u32_ptr_to = *u32_ptr_from;
             }
         }
+        else {
+            for i in 0..read_size as isize {
+                unsafe {
+                    *ptr_to.offset(i) = *ptr_from.offset(i);
+                }
+            }
+        }
+       
         if len > max_possible_read {
             let remaining = len - max_possible_read;
-            self.copy(
+            self.copy_dynamic(
                 address_from + read_size,
                 address_from + read_size,
                 remaining,
             );
         }
     }
+
+    pub fn copy<const LEN: u32>(&mut self, address_from: u32, address_to: u32) {
+        //will this write page fault?
+        let index_from = address_from & 0x0000_ffff;
+        let index_to = address_to & 0x0000_ffff;
+        let read_size_before_fault_from = PAGE_SIZE as u32 - index_from as u32;
+        let read_size_before_fault_to = PAGE_SIZE as u32 - index_to as u32;
+
+        let max_possible_read = read_size_before_fault_from.min(read_size_before_fault_to);
+
+        let read_size = max_possible_read.min(LEN);
+
+        //page fault read
+        if read_size != LEN {
+            self.copy_dynamic(address_from, address_to, LEN);
+            return;
+        }
+
+        //SAFETY: simple copy from array to another array, memory is "unmanaged" by design
+        //as our language doesn't care about borrowing rules
+        let from_page = self.get_page_and_allocate(address_from) as *mut Page;
+        let to_page = self.get_page_and_allocate(address_to) as *mut Page;
+
+        let ptr_from = unsafe {
+            let deref = (*from_page).as_mut_ptr();
+            deref.offset(index_from as isize)
+        };
+        let ptr_to = unsafe {
+            let deref = (*to_page).as_mut_ptr();
+            deref.offset(index_to as isize)
+        };
+
+        if LEN == 4 {
+            unsafe {
+                let u32_ptr_to = ptr_to as *mut u32;
+                let u32_ptr_from = ptr_from as *mut u32;
+                *u32_ptr_to = *u32_ptr_from;
+            }
+        }
+        else if LEN == 8 {
+            unsafe {
+                let u64_ptr_to = ptr_to as *mut u64;
+                let u64_ptr_from = ptr_from as *mut u64;
+                *u64_ptr_to = *u64_ptr_from;
+            }
+        }
+        else {
+            for i in 0..read_size as isize {
+                unsafe {
+                    *ptr_to.offset(i) = *ptr_from.offset(i);
+                }
+            }
+        }
+    }
+
+    //#[inline(always)]
+    /*pub fn copy_assume_fits_page<const LEN: u32>(&mut self, address_from: u32, address_to: u32) {
+        //will this write page fault?
+        let index_from = address_from & 0x0000_ffff;
+        let index_to = address_to & 0x0000_ffff;
+      
+        //SAFETY: simple copy from array to another array, memory is "unmanaged" by design
+        //as our language doesn't care about borrowing rules
+        let from_page = self.get_page_and_allocate(address_from) as *mut Page;
+        let to_page = self.get_page_and_allocate(address_to) as *mut Page;
+
+        let ptr_from = unsafe {
+            let deref = (*from_page).as_mut_ptr();
+            deref.offset(index_from as isize)
+        };
+        let ptr_to = unsafe {
+            let deref = (*to_page).as_mut_ptr();
+            deref.offset(index_to as isize)
+        };
+
+        if LEN == 8 {
+            unsafe {
+                let ptr_to = ptr_to as *mut u64;
+                let ptr_from = ptr_from as *mut u64;
+                *ptr_to = *ptr_from;
+            }
+        }
+        else if LEN == 4 {
+            unsafe {
+                let ptr_to = ptr_to as *mut u32;
+                let ptr_from = ptr_from as *mut u32;
+                *ptr_to = *ptr_from;
+            }
+        }
+        else if LEN == 2 {
+            unsafe {
+                let ptr_to = ptr_to as *mut u16;
+                let ptr_from = ptr_from as *mut u16;
+                *ptr_to = *ptr_from;
+            }
+        }
+        else if LEN == 1 {
+            unsafe {
+                let ptr_to = ptr_to as *mut u8;
+                let ptr_from = ptr_from as *mut u8;
+                *ptr_to = *ptr_from;
+            }
+        } else {
+            panic!("Invalid copy size: {LEN}");
+        }
+        
+    }*/
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@
 #![feature(let_chains)]
 #![feature(generic_const_exprs)]
 #![feature(slice_as_chunks)]
+#![feature(const_trait_impl)]
 
 mod ast;
 mod commons;
@@ -100,9 +101,9 @@ fn main() {
 
         assert_eq!(program, program_decoded);
 
-        let (mut memory, mut registers) = runner::prepare_vm();
+        let (mut memory, mut registers, mut visualizer) = runner::prepare_vm();
 
-        runner::run(&program_decoded, &mut memory, &mut registers);
+        runner::run(&program_decoded, &mut memory, &mut registers, &mut visualizer);
     } else if args[1] == "compile" {
         let generated_asm = compile(&args[2]);
         let resolved = resolve(&generated_asm.assembly);
@@ -125,9 +126,9 @@ fn main() {
         let resolved = resolve(&generated_asm.assembly);
         let program = as_donkey_vm_program(&resolved);
 
-        let (mut memory, mut registers) = runner::prepare_vm();
+        let (mut memory, mut registers, mut visualizer) = runner::prepare_vm();
 
-        runner::run(&program, &mut memory, &mut registers);
+        runner::run(&program, &mut memory, &mut registers, &mut visualizer);
     }
 }
 
@@ -138,9 +139,7 @@ fn compile(file_name: &str) -> DonkeyEmitter {
     let ast = parser::parse_ast(tokens.unwrap());
     let root = parser::AST::Root(ast);
     let mut result = crate::semantic::analysis::do_analysis(&root);
-    print_hir(&result.hir, &result.type_db);
     let mir = hir_to_mir(&result.hir);
-    println!("{}", mir_printer::print_mir(&mir, &result.type_db));
     let typechecked = check_type(mir, &result.type_db, &result.globals, &mut result.type_errors);
     if result.type_errors.count() > 0 {
         let printer = TypeErrorPrinter::new(&result.type_errors, &result.type_db);
