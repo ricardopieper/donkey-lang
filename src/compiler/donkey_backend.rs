@@ -35,10 +35,27 @@ impl DonkeyEmitter {
         instruction: AssemblyInstruction,
         annotation: S,
     ) {
-        self.assembly.push(instruction);
-        self.annotations.push(Some(Annotation {
-            annotation: annotation.into(),
-        }));
+
+        match instruction {
+            AssemblyInstruction::StackOffset { bytes } => {
+                if let Some(AssemblyInstruction::StackOffset { bytes: existing_bytes }) = self.assembly.last_mut() {
+                    *existing_bytes = bytes;
+                } else {
+                    self.assembly.push(instruction);
+                    self.annotations.push(Some(Annotation {
+                        annotation: annotation.into(),
+                    }));
+                }
+            },
+            _ => {
+                self.assembly.push(instruction);
+                self.annotations.push(Some(Annotation {
+                    annotation: annotation.into(),
+                }));
+            }
+        }
+
+       
     }
 
     pub fn iter_annotated(
@@ -407,13 +424,6 @@ fn generate_compare_binexpr_code(
     op: Operator,
     offset_from_bp: u32,
 ) -> ExprGenerated {
-    let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
-    let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
-    //since both expr are the same type, we take the lhs type size and sign
-    let lhs_type = lhs.get_type();
-    let lhs_size = lhs_type.size(type_db);
-    let type_db_record = type_db.get_instance(lhs_type);
-    let constructor = type_db.constructors.find(type_db_record.base);
 
     let compare_op = match op {
         Operator::Equals => AsmIntegerCompareBinaryOp::Equals,
@@ -424,6 +434,49 @@ fn generate_compare_binexpr_code(
         Operator::LessEquals => AsmIntegerCompareBinaryOp::LessThanOrEquals,
         _ => panic!("Not compare op: {op:?}"),
     };
+    
+    if let HIRExpr::Trivial(TrivialHIRExpr::IntegerValue(i), ..) = rhs && fits_16_bits(*i) {
+
+        let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, offset_from_bp);
+
+        let lhs_type = lhs.get_type();
+        let lhs_size = lhs_type.size(type_db);
+        let type_db_record = type_db.get_instance(lhs_type);
+        let constructor = type_db.constructors.find(type_db_record.base);
+
+        let sign_flag = match constructor.sign {
+            TypeSign::Signed => AsmSignFlag::Signed,
+            TypeSign::Unsigned => AsmSignFlag::Unsigned,
+        };
+
+        if is_integer(lhs_type, type_db) {
+            bytecode.push(AssemblyInstruction::IntegerCompareBinaryOperation {
+                bytes: lhs_size as u8,
+                operation: compare_op,
+                sign: sign_flag,
+                immediate: Some(raw_16_bits(*i)),
+            });
+        } else if is_float(lhs_type, type_db) {
+            todo!("Float arithmetic not implemented in assembly instructions yet");
+        } else {
+            panic!("Could not generate binary arithmetic operation, type is not integer or float")
+        }
+        let popped_size = lhs_size as u32;
+        let pushed_size = type_db.get_instance(type_db.common_types.bool).size as u32;
+        return ExprGenerated {
+            offset_from_bp: lhs_gen.offset_from_bp + pushed_size - popped_size,
+        };
+    }
+
+    let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
+    let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
+    //since both expr are the same type, we take the lhs type size and sign
+    let lhs_type = lhs.get_type();
+    let lhs_size = lhs_type.size(type_db);
+    let type_db_record = type_db.get_instance(lhs_type);
+    let constructor = type_db.constructors.find(type_db_record.base);
+
+  
     let sign_flag = match constructor.sign {
         TypeSign::Signed => AsmSignFlag::Signed,
         TypeSign::Unsigned => AsmSignFlag::Unsigned,
@@ -504,6 +557,20 @@ fn generate_bitwise_binexpr_code(
     }
 }
 
+fn fits_16_bits(i: i128) -> bool {
+        (i >= i16::MIN.into() && i <= i16::MAX.into())
+    && (i >= u16::MIN.into() && i <= u16::MAX.into())
+}
+
+fn raw_16_bits(i: i128) -> [u8; 2] {
+    if (i < 0) {
+        let as_i16 = i as i16;
+        as_i16.to_le_bytes()
+    } else {
+        let as_u16 = i as u16;
+        as_u16.to_le_bytes()
+    }
+}
 fn generate_arith_binexpr_code(
     type_db: &TypeInstanceManager,
     rhs: &TypecheckedExpression,
@@ -523,21 +590,6 @@ fn generate_arith_binexpr_code(
         _ => panic!("Not arithmetic: {op:?}"),
     };
 
-
-    fn fits_16_bits(i: i128) -> bool {
-          (i >= i16::MIN.into() && i <= i16::MAX.into())
-        && (i >= u16::MIN.into() && i <= u16::MAX.into())
-    }
-
-    fn raw_16_bits(i: i128) -> [u8; 2] {
-        if (i < 0) {
-            let as_i16 = i as i16;
-            as_i16.to_le_bytes()
-        } else {
-            let as_u16 = i as u16;
-            as_u16.to_le_bytes()
-        }
-    }
 
     if let HIRExpr::Trivial(TrivialHIRExpr::IntegerValue(i), ..) = rhs && fits_16_bits(*i) {
 
@@ -839,6 +891,7 @@ fn generate_for_top_lvl(
     }
 }
 
+
 pub fn generate_donkey_vm(
     type_db: &TypeInstanceManager,
     mir_top_level_nodes: &[MIRTopLevelNode<Checked>],
@@ -1134,7 +1187,7 @@ def main():
     //fib(2) = 2
     #[test]
     fn fibonacci_test() {
-        let chosen_num = 4;
+        let chosen_num = 12;
 
         fn native_fib(i: i32) -> i32 {
             if i <= 1 { 1 } else { native_fib(i - 1) + native_fib(i - 2)} 

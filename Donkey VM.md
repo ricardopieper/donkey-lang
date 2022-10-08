@@ -13,11 +13,10 @@ The VM itself might have 2 dedicated allocations for each region, or do whatever
 
 Pointer arithmetic should work.
 
-We try to assume the least things about the OS or environment we are running with. It would be nice if Donkey ran on WASM, so we will make our own allocatos, and they might not be that efficient or fast.
-
-
 Memory Management
 =================
+
+**Attention:** This entire section is very old. We are now using mmap instead of allocating pages ourselves.
 
 The VM will hold all the memory, we won`t use malloc or other OS-dependent calls.
 
@@ -64,6 +63,8 @@ This scheme allows us to even increase the memmory by using a 64 bit address spa
 
 Stack vs Heap
 -------------
+
+**Attention:** This entire section is very old. We are now using mmap instead of allocating pages ourselves.
 
 In a real process running on the OS, the space is divided between stack and heap, and there are some allocation schemes to manage them differently. 
 

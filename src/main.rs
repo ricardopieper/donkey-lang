@@ -48,40 +48,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "memtest" {
-        let client = Client::start();
-        client.non_continuous_frame(frame_name!("memtest"));
-
-        let mut mem = Memory::new();
-        mem.make_ready();
-
-        let start = mem.stack_start;
-        let end = mem.stack_start + (128 << 16); //advance 128 pages ahead
-
-        for addr in start..end {
-            mem.write(addr, &[9u8; 1]);
-        }
-
-        let now = Instant::now();
-
-        let loops = 1000_u32;
-
-        for _ in 0..loops {
-            for addr in start..end {
-                let read = mem.read_single(addr);
-                assert_eq!(read, 9);
-            }
-        }
-
-        let end = Instant::now();
-        let diff = end - now;
-
-        let num_bytes: u32 = loops * 8 * 1024 * 1024;
-
-        let tp = (f64::from(num_bytes) / (diff.as_secs_f64())) / f64::from(1024 * 1024);
-
-        println!("Throughput: {tp}MB/s");
-    } else if args[1] == "asm" {
+    if args[1] == "asm" {
         let input = fs::read_to_string(args[2].clone())
             .unwrap_or_else(|_| panic!("Could not read file {}", args[2]));
         let parsed = crate::donkey_vm::asm::assembler::parse_asm(input.as_str());
