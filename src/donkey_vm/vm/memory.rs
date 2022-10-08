@@ -1,7 +1,3 @@
-const PAGE_SIZE: usize = 65536;
-const NUM_PAGES: usize = 65536;
-const PAGE_LAST_INDEX: usize = PAGE_SIZE - 1;
-type Page = [u8; PAGE_SIZE];
 
 pub struct Memory {
     pub mem: memmap::MmapMut,
@@ -70,7 +66,7 @@ impl_native_read!(f32);
 
 impl Memory {
     pub fn new() -> Self {
-        let mut mem = memmap::MmapMut::map_anon(4 * 1024 * 1024 * 1024).unwrap();
+        let mem = memmap::MmapMut::map_anon(4 * 1024 * 1024 * 1024).unwrap();
 
         Self {
             mem,
