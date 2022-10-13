@@ -16,177 +16,6 @@ pub struct ControlRegisterValues {
     pub bp: u32,
 }
 
-pub fn stacked_bitshift<T>(
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    direction: ShiftDirection,
-) where
-    T: NativeNumericType<T> + std::ops::Shl<T, Output = T> + std::ops::Shr<T, Output = T> + Copy,
-    [(); std::mem::size_of::<T>()]:,
-{
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let shift = memory.native_read::<T>(reg.sp);
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let value = memory.native_read::<T>(reg.sp);
-
-    let result = match direction {
-        ShiftDirection::Left => value << shift,
-        ShiftDirection::Right => value >> shift,
-    };
-
-    memory.write_value(reg.sp, result);
-    reg.sp += std::mem::size_of::<T>() as u32;
-}
-
-pub fn immediate_bitshift<T>(
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    direction: ShiftDirection,
-    shift: T,
-) where
-    T: NativeNumericType<T> + std::ops::Shl<T, Output = T> + std::ops::Shr<T, Output = T> + Copy,
-    [(); std::mem::size_of::<T>()]:,
-{
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let value = memory.native_read::<T>(reg.sp);
-
-    let result = match direction {
-        ShiftDirection::Left => value << shift,
-        ShiftDirection::Right => value >> shift,
-    };
-
-    memory.write_value(reg.sp, result);
-    reg.sp += std::mem::size_of::<T>() as u32;
-}
-
-pub fn stacked_binop_arith<T>(
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    operation: ArithmeticOperation,
-) where
-    T: NativeNumericType<T>
-        + std::fmt::Display
-        + std::ops::Add<T, Output = T>
-        + std::ops::Div<T, Output = T>
-        + std::ops::Mul<T, Output = T>
-        + std::ops::Sub<T, Output = T>
-        + std::ops::Rem<T, Output = T>
-        + Copy,
-    [(); std::mem::size_of::<T>()]:,
-{
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let lhs = unsafe { *memory.get_ptr_mut::<T>(reg.sp as isize) };
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let rhs = unsafe { *memory.get_ptr_mut::<T>(reg.sp as isize) };
-
-    let result = match operation {
-        ArithmeticOperation::Sum => lhs + rhs,
-        ArithmeticOperation::Subtract => lhs - rhs,
-        ArithmeticOperation::Multiply => lhs * rhs,
-        ArithmeticOperation::Divide => lhs / rhs,
-        ArithmeticOperation::Mod => {
-            println!("Mod {lhs} {rhs}");
-            lhs % rhs
-        }
-        ArithmeticOperation::Power => todo!(),
-    };
-
-    unsafe {
-        *memory.get_ptr_mut::<T>(reg.sp as isize) = result;
-    };
-
-    //memory.write_value(reg.sp, &result.to_bytes());
-    reg.sp += std::mem::size_of::<T>() as u32;
-}
-
-pub fn immediate_integer_arith<T>(
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    operation: ArithmeticOperation,
-    rhs: [u8; 2],
-) where
-    T: NativeNumericType<T>
-        + std::ops::Add<T, Output = T>
-        + std::ops::Div<T, Output = T>
-        + std::ops::Mul<T, Output = T>
-        + std::ops::Sub<T, Output = T>
-        + std::ops::Rem<T, Output = T>
-        + std::fmt::Debug
-        + Copy,
-    [(); std::mem::size_of::<T>()]:,
-{
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let lhs = unsafe { *memory.get_ptr_mut::<T>(reg.sp as isize) };
-    let rhs = T::from_bytes(&rhs);
-    let bytes = match operation {
-        ArithmeticOperation::Sum => lhs + rhs,
-        ArithmeticOperation::Subtract => lhs - rhs,
-        ArithmeticOperation::Multiply => lhs * rhs,
-        ArithmeticOperation::Divide => lhs / rhs,
-        ArithmeticOperation::Mod => lhs % rhs,
-        ArithmeticOperation::Power => todo!(),
-    };
-
-    unsafe {
-        let ptr_mut = memory.get_ptr_mut(reg.sp as isize);
-        *(ptr_mut as *mut T) = bytes;
-    }
-
-    reg.sp += std::mem::size_of::<T>() as u32;
-}
-
-pub fn stacked_binop_compare<T>(
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    operation: CompareOperation,
-) where
-    T: NativeNumericType<T> + std::cmp::PartialEq<T> + std::cmp::PartialOrd<T> + Display + Copy,
-    [(); std::mem::size_of::<T>()]:,
-{
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let lhs = memory.native_read::<T>(reg.sp);
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let rhs = memory.native_read::<T>(reg.sp);
-
-    let result = match operation {
-        CompareOperation::Equals => lhs == rhs,
-        CompareOperation::NotEquals => lhs != rhs,
-        CompareOperation::LessThan => lhs < rhs,
-        CompareOperation::LessThanOrEquals => lhs <= rhs,
-        CompareOperation::GreaterThan => lhs > rhs,
-        CompareOperation::GreaterThanOrEquals => lhs >= rhs,
-    };
-
-    memory.write_value(reg.sp, if result { 1u8 } else { 0u8 });
-    reg.sp += std::mem::size_of::<u8>() as u32;
-}
-
-pub fn immediate_integer_compare<T>(
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    operation: CompareOperation,
-    operand: [u8; 2],
-) where
-    T: NativeNumericType<T> + std::cmp::PartialEq<T> + std::cmp::PartialOrd<T> + Copy + Display,
-    [(); std::mem::size_of::<T>()]:,
-{
-    reg.sp -= std::mem::size_of::<T>() as u32;
-    let lhs = unsafe { *memory.get_ptr_mut::<T>(reg.sp as isize) }; // memory.native_read::<T>(reg.sp);
-    let rhs = T::from_bytes(&operand);
-    let result = match operation {
-        CompareOperation::Equals => lhs == rhs,
-        CompareOperation::NotEquals => lhs != rhs,
-        CompareOperation::LessThan => lhs < rhs,
-        CompareOperation::LessThanOrEquals => lhs <= rhs,
-        CompareOperation::GreaterThan => lhs > rhs,
-        CompareOperation::GreaterThanOrEquals => lhs >= rhs,
-    };
-    unsafe {
-        *memory.get_ptr_mut::<u8>(reg.sp as isize) = if result { 1u8 } else { 0u8 };
-    }
-    reg.sp += std::mem::size_of::<u8>() as u32;
-}
-
 const IP_OFFSET: usize = 1_usize;
 
 pub struct AllocationRange {
@@ -320,652 +149,826 @@ impl AllocationInterceptor for NoopInterceptor {
     fn pop_stack(&mut self) {}
 }
 
-#[allow(clippy::match_same_arms, clippy::too_many_lines)] //Don't care about too many lines here`
-pub fn execute(
-    inst: &Instruction,
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    visualizer: &mut impl AllocationInterceptor,
-) -> bool {
-    match inst {
-        Instruction::Noop => {
-            reg.ip += IP_OFFSET;
-        }
-        Instruction::StackOffset { bytes } => {
-            reg.sp = reg.bp + bytes;
-            reg.ip += IP_OFFSET;
-           // visualizer.offset(reg.sp)
-        }
-        Instruction::PushImmediate {
-            bytes,
-            lshift,
-            immediate,
-        } => {
-            execute_push_imm(*lshift, *immediate, *bytes, memory, reg);
-            //visualizer.push(bytes.get_bytes(), SignFlag::Unsigned);
-        }
-        Instruction::LoadAddress {
-            bytes,
-            mode,
-            operand,
-        } => {
-            match bytes {
-                NumberOfBytes::Bytes1 => execute_loadaddr::<1>(*mode, reg, memory, *operand),
-                NumberOfBytes::Bytes2 => execute_loadaddr::<2>(*mode, reg, memory, *operand),
-                NumberOfBytes::Bytes4 => execute_loadaddr::<4>(*mode, reg, memory, *operand),
-                NumberOfBytes::Bytes8 => execute_loadaddr::<8>(*mode, reg, memory, *operand),
-            }
-           // visualizer.push(bytes.get_bytes(), SignFlag::Unsigned);
-        }
-        Instruction::StoreAddress {
-            bytes,
-            mode,
-            operand,
-        } => {
-            match bytes {
-                NumberOfBytes::Bytes1 => execute_storeaddr::<1>(reg, *mode, memory, *operand),
-                NumberOfBytes::Bytes2 => execute_storeaddr::<2>(reg, *mode, memory, *operand),
-                NumberOfBytes::Bytes4 => execute_storeaddr::<4>(reg, *mode, memory, *operand),
-                NumberOfBytes::Bytes8 => execute_storeaddr::<8>(reg, *mode, memory, *operand),
-            }
-           // visualizer.pop(bytes.get_bytes());
-        }
-        Instruction::BitShift {
-            bytes,
-            sign,
-            direction,
-            mode: OperationMode::PureStack,
-            ..
-        } => {
-            execute_bitshift_stack(*bytes, *sign, memory, reg, *direction);
-            //remove the same amount of bytes
-            //visualizer.pop(bytes.get_bytes());
-            //visualizer.change_top_sign(*sign);
-        }
-        Instruction::BitShift {
-            bytes,
-            sign,
-            direction,
-            mode: OperationMode::StackAndImmediate,
-            operand,
-        } => {
-            execute_bitshift_imm(*bytes, *sign, memory, reg, *direction, *operand);
-            //visualizer.change_top_sign(*sign);
-        }
-        Instruction::Bitwise {
-            bytes: _,
-            operation: _,
-            sign: _,
-            mode: _,
-            operand: _,
-        } => {
-            todo!("Bitwise ops not implemented in the VM")
-        }
-        Instruction::IntegerArithmetic {
-            bytes,
-            operation,
-            sign,
-            mode: OperationMode::PureStack,
-            ..
-        } => {
-            execute_integer_arith_stack(*bytes, *sign, memory, reg, *operation);
-            //visualizer.pop(bytes.get_bytes());
-            //visualizer.change_top_sign(*sign);
-        }
-        Instruction::IntegerArithmetic {
-            bytes,
-            operation,
-            sign,
-            mode: OperationMode::StackAndImmediate,
-            operand,
-        } => {
-            execute_integer_arith_imm(*bytes, *sign, memory, reg, *operation, *operand);
-            //visualizer.change_top_sign(*sign);
-        }
-        Instruction::IntegerCompare {
-            bytes,
-            operation,
-            sign,
-            mode: OperationMode::PureStack,
-            ..
-        } => {
-            execute_integer_compare_stack(*bytes, *sign, memory, reg, *operation);
-            //visualizer.pop(bytes.get_bytes());
-            //visualizer.pop(bytes.get_bytes());
-            //visualizer.push(1, SignFlag::Unsigned);
-        }
-        Instruction::IntegerCompare {
-            bytes,
-            operation,
-            sign,
-            mode: OperationMode::StackAndImmediate,
-            operand,
-        } => {
-            execute_integer_compare_imm(*bytes, *sign, memory, reg, *operation, *operand);
-            //visualizer.pop(bytes.get_bytes());
-            //visualizer.push(1, SignFlag::Signed);
-            //visualizer.change_top_sign(*sign);
-        }
-        Instruction::FloatArithmetic { bytes, operation } => {
-            match bytes {
-                NumberOfBytes::Bytes4 => stacked_binop_arith::<f32>(memory, reg, *operation),
-                NumberOfBytes::Bytes8 => stacked_binop_arith::<f64>(memory, reg, *operation),
-                _ => panic!("Float size operation not allowed"),
-            }
-            reg.ip += IP_OFFSET;
-            //visualizer.pop(bytes.get_bytes())
-        }
-        Instruction::FloatCompare { bytes, operation } => {
-            match bytes {
-                NumberOfBytes::Bytes4 => stacked_binop_compare::<f32>(memory, reg, *operation),
-                NumberOfBytes::Bytes8 => stacked_binop_compare::<f64>(memory, reg, *operation),
-                _ => panic!("Float size operation not allowed"),
-            }
-            reg.ip += IP_OFFSET;
-            //visualizer.pop(bytes.get_bytes())
-        }
-        Instruction::PushFromRegister { control_register } => {
-            let regval = match control_register {
-                super::instructions::ControlRegister::Base => reg.bp,
-                super::instructions::ControlRegister::Stack => reg.sp,
-                super::instructions::ControlRegister::Instruction => reg.ip as u32,
-            };
-            memory.write_value(reg.sp, regval);
-            reg.sp += std::mem::size_of::<u32>() as u32;
-            reg.ip += IP_OFFSET;
-            //visualizer.push(4, SignFlag::Unsigned);
-        }
-        Instruction::PopIntoRegister { control_register } => {
-            reg.sp -= std::mem::size_of::<u32>() as u32;
-            let popped = memory.native_read::<u32>(reg.sp);
+pub struct DonkeyVMRunner {
+    pub memory: Memory,
+    pub reg: ControlRegisterValues,
+}
 
-            match control_register {
-                super::instructions::ControlRegister::Base => {
-                    reg.bp = popped;
-                    reg.ip += IP_OFFSET;
+
+impl DonkeyVMRunner {
+
+    pub fn new(memory: Memory, reg: ControlRegisterValues) -> Self {
+        Self {
+            memory,
+            reg
+        }
+    }
+
+    pub fn stacked_bitshift<T>(&mut self, direction: ShiftDirection)
+    where
+        T: NativeNumericType<T>
+            + std::ops::Shl<T, Output = T>
+            + std::ops::Shr<T, Output = T>
+            + Copy,
+        [(); std::mem::size_of::<T>()]:,
+    {
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let shift = self.memory.native_read::<T>(self.reg.sp);
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let value = self.memory.native_read::<T>(self.reg.sp);
+
+        let result = match direction {
+            ShiftDirection::Left => value << shift,
+            ShiftDirection::Right => value >> shift,
+        };
+
+        self.memory.write_value(self.reg.sp, result);
+        self.reg.sp += std::mem::size_of::<T>() as u32;
+    }
+
+    pub fn immediate_bitshift<T>(&mut self, direction: ShiftDirection, shift: T)
+    where
+        T: NativeNumericType<T>
+            + std::ops::Shl<T, Output = T>
+            + std::ops::Shr<T, Output = T>
+            + Copy,
+        [(); std::mem::size_of::<T>()]:,
+    {
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let value = self.memory.native_read::<T>(self.reg.sp);
+
+        let result = match direction {
+            ShiftDirection::Left => value << shift,
+            ShiftDirection::Right => value >> shift,
+        };
+
+        self.memory.write_value(self.reg.sp, result);
+        self.reg.sp += std::mem::size_of::<T>() as u32;
+    }
+
+    pub fn stacked_binop_arith<T>(&mut self, operation: ArithmeticOperation)
+    where
+        T: NativeNumericType<T>
+            + std::fmt::Display
+            + std::ops::Add<T, Output = T>
+            + std::ops::Div<T, Output = T>
+            + std::ops::Mul<T, Output = T>
+            + std::ops::Sub<T, Output = T>
+            + std::ops::Rem<T, Output = T>
+            + Copy,
+        [(); std::mem::size_of::<T>()]:,
+    {
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) };
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let rhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) };
+
+        let result = match operation {
+            ArithmeticOperation::Sum => lhs + rhs,
+            ArithmeticOperation::Subtract => lhs - rhs,
+            ArithmeticOperation::Multiply => lhs * rhs,
+            ArithmeticOperation::Divide => lhs / rhs,
+            ArithmeticOperation::Mod => {
+                println!("Mod {lhs} {rhs}");
+                lhs % rhs
+            }
+            ArithmeticOperation::Power => todo!(),
+        };
+
+        unsafe {
+            *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) = result;
+        };
+
+        //self.memory.write_value(self.reg.sp, &result.to_bytes());
+        self.reg.sp += std::mem::size_of::<T>() as u32;
+    }
+
+    pub fn immediate_integer_arith<T>(&mut self, operation: ArithmeticOperation, rhs: [u8; 2])
+    where
+        T: NativeNumericType<T>
+            + std::ops::Add<T, Output = T>
+            + std::ops::Div<T, Output = T>
+            + std::ops::Mul<T, Output = T>
+            + std::ops::Sub<T, Output = T>
+            + std::ops::Rem<T, Output = T>
+            + std::fmt::Debug
+            + Copy,
+        [(); std::mem::size_of::<T>()]:,
+    {
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) };
+        let rhs = T::from_bytes(&rhs);
+        let bytes = match operation {
+            ArithmeticOperation::Sum => lhs + rhs,
+            ArithmeticOperation::Subtract => lhs - rhs,
+            ArithmeticOperation::Multiply => lhs * rhs,
+            ArithmeticOperation::Divide => lhs / rhs,
+            ArithmeticOperation::Mod => lhs % rhs,
+            ArithmeticOperation::Power => todo!(),
+        };
+
+        unsafe {
+            let ptr_mut = self.memory.get_ptr_mut(self.reg.sp as isize);
+            *(ptr_mut as *mut T) = bytes;
+        }
+
+        self.reg.sp += std::mem::size_of::<T>() as u32;
+    }
+
+    pub fn stacked_binop_compare<T>(&mut self, operation: CompareOperation)
+    where
+        T: NativeNumericType<T> + std::cmp::PartialEq<T> + std::cmp::PartialOrd<T> + Display + Copy,
+        [(); std::mem::size_of::<T>()]:,
+    {
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let lhs = self.memory.native_read::<T>(self.reg.sp);
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let rhs = self.memory.native_read::<T>(self.reg.sp);
+
+        let result = match operation {
+            CompareOperation::Equals => lhs == rhs,
+            CompareOperation::NotEquals => lhs != rhs,
+            CompareOperation::LessThan => lhs < rhs,
+            CompareOperation::LessThanOrEquals => lhs <= rhs,
+            CompareOperation::GreaterThan => lhs > rhs,
+            CompareOperation::GreaterThanOrEquals => lhs >= rhs,
+        };
+
+        self.memory
+            .write_value(self.reg.sp, if result { 1u8 } else { 0u8 });
+        self.reg.sp += std::mem::size_of::<u8>() as u32;
+    }
+
+    pub fn immediate_integer_compare<T>(&mut self, operation: CompareOperation, operand: [u8; 2])
+    where
+        T: NativeNumericType<T> + std::cmp::PartialEq<T> + std::cmp::PartialOrd<T> + Copy + Display,
+        [(); std::mem::size_of::<T>()]:,
+    {
+        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) }; // self.memory.native_read::<T>(self.reg.sp);
+        let rhs = T::from_bytes(&operand);
+        let result = match operation {
+            CompareOperation::Equals => lhs == rhs,
+            CompareOperation::NotEquals => lhs != rhs,
+            CompareOperation::LessThan => lhs < rhs,
+            CompareOperation::LessThanOrEquals => lhs <= rhs,
+            CompareOperation::GreaterThan => lhs > rhs,
+            CompareOperation::GreaterThanOrEquals => lhs >= rhs,
+        };
+        unsafe {
+            *self.memory.get_ptr_mut::<u8>(self.reg.sp as isize) = if result { 1u8 } else { 0u8 };
+        }
+        self.reg.sp += std::mem::size_of::<u8>() as u32;
+    }
+
+    #[inline(never)] #[allow(clippy::match_same_arms, clippy::too_many_lines)] //Don't care about too many lines here`
+    pub fn execute(&mut self, inst: &Instruction) -> bool {
+        match inst {
+            Instruction::Noop => {
+                self.reg.ip += IP_OFFSET;
+            }
+            Instruction::StackOffset { bytes } => {
+                self.reg.sp = self.reg.bp + bytes;
+                self.reg.ip += IP_OFFSET;
+                // visualizer.offset(self.reg.sp)
+            }
+            Instruction::PushImmediate {
+                bytes,
+                lshift,
+                immediate,
+            } => {
+                self.execute_push_imm(*lshift, *immediate, *bytes);
+                //visualizer.push(bytes.get_bytes(), SignFlag::Unsigned);
+            }
+            Instruction::LoadAddress {
+                bytes,
+                mode,
+                operand,
+            } => {
+                match bytes {
+                    NumberOfBytes::Bytes1 => self.execute_loadaddr::<1>(*mode, *operand),
+                    NumberOfBytes::Bytes2 => self.execute_loadaddr::<2>(*mode, *operand),
+                    NumberOfBytes::Bytes4 => self.execute_loadaddr::<4>(*mode, *operand),
+                    NumberOfBytes::Bytes8 => self.execute_loadaddr::<8>(*mode, *operand),
                 }
-                super::instructions::ControlRegister::Stack => {
-                    reg.sp = popped;
-                    reg.ip += IP_OFFSET;
+                // visualizer.push(bytes.get_bytes(), SignFlag::Unsigned);
+            }
+            Instruction::StoreAddress {
+                bytes,
+                mode,
+                operand,
+            } => {
+                match bytes {
+                    NumberOfBytes::Bytes1 => self.execute_storeaddr::<1>(*mode, *operand),
+                    NumberOfBytes::Bytes2 => self.execute_storeaddr::<2>(*mode, *operand),
+                    NumberOfBytes::Bytes4 => self.execute_storeaddr::<4>(*mode, *operand),
+                    NumberOfBytes::Bytes8 => self.execute_storeaddr::<8>(*mode, *operand),
                 }
-                super::instructions::ControlRegister::Instruction => {
-                    reg.ip = popped as usize;
+                // visualizer.pop(bytes.get_bytes());
+            }
+            Instruction::BitShift {
+                bytes,
+                sign,
+                direction,
+                mode: OperationMode::PureStack,
+                ..
+            } => {
+                self.execute_bitshift_stack(*bytes, *sign, *direction);
+                //remove the same amount of bytes
+                //visualizer.pop(bytes.get_bytes());
+                //visualizer.change_top_sign(*sign);
+            }
+            Instruction::BitShift {
+                bytes,
+                sign,
+                direction,
+                mode: OperationMode::StackAndImmediate,
+                operand,
+            } => {
+                self.execute_bitshift_imm(*bytes, *sign, *direction, *operand);
+                //visualizer.change_top_sign(*sign);
+            }
+            Instruction::Bitwise {
+                bytes: _,
+                operation: _,
+                sign: _,
+                mode: _,
+                operand: _,
+            } => {
+                todo!("Bitwise ops not implemented in the VM")
+            }
+            Instruction::IntegerArithmetic {
+                bytes,
+                operation,
+                sign,
+                mode: OperationMode::PureStack,
+                ..
+            } => {
+                self.execute_integer_arith_stack(*bytes, *sign, *operation);
+                //visualizer.pop(bytes.get_bytes());
+                //visualizer.change_top_sign(*sign);
+            }
+            Instruction::IntegerArithmetic {
+                bytes,
+                operation,
+                sign,
+                mode: OperationMode::StackAndImmediate,
+                operand,
+            } => {
+                self.execute_integer_arith_imm(*bytes, *sign, *operation, *operand);
+                //visualizer.change_top_sign(*sign);
+            }
+            Instruction::IntegerCompare {
+                bytes,
+                operation,
+                sign,
+                mode: OperationMode::PureStack,
+                ..
+            } => {
+                self.execute_integer_compare_stack(*bytes, *sign, *operation);
+                //visualizer.pop(bytes.get_bytes());
+                //visualizer.pop(bytes.get_bytes());
+                //visualizer.push(1, SignFlag::Unsigned);
+            }
+            Instruction::IntegerCompare {
+                bytes,
+                operation,
+                sign,
+                mode: OperationMode::StackAndImmediate,
+                operand,
+            } => {
+                self.execute_integer_compare_imm(*bytes, *sign, *operation, *operand);
+                //visualizer.pop(bytes.get_bytes());
+                //visualizer.push(1, SignFlag::Signed);
+                //visualizer.change_top_sign(*sign);
+            }
+            Instruction::FloatArithmetic { bytes, operation } => {
+                match bytes {
+                    NumberOfBytes::Bytes4 => self.stacked_binop_arith::<f32>(*operation),
+                    NumberOfBytes::Bytes8 => self.stacked_binop_arith::<f64>(*operation),
+                    _ => panic!("Float size operation not allowed"),
                 }
-            };
-            //visualizer.pop(4);
-        }
-        Instruction::Pop { bytes } => {
-            reg.sp -= bytes.get_bytes();
-            reg.ip += IP_OFFSET;
-            //visualizer.pop(bytes.get_bytes());
-        }
-        Instruction::Call { source, offset } => {
-            execute_call(*source, reg, *offset, memory, visualizer);
-        }
-        Instruction::Return => {
-            execute_return(reg, memory);
-            //visualizer.pop_stack();
-        }
-        Instruction::JumpIfZero {
-            source: AddressJumpAddressSource::FromOperand,
-            offset,
-        } => {
-            reg.sp -= std::mem::size_of::<u8>() as u32;
-            let popped = memory.read_single(reg.sp);
-            if popped == 0 {
-                reg.ip = *offset as usize;
-            } else {
-                reg.ip += 1;
+                self.reg.ip += IP_OFFSET;
+                //visualizer.pop(bytes.get_bytes())
             }
-            //visualizer.pop(1);
-        }
-        Instruction::JumpIfZero {
-            source: AddressJumpAddressSource::PopFromStack,
-            ..
-        } => {
-            execute_jump_if_zero(reg, memory);
-        }
-        Instruction::JumpIfNotZero {
-            source: AddressJumpAddressSource::FromOperand,
-            offset,
-        } => {
-            reg.sp -= std::mem::size_of::<u8>() as u32;
-            let popped = memory.read_single(reg.sp);
-            if popped == 0 {
-                reg.ip += 1;
-            } else {
-                reg.ip = *offset as usize;
+            Instruction::FloatCompare { bytes, operation } => {
+                match bytes {
+                    NumberOfBytes::Bytes4 => self.stacked_binop_compare::<f32>(*operation),
+                    NumberOfBytes::Bytes8 => self.stacked_binop_compare::<f64>(*operation),
+                    _ => panic!("Float size operation not allowed"),
+                }
+                self.reg.ip += IP_OFFSET;
+                //visualizer.pop(bytes.get_bytes())
             }
-            //visualizer.pop(1); //pop bool
-        }
-        Instruction::JumpIfNotZero {
-            source: AddressJumpAddressSource::PopFromStack,
-            ..
-        } => {
-            reg.sp -= std::mem::size_of::<u8>() as u32;
-            let popped = memory.read_single(reg.sp);
-            reg.sp -= std::mem::size_of::<u32>() as u32;
-            let offset = memory.native_read::<u32>(reg.sp);
-            if popped == 0 {
-                reg.ip += 1;
-            } else {
-                reg.ip = offset as usize;
+            Instruction::PushFromRegister { control_register } => {
+                let regval = match control_register {
+                    super::instructions::ControlRegister::Base => self.reg.bp,
+                    super::instructions::ControlRegister::Stack => self.reg.sp,
+                    super::instructions::ControlRegister::Instruction => self.reg.ip as u32,
+                };
+                self.memory.write_value(self.reg.sp, regval);
+                self.reg.sp += std::mem::size_of::<u32>() as u32;
+                self.reg.ip += IP_OFFSET;
+                //visualizer.push(4, SignFlag::Unsigned);
             }
-            //visualizer.pop(1); //pop bool
-            //visualizer.pop(4); //pop addr
+            Instruction::PopIntoRegister { control_register } => {
+                self.reg.sp -= std::mem::size_of::<u32>() as u32;
+                let popped = self.memory.native_read::<u32>(self.reg.sp);
+
+                match control_register {
+                    super::instructions::ControlRegister::Base => {
+                        self.reg.bp = popped;
+                        self.reg.ip += IP_OFFSET;
+                    }
+                    super::instructions::ControlRegister::Stack => {
+                        self.reg.sp = popped;
+                        self.reg.ip += IP_OFFSET;
+                    }
+                    super::instructions::ControlRegister::Instruction => {
+                        self.reg.ip = popped as usize;
+                    }
+                };
+                //visualizer.pop(4);
+            }
+            Instruction::Pop { bytes } => {
+                self.reg.sp -= bytes.get_bytes();
+                self.reg.ip += IP_OFFSET;
+                //visualizer.pop(bytes.get_bytes());
+            }
+            Instruction::Call { source, offset } => {
+                self.execute_call(*source, *offset);
+            }
+            Instruction::Return => {
+                self.execute_return();
+                //visualizer.pop_stack();
+            }
+            Instruction::JumpIfZero {
+                source: AddressJumpAddressSource::FromOperand,
+                offset,
+            } => {
+                self.reg.sp -= std::mem::size_of::<u8>() as u32;
+                let popped = self.memory.read_single(self.reg.sp);
+                if popped == 0 {
+                    self.reg.ip = *offset as usize;
+                } else {
+                    self.reg.ip += 1;
+                }
+                //visualizer.pop(1);
+            }
+            Instruction::JumpIfZero {
+                source: AddressJumpAddressSource::PopFromStack,
+                ..
+            } => {
+                self.execute_jump_if_zero();
+            }
+            Instruction::JumpIfNotZero {
+                source: AddressJumpAddressSource::FromOperand,
+                offset,
+            } => {
+                self.reg.sp -= std::mem::size_of::<u8>() as u32;
+                let popped = self.memory.read_single(self.reg.sp);
+                if popped == 0 {
+                    self.reg.ip += 1;
+                } else {
+                    self.reg.ip = *offset as usize;
+                }
+                //visualizer.pop(1); //pop bool
+            }
+            Instruction::JumpIfNotZero {
+                source: AddressJumpAddressSource::PopFromStack,
+                ..
+            } => {
+                self.reg.sp -= std::mem::size_of::<u8>() as u32;
+                let popped = self.memory.read_single(self.reg.sp);
+                self.reg.sp -= std::mem::size_of::<u32>() as u32;
+                let offset = self.memory.native_read::<u32>(self.reg.sp);
+                if popped == 0 {
+                    self.reg.ip += 1;
+                } else {
+                    self.reg.ip = offset as usize;
+                }
+                //visualizer.pop(1); //pop bool
+                //visualizer.pop(4); //pop addr
+            }
+            Instruction::JumpUnconditional {
+                source: AddressJumpAddressSource::FromOperand,
+                offset,
+            } => {
+                self.reg.ip = *offset as usize;
+            }
+            Instruction::JumpUnconditional {
+                source: AddressJumpAddressSource::PopFromStack,
+                ..
+            } => {
+                self.reg.sp -= std::mem::size_of::<u32>() as u32;
+                let offset = self.memory.native_read::<u32>(self.reg.sp);
+                self.reg.ip = offset as usize;
+                //visualizer.pop(4); //pop addr
+            }
         }
-        Instruction::JumpUnconditional {
-            source: AddressJumpAddressSource::FromOperand,
-            offset,
-        } => {
-            reg.ip = *offset as usize;
+        false
+    }
+
+    fn execute_jump_if_zero(&mut self) {
+        self.reg.sp -= std::mem::size_of::<u8>() as u32;
+        let popped = self.memory.read_single(self.reg.sp);
+        self.reg.sp -= std::mem::size_of::<u32>() as u32;
+        let offset = unsafe { *self.memory.get_ptr_mut::<u32>(self.reg.sp as isize) };
+        if popped == 0 {
+            self.reg.ip = offset as usize;
+        } else {
+            self.reg.ip += 1;
         }
-        Instruction::JumpUnconditional {
-            source: AddressJumpAddressSource::PopFromStack,
-            ..
-        } => {
-            reg.sp -= std::mem::size_of::<u32>() as u32;
-            let offset = memory.native_read::<u32>(reg.sp);
-            reg.ip = offset as usize;
-            //visualizer.pop(4); //pop addr
+        //visualizer.pop(1);
+        //pop bool
+        //visualizer.pop(4);
+        //pop addr
+    }
+
+    fn execute_return(&mut self) {
+        self.reg.sp -= std::mem::size_of::<u32>() as u32;
+        let popped = unsafe { *self.memory.get_ptr_mut::<u32>(self.reg.sp as isize) };
+        self.reg.ip = popped as usize;
+    }
+
+    fn execute_call(&mut self, source: AddressJumpAddressSource, offset: u32) {
+        match source {
+            super::instructions::AddressJumpAddressSource::FromOperand => {
+                let return_ip = (self.reg.ip + IP_OFFSET) as u32;
+                self.reg.ip = offset as usize;
+                self.memory.write_value(self.reg.sp, return_ip);
+                self.reg.sp += std::mem::size_of::<u32>() as u32;
+                self.reg.bp = self.reg.sp;
+                //visualizer.push(4, SignFlag::Unsigned);
+                //visualizer.push_stack();
+            }
+            super::instructions::AddressJumpAddressSource::PopFromStack => {
+                self.reg.sp -= std::mem::size_of::<u32>() as u32;
+                let popped = self.memory.native_read::<u32>(self.reg.sp);
+                let return_ip = (self.reg.ip + IP_OFFSET) as u32;
+                self.reg.ip = popped as usize;
+                self.memory.write_value(self.reg.sp, return_ip);
+                self.reg.sp += std::mem::size_of::<u32>() as u32;
+                self.reg.bp = self.reg.sp;
+                //visualizer.push(4, SignFlag::Unsigned);
+                //visualizer.push_stack();
+            }
         }
     }
-    false
-}
 
-fn execute_jump_if_zero(
-    reg: &mut ControlRegisterValues,
-    memory: &mut Memory
-) {
-    reg.sp -= std::mem::size_of::<u8>() as u32;
-    let popped = memory.read_single(reg.sp);
-    reg.sp -= std::mem::size_of::<u32>() as u32;
-    let offset = unsafe { *memory.get_ptr_mut::<u32>(reg.sp as isize) };
-    if popped == 0 {
-        reg.ip = offset as usize;
-    } else {
-        reg.ip += 1;
+    fn execute_integer_compare_imm(
+        &mut self,
+        bytes: NumberOfBytes,
+        sign: SignFlag,
+        operation: CompareOperation,
+        operand: [u8; 2],
+    ) {
+        match (bytes, sign) {
+            (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+                self.immediate_integer_compare::<u8>(operation, operand);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+                self.immediate_integer_compare::<u16>(operation, operand);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+                self.immediate_integer_compare::<u32>(operation, operand);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+                self.immediate_integer_compare::<u64>(operation, operand);
+            }
+            (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+                self.immediate_integer_compare::<i8>(operation, operand);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+                self.immediate_integer_compare::<i16>(operation, operand);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+                self.immediate_integer_compare::<i32>(operation, operand);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+                self.immediate_integer_compare::<i64>(operation, operand);
+            }
+        }
+        self.reg.ip += IP_OFFSET;
     }
-    //visualizer.pop(1);
-    //pop bool
-    //visualizer.pop(4);
-    //pop addr
-}
 
-fn execute_return(reg: &mut ControlRegisterValues, memory: &mut Memory) {
-    reg.sp -= std::mem::size_of::<u32>() as u32;
-    let popped = unsafe { *memory.get_ptr_mut::<u32>(reg.sp as isize) };
-    reg.ip = popped as usize;
-}
-
-fn execute_call(
-    source: AddressJumpAddressSource,
-    reg: &mut ControlRegisterValues,
-    offset: u32,
-    memory: &mut Memory,
-    visualizer: &mut impl AllocationInterceptor,
-) {
-    match source {
-        super::instructions::AddressJumpAddressSource::FromOperand => {
-            let return_ip = (reg.ip + IP_OFFSET) as u32;
-            reg.ip = offset as usize;
-            memory.write_value(reg.sp, return_ip);
-            reg.sp += std::mem::size_of::<u32>() as u32;
-            reg.bp = reg.sp;
-            visualizer.push(4, SignFlag::Unsigned);
-            visualizer.push_stack();
+    fn execute_integer_compare_stack(
+        &mut self,
+        bytes: NumberOfBytes,
+        sign: SignFlag,
+        operation: CompareOperation,
+    ) {
+        match (bytes, sign) {
+            (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+                self.stacked_binop_compare::<u8>(operation);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+                self.stacked_binop_compare::<u16>(operation);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+                self.stacked_binop_compare::<u32>(operation);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+                self.stacked_binop_compare::<u64>(operation);
+            }
+            (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+                self.stacked_binop_compare::<i8>(operation);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+                self.stacked_binop_compare::<i16>(operation);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+                self.stacked_binop_compare::<i32>(operation);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+                self.stacked_binop_compare::<i64>(operation);
+            }
         }
-        super::instructions::AddressJumpAddressSource::PopFromStack => {
-            reg.sp -= std::mem::size_of::<u32>() as u32;
-            let popped = memory.native_read::<u32>(reg.sp);
-            let return_ip = (reg.ip + IP_OFFSET) as u32;
-            reg.ip = popped as usize;
-            memory.write_value(reg.sp, return_ip);
-            reg.sp += std::mem::size_of::<u32>() as u32;
-            reg.bp = reg.sp;
-            visualizer.push(4, SignFlag::Unsigned);
-            visualizer.push_stack();
-        }
+        self.reg.ip += IP_OFFSET;
     }
-}
 
-fn execute_integer_compare_imm(
-    bytes: NumberOfBytes,
-    sign: SignFlag,
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    operation: CompareOperation,
-    operand: [u8; 2],
-) {
-    match (bytes, sign) {
-        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-            immediate_integer_compare::<u8>(memory, reg, operation, operand);
+    fn execute_integer_arith_imm(
+        &mut self,
+        bytes: NumberOfBytes,
+        sign: SignFlag,
+        operation: ArithmeticOperation,
+        operand: [u8; 2],
+    ) {
+        match (bytes, sign) {
+            (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+                self.immediate_integer_arith::<u8>(operation, operand);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+                self.immediate_integer_arith::<u16>(operation, operand);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+                self.immediate_integer_arith::<u32>(operation, operand);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+                self.immediate_integer_arith::<u64>(operation, operand);
+            }
+            (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+                self.immediate_integer_arith::<i8>(operation, operand);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+                self.immediate_integer_arith::<i16>(operation, operand);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+                self.reg.sp -= std::mem::size_of::<i32>() as u32;
+                let lhs = unsafe { *self.memory.get_ptr_mut::<i32>(self.reg.sp as isize) };
+                let rhs = i32::from_bytes(&operand);
+                let bytes = match operation {
+                    ArithmeticOperation::Sum => lhs + rhs,
+                    ArithmeticOperation::Subtract => lhs - rhs,
+                    ArithmeticOperation::Multiply => lhs * rhs,
+                    ArithmeticOperation::Divide => lhs / rhs,
+                    ArithmeticOperation::Mod => lhs % rhs,
+                    ArithmeticOperation::Power => todo!(),
+                };
+
+                unsafe {
+                    let ptr_mut = self.memory.get_ptr_mut(self.reg.sp as isize);
+                    *(ptr_mut as *mut i32) = bytes;
+                }
+
+                self.reg.sp += std::mem::size_of::<i32>() as u32;
+                //immediate_integer_arith::<i32>(  operation, operand);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+                self.immediate_integer_arith::<i64>(operation, operand);
+            }
         }
-        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-            immediate_integer_compare::<u16>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-            immediate_integer_compare::<u32>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-            immediate_integer_compare::<u64>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-            immediate_integer_compare::<i8>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-            immediate_integer_compare::<i16>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-            immediate_integer_compare::<i32>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-            immediate_integer_compare::<i64>(memory, reg, operation, operand);
-        }
+        self.reg.ip += IP_OFFSET;
     }
-    reg.ip += IP_OFFSET;
-}
 
-fn execute_integer_compare_stack(
-    bytes: NumberOfBytes,
-    sign: SignFlag,
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    operation: CompareOperation,
-) {
-    match (bytes, sign) {
-        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-            stacked_binop_compare::<u8>(memory, reg, operation);
+    fn execute_integer_arith_stack(
+        &mut self,
+        bytes: NumberOfBytes,
+        sign: SignFlag,
+        operation: ArithmeticOperation,
+    ) {
+        match (bytes, sign) {
+            (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+                self.stacked_binop_arith::<u8>( operation);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+                self.stacked_binop_arith::<u16>( operation);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+                self.stacked_binop_arith::<u32>( operation);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+                self.stacked_binop_arith::<u64>( operation);
+            }
+            (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+                self.stacked_binop_arith::<i8>( operation);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+                self.stacked_binop_arith::<i16>( operation);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+                self.stacked_binop_arith::<i32>( operation);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+                self.stacked_binop_arith::<i64>( operation);
+            }
         }
-        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-            stacked_binop_compare::<u16>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-            stacked_binop_compare::<u32>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-            stacked_binop_compare::<u64>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-            stacked_binop_compare::<i8>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-            stacked_binop_compare::<i16>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-            stacked_binop_compare::<i32>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-            stacked_binop_compare::<i64>(memory, reg, operation);
-        }
+        self.reg.ip += IP_OFFSET;
     }
-    reg.ip += IP_OFFSET;
-}
 
-fn execute_integer_arith_imm(
-    bytes: NumberOfBytes,
-    sign: SignFlag,
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    operation: ArithmeticOperation,
-    operand: [u8; 2],
-) {
-    match (bytes, sign) {
-        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-            immediate_integer_arith::<u8>(memory, reg, operation, operand);
+    fn execute_bitshift_imm(
+        &mut self,
+        bytes: NumberOfBytes,
+        sign: SignFlag,
+        direction: ShiftDirection,
+        operand: u8,
+    ) {
+        match (bytes, sign) {
+            (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+                self.immediate_bitshift::<u8>(direction, operand as u8);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+                self.immediate_bitshift::<u16>(direction, u16::from(operand));
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+                self.immediate_bitshift::<u32>(direction, u32::from(operand));
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+                self.immediate_bitshift::<u64>(direction, u64::from(operand));
+            }
+            (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+                self.immediate_bitshift::<i8>(direction, operand as i8);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+                self.immediate_bitshift::<i16>(direction, i16::from(operand));
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+                self.immediate_bitshift::<i32>(direction, i32::from(operand));
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+                self.immediate_bitshift::<i64>(direction, i64::from(operand));
+            }
         }
-        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-            immediate_integer_arith::<u16>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-            immediate_integer_arith::<u32>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-            immediate_integer_arith::<u64>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-            immediate_integer_arith::<i8>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-            immediate_integer_arith::<i16>(memory, reg, operation, operand);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-            reg.sp -= std::mem::size_of::<i32>() as u32;
-            let lhs = unsafe { *memory.get_ptr_mut::<i32>(reg.sp as isize) };
-            let rhs = i32::from_bytes(&operand);
-            let bytes = match operation {
-                ArithmeticOperation::Sum => lhs + rhs,
-                ArithmeticOperation::Subtract => lhs - rhs,
-                ArithmeticOperation::Multiply => lhs * rhs,
-                ArithmeticOperation::Divide => lhs / rhs,
-                ArithmeticOperation::Mod => lhs % rhs,
-                ArithmeticOperation::Power => todo!(),
-            };
+        self.reg.ip += IP_OFFSET;
+    }
 
-            unsafe {
-                let ptr_mut = memory.get_ptr_mut(reg.sp as isize);
-                *(ptr_mut as *mut i32) = bytes;
+    fn execute_bitshift_stack(
+        &mut self,
+        bytes: NumberOfBytes,
+        sign: SignFlag,
+        direction: ShiftDirection,
+    ) {
+        match (bytes, sign) {
+            (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
+                self.stacked_bitshift::<u8>(direction);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
+                self.stacked_bitshift::<u16>(direction);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
+                self.stacked_bitshift::<u32>(direction);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
+                self.stacked_bitshift::<u64>(direction);
+            }
+            (NumberOfBytes::Bytes1, SignFlag::Signed) => {
+                self.stacked_bitshift::<i8>(direction);
+            }
+            (NumberOfBytes::Bytes2, SignFlag::Signed) => {
+                self.stacked_bitshift::<i16>(direction);
+            }
+            (NumberOfBytes::Bytes4, SignFlag::Signed) => {
+                self.stacked_bitshift::<i32>(direction);
+            }
+            (NumberOfBytes::Bytes8, SignFlag::Signed) => {
+                self.stacked_bitshift::<i64>(direction);
+            }
+        }
+        self.reg.ip += IP_OFFSET;
+    }
+
+    fn execute_storeaddr<const LEN: usize>(&mut self, mode: LoadStoreAddressingMode, operand: u32) {
+        self.reg.sp -= LEN as u32;
+        let addr_to_read = self.reg.sp;
+        match mode {
+            LoadStoreAddressingMode::Stack => {
+                //load 32 bits from stack
+                self.reg.sp -= 4;
+                let stack_addr = self.reg.sp;
+                let address = self.memory.native_read::<u32>(stack_addr);
+                self.memory.copy::<LEN>(addr_to_read, address);
+            }
+            LoadStoreAddressingMode::RelativeForward => {
+                let address = self.reg.bp + operand;
+                self.memory.copy::<LEN>(addr_to_read, address);
+            }
+            LoadStoreAddressingMode::RelativeBackward => {
+                let address = self.reg.bp - operand;
+                //println!("Copying from {addr_to_read} to {address}");
+                self.memory.copy::<LEN>(addr_to_read, address);
+            }
+            LoadStoreAddressingMode::Absolute => {
+                self.memory.copy::<LEN>(addr_to_read, operand);
+            }
+        }
+        self.reg.ip += IP_OFFSET;
+    }
+
+    fn execute_loadaddr<const LEN: usize>(&mut self, mode: LoadStoreAddressingMode, operand: u32) {
+        match mode {
+            LoadStoreAddressingMode::Stack => {
+                //load 32 bits from stack
+                self.reg.sp -= 4;
+                let stack_addr = self.reg.sp;
+                let address = self.memory.native_read::<u32>(stack_addr);
+                self.memory.copy::<LEN>(stack_addr, address);
+            }
+            LoadStoreAddressingMode::RelativeForward => {
+                let address = self.reg.bp + operand;
+                self.memory.copy::<LEN>(address, self.reg.sp);
+            }
+            LoadStoreAddressingMode::RelativeBackward => {
+                let address = self.reg.bp - operand;
+                self.memory.copy::<LEN>(address, self.reg.sp);
+            }
+            LoadStoreAddressingMode::Absolute => {
+                self.memory.copy::<LEN>(operand, self.reg.sp);
+            }
+        }
+        self.reg.sp += LEN as u32;
+        self.reg.ip += IP_OFFSET;
+    }
+
+    fn execute_push_imm(
+        &mut self,
+        lshift: super::instructions::LeftShift,
+        immediate: [u8; 2],
+        bytes: NumberOfBytes,
+    ) {
+        let shift_size = (lshift as u8) * 16;
+        let as_u16 = u16::from_le_bytes(immediate);
+        match bytes {
+            NumberOfBytes::Bytes1 => {
+                let from_byte_imm = as_u16 as u8;
+                let shifted = from_byte_imm << shift_size;
+                self.memory.write_value(self.reg.sp, shifted);
+                self.reg.sp += 1;
+            }
+            NumberOfBytes::Bytes2 => {
+                let from_byte_imm = as_u16;
+                let shifted = from_byte_imm << shift_size;
+                self.memory.write_value(self.reg.sp, shifted);
+                self.reg.sp += 2;
+            }
+            NumberOfBytes::Bytes4 => {
+                let from_byte_imm = u32::from(as_u16);
+                let shifted = from_byte_imm << shift_size;
+                self.memory.write_value(self.reg.sp, shifted);
+                self.reg.sp += 4;
+            }
+            NumberOfBytes::Bytes8 => {
+                let from_byte_imm = u64::from(as_u16);
+                let shifted = from_byte_imm << shift_size;
+                self.memory.write_value(self.reg.sp, shifted);
+                self.reg.sp += 8;
+            }
+        };
+        self.reg.ip += IP_OFFSET;
+    }
+
+    pub fn run(&mut self, code: &DonkeyProgram) {
+        self.reg.ip = code.entry_point;
+        let code_len = code.instructions.len();
+        let mut instructions_run = 0;
+        let start = std::time::Instant::now();
+        loop {
+            let inst = &code.instructions[self.reg.ip];
+
+            /*println!(
+                "Executing instruction {inst:?} ip = {ip} sp = {sp} bp = {bp}",
+                ip = registers.ip,
+                sp = registers.sp,
+                bp = registers.bp
+            );*/
+
+            if self.execute(inst) {
+                break;
             }
 
-            reg.sp += std::mem::size_of::<i32>() as u32;
-            //immediate_integer_arith::<i32>(memory, reg, operation, operand);
+            //better_print_stack(memory, registers, visualizer);
+            instructions_run += 1;
+            if self.reg.ip >= code_len {
+                break;
+            }
         }
-        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-            immediate_integer_arith::<i64>(memory, reg, operation, operand);
-        }
+        let end = std::time::Instant::now();
+        let time = end - start;
+        let speed = instructions_run as f64 / (time.as_secs_f64());
+        println!("Ran {instructions_run} instructions, {ops} ops/s", ops = speed as u32);
     }
-    reg.ip += IP_OFFSET;
 }
 
-fn execute_integer_arith_stack(
-    bytes: NumberOfBytes,
-    sign: SignFlag,
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    operation: ArithmeticOperation,
-) {
-    match (bytes, sign) {
-        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-            stacked_binop_arith::<u8>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-            stacked_binop_arith::<u16>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-            stacked_binop_arith::<u32>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-            stacked_binop_arith::<u64>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-            stacked_binop_arith::<i8>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-            stacked_binop_arith::<i16>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-            stacked_binop_arith::<i32>(memory, reg, operation);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-            stacked_binop_arith::<i64>(memory, reg, operation);
-        }
-    }
-    reg.ip += IP_OFFSET;
-}
-
-fn execute_bitshift_imm(
-    bytes: NumberOfBytes,
-    sign: SignFlag,
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    direction: ShiftDirection,
-    operand: u8,
-) {
-    match (bytes, sign) {
-        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-            immediate_bitshift::<u8>(memory, reg, direction, operand as u8);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-            immediate_bitshift::<u16>(memory, reg, direction, u16::from(operand));
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-            immediate_bitshift::<u32>(memory, reg, direction, u32::from(operand));
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-            immediate_bitshift::<u64>(memory, reg, direction, u64::from(operand));
-        }
-        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-            immediate_bitshift::<i8>(memory, reg, direction, operand as i8);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-            immediate_bitshift::<i16>(memory, reg, direction, i16::from(operand));
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-            immediate_bitshift::<i32>(memory, reg, direction, i32::from(operand));
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-            immediate_bitshift::<i64>(memory, reg, direction, i64::from(operand));
-        }
-    }
-    reg.ip += IP_OFFSET;
-}
-
-fn execute_bitshift_stack(
-    bytes: NumberOfBytes,
-    sign: SignFlag,
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-    direction: ShiftDirection,
-) {
-    match (bytes, sign) {
-        (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-            stacked_bitshift::<u8>(memory, reg, direction);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-            stacked_bitshift::<u16>(memory, reg, direction);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-            stacked_bitshift::<u32>(memory, reg, direction);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-            stacked_bitshift::<u64>(memory, reg, direction);
-        }
-        (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-            stacked_bitshift::<i8>(memory, reg, direction);
-        }
-        (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-            stacked_bitshift::<i16>(memory, reg, direction);
-        }
-        (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-            stacked_bitshift::<i32>(memory, reg, direction);
-        }
-        (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-            stacked_bitshift::<i64>(memory, reg, direction);
-        }
-    }
-    reg.ip += IP_OFFSET;
-}
-
-fn execute_storeaddr<const LEN: usize>(
-    reg: &mut ControlRegisterValues,
-    mode: LoadStoreAddressingMode,
-    memory: &mut Memory,
-    operand: u32,
-) {
-    reg.sp -= LEN as u32;
-    let addr_to_read = reg.sp;
-    match mode {
-        LoadStoreAddressingMode::Stack => {
-            //load 32 bits from stack
-            reg.sp -= 4;
-            let stack_addr = reg.sp;
-            let address = memory.native_read::<u32>(stack_addr);
-            memory.copy::<LEN>(addr_to_read, address);
-        }
-        LoadStoreAddressingMode::RelativeForward => {
-            let address = reg.bp + operand;
-            memory.copy::<LEN>(addr_to_read, address);
-        }
-        LoadStoreAddressingMode::RelativeBackward => {
-            let address = reg.bp - operand;
-            //println!("Copying from {addr_to_read} to {address}");
-            memory.copy::<LEN>(addr_to_read, address);
-        }
-        LoadStoreAddressingMode::Absolute => {
-            memory.copy::<LEN>(addr_to_read, operand);
-        }
-    }
-    reg.ip += IP_OFFSET;
-}
-
-fn execute_loadaddr<const LEN: usize>(
-    mode: LoadStoreAddressingMode,
-    reg: &mut ControlRegisterValues,
-    memory: &mut Memory,
-    operand: u32,
-) {
-    match mode {
-        LoadStoreAddressingMode::Stack => {
-            //load 32 bits from stack
-            reg.sp -= 4;
-            let stack_addr = reg.sp;
-            let address = memory.native_read::<u32>(stack_addr);
-            memory.copy::<LEN>(stack_addr, address);
-        }
-        LoadStoreAddressingMode::RelativeForward => {
-            let address = reg.bp + operand;
-            memory.copy::<LEN>(address, reg.sp);
-        }
-        LoadStoreAddressingMode::RelativeBackward => {
-            let address = reg.bp - operand;
-            memory.copy::<LEN>(address, reg.sp);
-        }
-        LoadStoreAddressingMode::Absolute => {
-            memory.copy::<LEN>(operand, reg.sp);
-        }
-    }
-    reg.sp += LEN as u32;
-    reg.ip += IP_OFFSET;
-}
-
-fn execute_push_imm(
-    lshift: super::instructions::LeftShift,
-    immediate: [u8; 2],
-    bytes: NumberOfBytes,
-    memory: &mut Memory,
-    reg: &mut ControlRegisterValues,
-) {
-    let shift_size = (lshift as u8) * 16;
-    let as_u16 = u16::from_le_bytes(immediate);
-    match bytes {
-        NumberOfBytes::Bytes1 => {
-            let from_byte_imm = as_u16 as u8;
-            let shifted = from_byte_imm << shift_size;
-            memory.write_value(reg.sp, shifted);
-            reg.sp += 1;
-        }
-        NumberOfBytes::Bytes2 => {
-            let from_byte_imm = as_u16;
-            let shifted = from_byte_imm << shift_size;
-            memory.write_value(reg.sp, shifted);
-            reg.sp += 2;
-        }
-        NumberOfBytes::Bytes4 => {
-            let from_byte_imm = u32::from(as_u16);
-            let shifted = from_byte_imm << shift_size;
-            memory.write_value(reg.sp, shifted);
-            reg.sp += 4;
-        }
-        NumberOfBytes::Bytes8 => {
-            let from_byte_imm = u64::from(as_u16);
-            let shifted = from_byte_imm << shift_size;
-            memory.write_value(reg.sp, shifted);
-            reg.sp += 8;
-        }
-    };
-    reg.ip += IP_OFFSET;
-}
-
+/*
 pub fn better_print_stack(
     memory: &Memory,
     registers: &ControlRegisterValues,
@@ -978,21 +981,21 @@ pub fn better_print_stack(
             print!("\t");
             print!("{{{} {}}} ", layout.start, layout.size);
             match (layout.size, layout.sign) {
-                (1, _) => print!("{num}", num = memory.native_read::<u8>(layout.start)),
+                (1, _) => print!("{num}", num = self.memory.native_read::<u8>(layout.start)),
                 (4, SignFlag::Signed) => {
-                    print!("{num}", num = memory.native_read::<i32>(layout.start))
+                    print!("{num}", num = self.memory.native_read::<i32>(layout.start))
                 }
                 (4, SignFlag::Unsigned) => {
-                    print!("{num}", num = memory.native_read::<u32>(layout.start))
+                    print!("{num}", num = self.memory.native_read::<u32>(layout.start))
                 }
                 (8, SignFlag::Signed) => {
-                    print!("{num}", num = memory.native_read::<i64>(layout.start))
+                    print!("{num}", num = self.memory.native_read::<i64>(layout.start))
                 }
                 (8, SignFlag::Unsigned) => {
-                    print!("{num}", num = memory.native_read::<u64>(layout.start))
+                    print!("{num}", num = self.memory.native_read::<u64>(layout.start))
                 }
                 (size, _) => {
-                    let data = memory.read(layout.start, size);
+                    let data = self.memory.read(layout.start, size);
                     let (by_u32, _) = data.as_chunks::<4>();
 
                     print!("[");
@@ -1014,8 +1017,8 @@ pub fn better_print_stack(
 
 #[allow(dead_code)] //sometimes useful in debugging
 pub fn print_stack(memory: &Memory, registers: &ControlRegisterValues) {
-    let stack_position = registers.sp - memory.stack_start;
-    let read = memory.read(memory.stack_start, 4 * 25);
+    let stack_position = registers.sp - self.memory.stack_start;
+    let read = self.memory.read(self.memory.stack_start, 4 * 25);
     let (by_u32, _) = read.as_chunks::<4>();
 
     print!("Current stack: ");
@@ -1035,7 +1038,7 @@ pub fn print_stack(memory: &Memory, registers: &ControlRegisterValues) {
 
     println!();
 }
-
+*/
 pub fn prepare_vm() -> (Memory, ControlRegisterValues, impl AllocationInterceptor) {
     let mut mem = Memory::new();
     mem.make_ready();
@@ -1056,36 +1059,6 @@ pub fn prepare_vm() -> (Memory, ControlRegisterValues, impl AllocationIntercepto
     (mem, registers, visualizer)
 }
 
-pub fn run(
-    code: &DonkeyProgram,
-    memory: &mut Memory,
-    registers: &mut ControlRegisterValues,
-    visualizer: &mut impl AllocationInterceptor,
-) {
-    registers.ip = code.entry_point;
-    let code_len = code.instructions.len();
-    loop {
-        let inst = &code.instructions[registers.ip];
-
-        /*println!(
-            "Executing instruction {inst:?} ip = {ip} sp = {sp} bp = {bp}",
-            ip = registers.ip,
-            sp = registers.sp,
-            bp = registers.bp
-        );*/
-
-        if execute(inst, memory, registers, visualizer) {
-            break;
-        }
-
-        //better_print_stack(memory, registers, visualizer);
-
-        if registers.ip >= code_len {
-            break;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -1095,12 +1068,11 @@ mod tests {
     use crate::donkey_vm::{
         asm::assembler::{as_donkey_vm_program, parse_asm, resolve, DonkeyProgram},
         vm::{
-            memory::Memory,
-            runner::{execute, print_stack},
+            memory::Memory
         },
     };
 
-    use super::{prepare_vm, run, ControlRegisterValues};
+    use super::{prepare_vm, ControlRegisterValues, DonkeyVMRunner};
 
     fn assemble(code: &str) -> DonkeyProgram {
         let parsed = parse_asm(code);
@@ -1112,8 +1084,9 @@ mod tests {
         let assembled = assemble(code);
         let (mut mem, mut registers, mut visualizer) = prepare_vm();
         //print_stack(&mem, &registers);
-        run(&assembled, &mut mem, &mut registers, &mut visualizer);
-        (mem, registers)
+        let mut donkey = DonkeyVMRunner::new(mem, registers);
+        donkey.run(&assembled);
+        (donkey.memory, donkey.reg)
     }
 
     #[test]
@@ -1138,7 +1111,7 @@ mod tests {
 
         let (mem, reg) = run_code(code);
         let stack_pop = mem.native_read::<i32>(reg.bp);
-        print_stack(&mem, &reg);
+        //print_stack(&mem, &reg);
         assert_eq!(stack_pop, 45);
     }
 
@@ -1233,7 +1206,7 @@ FUNC_main:
         let (mem, reg) = run_code(code);
         let stack_pop = mem.native_read::<i32>(reg.bp + 12);
         assert_eq!(stack_pop, 440);
-        //assert_eq!(reg.sp, reg.bp + 16);
+        //assert_eq!(self.reg.sp, self.reg.bp + 16);
     }
 
     #[test]
@@ -1269,7 +1242,7 @@ FUNC_main:
             //execute the entire loop 10 times
             let inst = &assembled.instructions[registers.ip];
             //execute(inst, &mut memory, &mut registers);
-            print_stack(&memory, &registers);
+            //print_stack(&memory, &registers);
         }
         assert_eq!(registers.ip, 0); //gets back to ip = 0 at the end of execution
         assert_eq!(registers.sp, beginning_sp); //even pushes and pops result in not moving the stack ptr

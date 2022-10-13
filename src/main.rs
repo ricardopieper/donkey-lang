@@ -18,6 +18,7 @@ use crate::compiler::donkey_backend::generate_donkey_vm;
 use crate::donkey_vm::asm::asm_printer;
 use crate::donkey_vm::asm::assembler::as_donkey_vm_program;
 use crate::donkey_vm::asm::assembler::resolve;
+use crate::donkey_vm::vm::instructions::Instruction;
 use crate::semantic::hir_printer::print_hir;
 use std::env;
 use std::fs;
@@ -38,10 +39,12 @@ use crate::types::type_errors::TypeErrorPrinter;
 
 use compiler::donkey_backend::DonkeyEmitter;
 use donkey_vm::asm::assembler::DonkeyProgram;
+use donkey_vm::vm::runner::DonkeyVMRunner;
 use tracy_client::frame_name;
 use tracy_client::Client;
 
 fn main() {
+    println!("{}", std::mem::size_of::<Instruction>());
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -70,7 +73,10 @@ fn main() {
 
         let (mut memory, mut registers, mut visualizer) = runner::prepare_vm();
 
-        runner::run(&program_decoded, &mut memory, &mut registers, &mut visualizer);
+        let mut runner = DonkeyVMRunner::new(memory, registers);
+        runner.run(&program_decoded);
+
+
     } else if args[1] == "compile" {
         let generated_asm = compile(&args[2]);
         let resolved = resolve(&generated_asm.assembly);
@@ -94,8 +100,8 @@ fn main() {
         let program = as_donkey_vm_program(&resolved);
 
         let (mut memory, mut registers, mut visualizer) = runner::prepare_vm();
-
-        runner::run(&program, &mut memory, &mut registers, &mut visualizer);
+        let mut donkey_runner = DonkeyVMRunner::new(memory, registers);
+        donkey_runner.run(&program);
     }
 }
 

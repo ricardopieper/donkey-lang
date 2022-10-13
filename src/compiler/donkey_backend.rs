@@ -563,7 +563,7 @@ fn fits_16_bits(i: i128) -> bool {
 }
 
 fn raw_16_bits(i: i128) -> [u8; 2] {
-    if (i < 0) {
+    if i < 0 {
         let as_i16 = i as i16;
         as_i16.to_le_bytes()
     } else {
@@ -915,7 +915,7 @@ mod test {
             },
             vm::{
                 memory::Memory,
-                runner::{self, ControlRegisterValues, print_stack},
+                runner::{self, ControlRegisterValues, DonkeyVMRunner},
             },
         },
         semantic::{
@@ -979,8 +979,10 @@ mod test {
 
         let (mut memory, mut registers, mut visualizer) = runner::prepare_vm();
 
-        runner::run(&as_instructions, &mut memory, &mut registers, &mut visualizer);
-        (memory, registers)
+        let mut donkey = DonkeyVMRunner::new(memory, registers);
+
+        donkey.run(&as_instructions);
+        (donkey.memory, donkey.reg)
     }
 
     #[test]
@@ -1140,7 +1142,7 @@ def main():
 ";
         let (memory, registers) = run_test(src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
-        print_stack(&memory, &registers);
+        //print_stack(&memory, &registers);
         assert_eq!(result_value, 1);
     }
 
@@ -1158,7 +1160,7 @@ def main():
 ";
         let (memory, registers) = run_test(src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
-        print_stack(&memory, &registers);
+        //print_stack(&memory, &registers);
         assert_eq!(result_value, 1);
     }
 
@@ -1176,7 +1178,7 @@ def main():
 ";
         let (memory, registers) = run_test(src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
-        print_stack(&memory, &registers);
+        //print_stack(&memory, &registers);
         assert_eq!(result_value, 1);
     }
 
@@ -1205,7 +1207,7 @@ def main():
 ");
         let (memory, registers) = run_test(&src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
-        print_stack(&memory, &registers);
+        //print_stack(&memory, &registers);
         println!("Result should be {}, is {}", native_fib(chosen_num), result_value);
         assert_eq!(result_value, native_fib(chosen_num));
     }
