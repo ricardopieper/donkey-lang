@@ -125,6 +125,16 @@ fn print_hir_body_str(
             }
             ifdecl
         }
+        HIR::While(expr, body, ..) => {
+            let expr_str = expr_str(expr);
+            let mut while_decl = format!("{}while {}:\n", indent, expr_str);
+            let indent_block = format!("{}    ", indent);
+            for statement in body {
+                let statement_str = print_hir_body_str(statement, &indent_block, type_db);
+                while_decl.push_str(&statement_str);
+            }
+            while_decl
+        },
     }
 }
 

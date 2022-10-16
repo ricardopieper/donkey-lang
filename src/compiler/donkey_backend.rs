@@ -819,18 +819,27 @@ fn generate_func_block_finish(
             *offset_from_bp = generated_expr.offset_from_bp;
             //generate a jz to the false branch
             //assert that the true branch is just the next one
-            assert_eq!(true_branch.0, block.index + 1);
+            //assert_eq!(true_branch.0, block.index + 1);
             bytecode.push_annotated(
                 AssemblyInstruction::UnresolvedJumpIfZero {
                     label: Some(format!("LBL_{}", false_branch.0)),
                 },
-                "Jumping to false branch of if",
+                "Jumping to false branch of if/while",
             );
+            //if the next block is not the true branch we need to jump
+            if true_branch.0 != block.index + 1 {
+                bytecode.push_annotated(
+                    AssemblyInstruction::UnresolvedJump {
+                        label: Some(format!("LBL_{}", true_branch.0)),
+                    },
+                    "Jumping to true branch of if/while",
+                );
+            }
         }
         MIRBlockFinal::GotoBlock(block_id) => {
             //if it just goes to the next, do not generate a goto!
             if block_id.0 != block.index + 1 {
-                bytecode.push(AssemblyInstruction::UnresolvedJumpIfZero {
+                bytecode.push(AssemblyInstruction::UnresolvedJump {
                     label: Some(format!("LBL_{}", block_id.0)),
                 });
             }

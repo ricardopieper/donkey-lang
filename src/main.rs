@@ -19,6 +19,7 @@ use crate::donkey_vm::asm::asm_printer;
 use crate::donkey_vm::asm::assembler::as_donkey_vm_program;
 use crate::donkey_vm::asm::assembler::resolve;
 use crate::donkey_vm::vm::instructions::Instruction;
+use crate::semantic::hir_printer;
 use crate::semantic::hir_printer::print_hir;
 use std::env;
 use std::fs;
@@ -40,6 +41,9 @@ use crate::types::type_errors::TypeErrorPrinter;
 use compiler::donkey_backend::DonkeyEmitter;
 use donkey_vm::asm::assembler::DonkeyProgram;
 use donkey_vm::vm::runner::DonkeyVMRunner;
+use semantic::analysis::AnalysisResult;
+use semantic::hir::Checked;
+use semantic::mir::MIRTopLevelNode;
 use tracy_client::frame_name;
 use tracy_client::Client;
 
@@ -78,7 +82,7 @@ fn main() {
 
 
     } else if args[1] == "compile" {
-        let generated_asm = compile(&args[2]);
+        let (generated_asm, ..) = compile(&args[2]);
         let resolved = resolve(&generated_asm.assembly);
         let program = as_donkey_vm_program(&resolved);
 
@@ -90,11 +94,24 @@ fn main() {
 
         program.write_program(out_file);
     } else {
-        let generated_asm = compile(&args[1]);
+        let (generated_asm, analysis, mir) = compile(&args[1]);
 
-        if let Some(arg) = args.get(2) && arg == "print_asm" {
+        if args.contains(&"print_asm".to_string()) {
             asm_printer::print(generated_asm.iter_annotated());
         }
+
+        if args.contains(&"print_hir".to_string()) {
+            let printed_hir = hir_printer::print_hir(&analysis.hir, &analysis.type_db);
+            println!("HIR:\n{printed_hir}");
+        }
+
+        if args.contains(&"print_mir".to_string()) {
+            let printed_mir = mir_printer::print_mir(&mir, &analysis.type_db);
+            println!("MIR:\n{printed_mir}");
+        
+        }
+
+        
 
         let resolved = resolve(&generated_asm.assembly);
         let program = as_donkey_vm_program(&resolved);
@@ -105,7 +122,7 @@ fn main() {
     }
 }
 
-fn compile(file_name: &str) -> DonkeyEmitter {
+fn compile(file_name: &str) -> (DonkeyEmitter, AnalysisResult, Vec<MIRTopLevelNode<Checked>>) {
     let input = fs::read_to_string(file_name)
         .unwrap_or_else(|_| panic!("Could not read file {}", file_name));
     let tokens = lexer::tokenize(input.as_str());
@@ -118,5 +135,6 @@ fn compile(file_name: &str) -> DonkeyEmitter {
         let printer = TypeErrorPrinter::new(&result.type_errors, &result.type_db);
         panic!("{}", printer);
     }
-    generate_donkey_vm(&result.type_db, &typechecked.unwrap())
+    let typechecked_clone = typechecked.unwrap().clone();
+    (generate_donkey_vm(&result.type_db, &typechecked_clone), result, typechecked_clone)
 }

@@ -227,6 +227,12 @@ pub enum HIR<TVariableDeclType, TExprType> {
         Vec<HIR<TVariableDeclType, TExprType>>,
         HIRAstMetadata,
     ),
+    //condition, body
+    While(
+        TExprType,
+        Vec<HIR<TVariableDeclType, TExprType>>,
+        HIRAstMetadata,
+    ),
     Return(TExprType, HIRAstMetadata),
     EmptyReturn,
 }
@@ -366,6 +372,9 @@ fn ast_to_hir(ast: &AST, accum: &mut Vec<UninferredHIR>) {
             final_else,
         } => {
             ast_if_to_hir(true_branch, accum, elifs, final_else, ast);
+        }
+        AST::WhileStatement { expression, body } => {
+            ast_while_to_hir(expression, accum, body, ast);
         }
         ast => panic!("Not implemented HIR for {:?}", ast),
     }
@@ -524,6 +533,23 @@ fn ast_if_to_hir(
         }
         accum.push(final_if_chain.unwrap());
     }
+}
+
+
+fn ast_while_to_hir(
+    expression: &Expr,
+    accum: &mut Vec<UninferredHIR>,
+    body: &[AST],
+    ast: &AST,
+) {
+    let expr = expr_to_hir_expr(expression);
+
+    let mut true_body_hir = vec![];
+    for node in body {
+        ast_to_hir(node, &mut true_body_hir);
+    }
+
+    accum.push(HIR::While(expr, true_body_hir, ast.clone()))
 }
 
 pub fn ast_globals_to_hir(ast: &AST, accum: &mut Vec<StartingHIRRoot>) {

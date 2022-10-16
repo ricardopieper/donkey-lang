@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["memtest", "testprogram.s"],
+            "args": ["example.py", "print_hir"],
             "cwd": "${workspaceFolder}"
         },
         {

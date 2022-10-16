@@ -285,6 +285,8 @@ impl DonkeyVMRunner {
         self.reg.sp -= std::mem::size_of::<T>() as u32;
         let rhs = self.memory.native_read::<T>(self.reg.sp);
 
+        //println!("Comparing {lhs} {operation:?} {rhs}");
+
         let result = match operation {
             CompareOperation::Equals => lhs == rhs,
             CompareOperation::NotEquals => lhs != rhs,
@@ -307,6 +309,9 @@ impl DonkeyVMRunner {
         self.reg.sp -= std::mem::size_of::<T>() as u32;
         let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) }; // self.memory.native_read::<T>(self.reg.sp);
         let rhs = T::from_bytes(&operand);
+
+        //println!("Comparing imm {lhs} {operation:?} {rhs}");
+
         let result = match operation {
             CompareOperation::Equals => lhs == rhs,
             CompareOperation::NotEquals => lhs != rhs,
@@ -946,9 +951,9 @@ impl DonkeyVMRunner {
 
             /*println!(
                 "Executing instruction {inst:?} ip = {ip} sp = {sp} bp = {bp}",
-                ip = registers.ip,
-                sp = registers.sp,
-                bp = registers.bp
+                ip = self.reg.ip,
+                sp = self.reg.sp,
+                bp = self.reg.bp
             );*/
 
             if self.execute(inst) {

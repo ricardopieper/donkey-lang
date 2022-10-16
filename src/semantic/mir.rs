@@ -1,19 +1,23 @@
 use std::ops::Not;
 
-use super::{hir::{
-    HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR, InferredTypeHIRRoot,
-    TrivialHIRExpr, HIR, NotChecked, Checked,
-}, mir_printer::PrintableExpression, hir_printer::expr_str};
+use super::{
+    hir::{
+        Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
+        InferredTypeHIRRoot, NotChecked, TrivialHIRExpr, HIR,
+    },
+    hir_printer::expr_str,
+    mir_printer::PrintableExpression,
+};
 
 use crate::{
     ast::parser::{Expr, AST},
-    types::type_instance_db::{TypeInstanceId},
+    types::type_instance_db::TypeInstanceId,
 };
 
 pub type TypecheckPendingExpression = HIRExpr<TypeInstanceId, NotChecked>;
 pub type TypecheckedExpression = HIRExpr<TypeInstanceId, Checked>;
 
-impl<T> PrintableExpression for  HIRExpr<TypeInstanceId, T> {
+impl<T> PrintableExpression for HIRExpr<TypeInstanceId, T> {
     fn print_expr(&self) -> String {
         expr_str(self)
     }
@@ -55,7 +59,6 @@ pub struct BlockId(pub usize);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ScopeId(pub usize);
 
-
 /*
 A MIRFunctionNode represents nodes inside a block. They can be executed within the context of
 a scope and a block.
@@ -73,7 +76,7 @@ pub enum MIRBlockNode<TTypecheckState> {
         args: Vec<HIRExpr<TypeInstanceId, TTypecheckState>>,
         meta_ast: AST,
         meta_expr: Expr,
-        return_type: TypeInstanceId
+        return_type: TypeInstanceId,
     },
     //@TODO Add method call here
 }
@@ -106,9 +109,14 @@ pub struct MIRScope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockFinal<TTypecheckState> {
     //expression, true, else, meta
-    If(HIRExpr<TypeInstanceId,TTypecheckState>, BlockId, BlockId, HIRAstMetadata),
+    If(
+        HIRExpr<TypeInstanceId, TTypecheckState>,
+        BlockId,
+        BlockId,
+        HIRAstMetadata,
+    ),
     GotoBlock(BlockId),
-    Return(HIRExpr<TypeInstanceId,TTypecheckState>, HIRAstMetadata),
+    Return(HIRExpr<TypeInstanceId, TTypecheckState>, HIRAstMetadata),
     EmptyReturn,
 }
 
@@ -142,6 +150,7 @@ struct MIRFunctionEmitter {
     current_block: BlockId,
     blocks: Vec<MIRMaybeUnfinishedBlock>,
     scopes: Vec<MIRScope>,
+    goto_stack: Vec<BlockId>,
 }
 
 impl MIRFunctionEmitter {
@@ -151,6 +160,7 @@ impl MIRFunctionEmitter {
             current_scope: ScopeId(0),
             blocks: vec![],
             scopes: vec![],
+            goto_stack: vec![]
         }
     }
 
@@ -247,6 +257,18 @@ impl MIRFunctionEmitter {
     fn check_if_block_is_finished(&self, block_id: BlockId) -> bool {
         self.blocks[block_id.0].finish.is_some()
     }
+
+    fn push_goto_block(&mut self, block: BlockId) {
+        self.goto_stack.push(block)
+    }
+
+    fn pop_goto_block(&mut self) {
+        self.goto_stack.pop();
+    }
+
+    fn peek_goto_block(&self) -> Option<&BlockId> {
+        self.goto_stack.last()
+    }
 }
 
 //returns the "root block" that this execution generated (or started with)
@@ -313,7 +335,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 function,
                 args,
                 meta_ast,
-                meta_expr
+                meta_expr,
             } => {
                 match &function {
                     HIRExpr::Trivial(TrivialHIRExpr::Variable(var), function_type, ..) => {
@@ -325,12 +347,62 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                             args: pending_args,
                             meta_ast: meta_ast.clone(),
                             meta_expr: meta_expr.clone(),
-                            return_type: *function_type
+                            return_type: *function_type,
                         });
                     }
                     other => panic!("{:?} is not a function!", other),
                 };
             }
+            HIR::While(expr, body, meta_ast) => {
+                let current_scope = emitter.current_scope;
+                let current_block = emitter.current_block;
+
+                assert!(
+                    !body.is_empty(),
+                    "Empty body on while statement reached MIR"
+                );
+
+                //create a block for the while branch
+                let while_body_scope = emitter.create_scope(current_scope);
+                let while_body_block = emitter.new_block(while_body_scope);
+
+                let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
+               
+                //the code inside the the body needs to know where to return when their scope ends
+                //so we add this goto stack block for the body, otherwise it will make the function return
+                //so we make them return to the current block, reevaluate the condition and loop again
+                emitter.push_goto_block(current_block);
+
+                //go to the while block
+                emitter.set_current_block(while_body_block);
+                process_body(emitter, body);
+
+                emitter.pop_goto_block();
+
+                //do the loop
+                //ensure we are in the while block first
+                emitter.set_current_block(while_body_block);
+
+                //check if the user returned. Kinda weird to do it directly in the while loop
+                //but ok
+                let emitted_block_returns = emitter.check_if_block_is_finished(while_body_block);
+
+                //if they don't return, go back to the beginning of the loop
+                if !emitted_block_returns {
+                    emitter.finish_with_goto_block(current_block);
+                }
+
+                emitter.set_current_block(current_block);
+                emitter.finish_with_branch(
+                    expr.clone(),
+                    while_body_block, //return to the block
+                    fallback_block,   //go to the fallback block
+                    meta_ast.clone(),
+                );
+
+                emitter.set_current_block(fallback_block);
+            }
+
             HIR::If(condition, true_branch_hir, false_branch_hir, ast) => {
                 //we need to finalize the block we currently are,
                 //define a new scope inheriting the current one,
@@ -354,7 +426,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                     //create a block for the true branch
                     let true_branch_scope = emitter.create_scope(current_scope);
                     let true_branch_block = emitter.new_block(true_branch_scope);
-                    //go to the true banch block
+                    //go to the true branch block
                     emitter.set_current_block(true_branch_block);
                     process_body(emitter, true_branch_hir);
 
@@ -364,11 +436,10 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
 
                     if !emitted_block_returns {
                         if fallback_scope_and_block.is_none() {
-                            let fallback_scope = emitter.create_scope(current_scope);
-                            let fallback_block = emitter.new_block(fallback_scope);
-                            fallback_scope_and_block = Some((fallback_block, fallback_scope));
+                            let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
+                            fallback_scope_and_block = Some(fallback_block);
                         }
-                        let (fallback_block, _) = fallback_scope_and_block.unwrap();
+                        let fallback_block = fallback_scope_and_block.unwrap();
                         //if no then goto the fallback block
                         //make sure we are emitting on the true branch block we generated
                         emitter.set_current_block(true_branch_block);
@@ -404,16 +475,15 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
 
                     if !emitted_block_returns {
                         if fallback_scope_and_block.is_none() {
-                            let fallback_scope = emitter.create_scope(current_scope);
-                            let fallback_block = emitter.new_block(fallback_scope);
-                            fallback_scope_and_block = Some((fallback_block, fallback_scope));
+                            let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
+                            fallback_scope_and_block = Some(fallback_block);
                         }
-                        let (fallback_block, _) = fallback_scope_and_block.unwrap();
+                        let fallback_block = fallback_scope_and_block.unwrap();
                         emitter.set_current_block(false_branch_block);
                         emitter.finish_with_goto_block(fallback_block);
                         emitter.set_current_block(fallback_block);
                     } else if !true_branch_returns {
-                        emitter.set_current_block(fallback_scope_and_block.unwrap().0);
+                        emitter.set_current_block(fallback_scope_and_block.unwrap());
                     }
                 } else {
                     //no else code, go to the fallback
@@ -421,11 +491,10 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                     emitter.set_current_block(current_block);
 
                     if fallback_scope_and_block.is_none() {
-                        let fallback_scope = emitter.create_scope(current_scope);
-                        let fallback_block = emitter.new_block(fallback_scope);
-                        fallback_scope_and_block = Some((fallback_block, fallback_scope));
+                        let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
+                        fallback_scope_and_block = Some(fallback_block);
                     }
-                    let (fallback_block, _) = fallback_scope_and_block.unwrap();
+                    let fallback_block = fallback_scope_and_block.unwrap();
                     emitter.finish_with_branch(
                         condition.clone(),
                         true_block,
@@ -445,6 +514,17 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
             }
         }
     }
+}
+
+fn generate_or_get_fallback_block(emitter: &mut MIRFunctionEmitter, current_scope: ScopeId) -> BlockId {
+    let fallback_block = if let Some(block) = emitter.peek_goto_block() {
+        *block
+    } else {
+        //create a fallback block, for after the while statement
+        let fallback_scope = emitter.create_scope(current_scope);
+        emitter.new_block(fallback_scope)
+    };
+    fallback_block
 }
 
 pub fn process_hir_funcdecl(

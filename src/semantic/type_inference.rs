@@ -397,6 +397,13 @@ impl FunctionTypeInferenceContext<'_, '_> {
                     )?,
                 HIR::Return(expr, meta) => self.infer_types_in_return(expr, meta)?,
                 HIR::EmptyReturn => HIR::EmptyReturn,
+                HIR::While(condition, body, meta) => 
+                    self
+                    .infer_types_in_while_statement_and_blocks(
+                        condition,
+                        body,
+                        meta,
+                    )?,
             };
             new_mir.push(hir_node);
         }
@@ -411,6 +418,16 @@ impl FunctionTypeInferenceContext<'_, '_> {
     ) -> Result<InferredTypeHIR, CompilerError> {
         let typed_expr = self.compute_and_infer_expr_type(expr, None)?;
         Ok(HIR::Return(typed_expr, meta))
+    }
+
+    fn infer_types_in_while_statement_and_blocks(&mut self, condition: HIRExpr<()>, body: Vec<TypeInferenceInputHIR>, meta: AST) -> Result<InferredTypeHIR, CompilerError> {
+        let body_inferred = self.infer_types_in_body(body)?;
+        let condition_expr = self.compute_and_infer_expr_type(condition, None)?;
+        Ok(HIR::While(
+            condition_expr,
+            body_inferred,
+            meta,
+        ))
     }
 
     fn infer_types_in_if_statement_and_blocks(
@@ -522,6 +539,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
         new_ctx.infer_types_in_body(body)
     }
+
 }
 
 pub fn infer_types(
