@@ -7,13 +7,12 @@ use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
 use crate::types::type_instance_db::TypeInstanceId;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TrivialHIRExpr {
-    IntegerValue(i128),
-    FloatValue(FloatLiteral),
-    StringValue(String),
-    BooleanValue(bool),
-    Variable(String),
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LiteralHIRExpr {
+    Integer(i128),
+    Float(FloatLiteral),
+    String(String),
+    Boolean(bool),
     None,
 }
 
@@ -62,14 +61,21 @@ pub enum HIRTypeDef {
     Provided(HIRType),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)] pub struct NotChecked;
-#[derive(Debug, Clone, PartialEq, Eq)] pub struct Checked;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotChecked;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checked;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRExpr<TExprType, TTypechecked = NotChecked> {
-    Trivial(TrivialHIRExpr, TExprType, HIRExprMetadata),
+    Literal(LiteralHIRExpr, TExprType, HIRExprMetadata),
+    Variable(String, TExprType, HIRExprMetadata),
     #[allow(dead_code)]
-    Cast(Box<HIRExpr<TExprType, TTypechecked>>, TExprType, HIRExprMetadata),
+    Cast(
+        Box<HIRExpr<TExprType, TTypechecked>>,
+        TExprType,
+        HIRExprMetadata,
+    ),
     BinaryOperation(
         Box<HIRExpr<TExprType, TTypechecked>>,
         Operator,
@@ -99,14 +105,24 @@ pub enum HIRExpr<TExprType, TTypechecked = NotChecked> {
         HIRExprMetadata,
     ),
     //obj, field, result_type, metadata
-    MemberAccess(Box<HIRExpr<TExprType, TTypechecked>>, String, TExprType, HIRExprMetadata),
-    Array(Vec<HIRExpr<TExprType, TTypechecked>>, TExprType, HIRExprMetadata),
-    #[allow(dead_code)] TypecheckTag(TTypechecked)
+    MemberAccess(
+        Box<HIRExpr<TExprType, TTypechecked>>,
+        String,
+        TExprType,
+        HIRExprMetadata,
+    ),
+    Array(
+        Vec<HIRExpr<TExprType, TTypechecked>>,
+        TExprType,
+        HIRExprMetadata,
+    ),
+    #[allow(dead_code)]
+    TypecheckTag(TTypechecked),
 }
 
 impl<TExpr, TTypechecked> HIRExpr<TExpr, TTypechecked> {
-    pub fn is_trivial_integer(&self) -> bool {
-        matches!(self, HIRExpr::Trivial(TrivialHIRExpr::IntegerValue(_), _, _))
+    pub fn is_literal_integer(&self) -> bool {
+        matches!(self, HIRExpr::Literal(LiteralHIRExpr::Integer(_), _, _))
     }
 }
 
@@ -156,18 +172,18 @@ impl Display for HIRType {
     }
 }
 
-
 impl<T> HIRExpr<TypeInstanceId, T> {
     pub fn get_type(&self) -> TypeInstanceId {
         *match self {
-            HIRExpr::Trivial(.., t, _)
+            HIRExpr::Literal(.., t, _)
             | HIRExpr::Cast(.., t, _)
             | HIRExpr::BinaryOperation(.., t, _)
             | HIRExpr::FunctionCall(.., t, _)
             | HIRExpr::UnaryExpression(.., t, _)
             | HIRExpr::MemberAccess(.., t, _)
             | HIRExpr::Array(.., t, _)
-            | HIRExpr::MethodCall(.., t, _) => t,
+            | HIRExpr::MethodCall(.., t, _)
+            | HIRExpr::Variable(.., t, _) => t,
             HIRExpr::TypecheckTag(_) => unreachable!(),
         }
     }
@@ -245,20 +261,14 @@ struct IfTreeNode<TDeclType, TExprType> {
 
 fn expr_to_hir_expr(expr: &Expr) -> HIRExpr<()> {
     match expr {
-        Expr::IntegerValue(i) => {
-            HIRExpr::Trivial(TrivialHIRExpr::IntegerValue(*i), (), expr.clone())
-        }
-        Expr::FloatValue(f) => HIRExpr::Trivial(TrivialHIRExpr::FloatValue(*f), (), expr.clone()),
+        Expr::IntegerValue(i) => HIRExpr::Literal(LiteralHIRExpr::Integer(*i), (), expr.clone()),
+        Expr::FloatValue(f) => HIRExpr::Literal(LiteralHIRExpr::Float(*f), (), expr.clone()),
         Expr::StringValue(s) => {
-            HIRExpr::Trivial(TrivialHIRExpr::StringValue(s.clone()), (), expr.clone())
+            HIRExpr::Literal(LiteralHIRExpr::String(s.clone()), (), expr.clone())
         }
-        Expr::BooleanValue(b) => {
-            HIRExpr::Trivial(TrivialHIRExpr::BooleanValue(*b), (), expr.clone())
-        }
-        Expr::None => HIRExpr::Trivial(TrivialHIRExpr::None, (), expr.clone()),
-        Expr::Variable(name) => {
-            HIRExpr::Trivial(TrivialHIRExpr::Variable(name.clone()), (), expr.clone())
-        }
+        Expr::BooleanValue(b) => HIRExpr::Literal(LiteralHIRExpr::Boolean(*b), (), expr.clone()),
+        Expr::None => HIRExpr::Literal(LiteralHIRExpr::None, (), expr.clone()),
+        Expr::Variable(name) => HIRExpr::Variable(name.clone(), (), expr.clone()),
         Expr::FunctionCall(fun_expr, args) => match &**fun_expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
                 expr_to_hir_expr(var).into(),
@@ -473,7 +483,7 @@ fn ast_if_to_hir(
         //and we don't actually need to store the false body because we'll connect everything later.
         //it's not actually a tree... it's more like a linked list.
 
-        //let mut current_if_tree = HIR::If(trivial_true_branch_expr, true_body_hir, ());
+        //let mut current_if_tree = HIR::If(literal_true_branch_expr, true_body_hir, ());
         let mut nodes = vec![];
 
         let root_node = IfTreeNode {
@@ -535,13 +545,7 @@ fn ast_if_to_hir(
     }
 }
 
-
-fn ast_while_to_hir(
-    expression: &Expr,
-    accum: &mut Vec<UninferredHIR>,
-    body: &[AST],
-    ast: &AST,
-) {
+fn ast_while_to_hir(expression: &Expr, accum: &mut Vec<UninferredHIR>, body: &[AST], ast: &AST) {
     let expr = expr_to_hir_expr(expression);
 
     let mut true_body_hir = vec![];

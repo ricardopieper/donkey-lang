@@ -70,11 +70,14 @@ fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegis
     let string_void =
         type_db.construct_function(&[type_db.common_types.string], type_db.common_types.void);
 
+    let argless_void = type_db.construct_function(&[], type_db.common_types.void);
+
     registry.insert("sqrt", f64_f64);
     registry.insert("sqrt_f32", f32_f32);
     registry.insert("pow_f32", f32_f32);
     registry.insert("pow", f64_f64);
     registry.insert("print", string_void);
+    registry.insert("panic", argless_void);
 }
 
 /*Builds a name registry and resolves the top  */

@@ -1,4 +1,39 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
+
+use crate::compiler::layouts::Bytes;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct InstructionPointer(pub usize);
+
+impl InstructionPointer {
+    pub fn next(&mut self) {
+        self.0 += 1;
+    }
+}
+
+impl Display for InstructionPointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Debug for InstructionPointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl From<i32> for InstructionPointer {
+    fn from(value: i32) -> Self {
+        InstructionPointer(value as usize)
+    }
+}
+
+impl From<u32> for InstructionPointer {
+    fn from(value: u32) -> Self {
+        InstructionPointer(value as usize)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadStoreAddressingMode {
@@ -45,7 +80,6 @@ pub enum NumberOfBytes {
 }
 
 impl NumberOfBytes {
- 
     pub const fn get_bytes(self) -> u32 {
         match self {
             NumberOfBytes::Bytes1 => 1,
@@ -334,7 +368,7 @@ impl AddressJumpAddressSource {
 pub enum Instruction {
     Noop,
     StackOffset {
-        bytes: u32,
+        bytes: Bytes,
     },
     PushImmediate {
         bytes: NumberOfBytes,
@@ -344,12 +378,12 @@ pub enum Instruction {
     LoadAddress {
         bytes: NumberOfBytes,
         mode: LoadStoreAddressingMode,
-        operand: u32,
+        operand: Bytes,
     },
     StoreAddress {
         bytes: NumberOfBytes,
         mode: LoadStoreAddressingMode,
-        operand: u32,
+        operand: Bytes,
     },
     BitShift {
         bytes: NumberOfBytes,
@@ -398,19 +432,19 @@ pub enum Instruction {
     },
     Call {
         source: AddressJumpAddressSource,
-        offset: u32,
+        offset: InstructionPointer,
     },
     JumpIfZero {
         source: AddressJumpAddressSource,
-        offset: u32,
+        offset: InstructionPointer,
     },
     JumpIfNotZero {
         source: AddressJumpAddressSource,
-        offset: u32,
+        offset: InstructionPointer,
     },
     JumpUnconditional {
         source: AddressJumpAddressSource,
-        offset: u32,
+        offset: InstructionPointer,
     },
     Return,
 }

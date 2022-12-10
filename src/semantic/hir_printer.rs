@@ -1,6 +1,6 @@
 use crate::ast::lexer;
 
-use crate::semantic::hir::{HIRExpr, TrivialHIRExpr, HIR};
+use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR};
 
 use crate::types::type_instance_db::TypeInstanceManager;
 use lexer::Operator;
@@ -27,7 +27,8 @@ pub fn operator_str(op: lexer::Operator) -> String {
 
 pub fn expr_str<T, T1>(expr: &HIRExpr<T, T1>) -> String {
     match expr {
-        HIRExpr::Trivial(trivial, ..) => trivial_expr_str(trivial),
+        HIRExpr::Variable(s, ..) => s.clone(),
+        HIRExpr::Literal(literal, ..) => literal_expr_str(literal),
         HIRExpr::FunctionCall(f, args, ..) => {
             let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
             format!("{}({})", expr_str(f), args_str)
@@ -56,15 +57,14 @@ pub fn expr_str<T, T1>(expr: &HIRExpr<T, T1>) -> String {
     }
 }
 
-fn trivial_expr_str(expr: &TrivialHIRExpr) -> String {
+fn literal_expr_str(expr: &LiteralHIRExpr) -> String {
     match &expr {
-        TrivialHIRExpr::Variable(s) => s.clone(),
-        TrivialHIRExpr::FloatValue(f) => format!("{:?}", f.0),
-        TrivialHIRExpr::IntegerValue(i) => format!("{}", i),
-        TrivialHIRExpr::StringValue(s) => format!("\"{}\"", s),
-        TrivialHIRExpr::BooleanValue(true) => "True".to_string(),
-        TrivialHIRExpr::BooleanValue(false) => "False".to_string(),
-        TrivialHIRExpr::None => "None".into(),
+        LiteralHIRExpr::Float(f) => format!("{:?}", f.0),
+        LiteralHIRExpr::Integer(i) => format!("{}", i),
+        LiteralHIRExpr::String(s) => format!("\"{}\"", s),
+        LiteralHIRExpr::Boolean(true) => "True".to_string(),
+        LiteralHIRExpr::Boolean(false) => "False".to_string(),
+        LiteralHIRExpr::None => "None".into(),
     }
 }
 
@@ -134,7 +134,7 @@ fn print_hir_body_str(
                 while_decl.push_str(&statement_str);
             }
             while_decl
-        },
+        }
     }
 }
 

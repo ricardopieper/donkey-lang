@@ -1523,6 +1523,7 @@ if x == 0:
         assert_eq!(expected, result);
     }
 
+    
     #[test]
     fn if_statement_with_print_after() {
         let tokens = tokenize(
@@ -2801,7 +2802,7 @@ def function(x: i32,y: u32,z: MyType):
         }];
         assert_eq!(expected, result);
     }
-    
+
     #[test]
     fn return_nothing() {
         let tokens = tokenize(

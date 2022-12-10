@@ -73,11 +73,10 @@ fn make_first_assignments_in_body(
             }
             HIR::While(expr, body, meta) => {
                 let mut while_scope = declarations_found.clone();
-                let while_body_decl =
-                    make_first_assignments_in_body(body, &mut while_scope);
-           
+                let while_body_decl = make_first_assignments_in_body(body, &mut while_scope);
+
                 HIR::While(expr, while_body_decl, meta)
-            },
+            }
             HIR::FunctionCall {
                 function,
                 args,

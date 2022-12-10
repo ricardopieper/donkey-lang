@@ -1,12 +1,13 @@
+use crate::compiler::layouts::Bytes;
 
 pub struct Memory {
     pub mem: memmap::MmapMut,
     pub data_pages: u32,
     pub code_pages: u32,
-    pub data_start: u32,
-    pub code_start: u32,
-    pub stack_start: u32,
-    pub heap_start: u32,
+    pub data_start: Bytes,
+    pub code_start: Bytes,
+    pub stack_start: Bytes,
+    pub heap_start: Bytes,
     pub ready: bool,
 }
 
@@ -72,16 +73,16 @@ impl Memory {
             mem,
             data_pages: 1,
             code_pages: 1,
-            data_start: 0,
-            code_start: 0,
-            stack_start: 0,
-            heap_start: 0,
+            data_start: Bytes(0),
+            code_start: Bytes(0),
+            stack_start: Bytes(0),
+            heap_start: Bytes(0),
             ready: false,
         }
     }
 
     pub fn make_ready(&mut self) {
-        let mut page_start = 0u32;
+        let mut page_start = Bytes(0);
 
         page_start += 1; //skip reserved page
         self.data_start = page_start << 16;
@@ -100,53 +101,51 @@ impl Memory {
         self.ready = true;
     }
 
-    pub fn get_ptr_mut<T>(&mut self, offset: isize) -> *mut T {
-        unsafe {
-            self.mem.as_mut_ptr().offset(offset) as *mut T
-        }
+    pub fn get_ptr_mut<T>(&mut self, offset: Bytes) -> *mut T {
+        unsafe { self.mem.as_mut_ptr().offset(offset.0 as isize) as *mut T }
     }
 
-    pub fn get_ptr<T>(&self, offset: isize) -> *const T {
-        unsafe {
-            self.mem.as_ptr().offset(offset) as *const T
-        }
+    pub fn get_ptr<T>(&self, offset: Bytes) -> *const T {
+        unsafe { self.mem.as_ptr().offset(offset.0 as isize) as *const T }
     }
-
-
-    //returns the data read and a flag indicating whether a page fault occured,
-    //and the VM must read the remaining bytes again passing another address
-    //and handle that accordingly
-    pub fn read(&self, address: u32, len: u32) -> &[u8] {
-        &self.mem[address as usize..address as usize + len as usize]
-    }
-
-    //reads an address-sized value u32 from memory.
-    pub fn native_read<T: NativeNumericType<T> + Copy>(&self, address: u32) -> T {
-        unsafe { *self.get_ptr::<T>(address as isize) }
+    
+    pub fn native_read<T: NativeNumericType<T> + Copy>(&self, address: Bytes) -> T {
+        unsafe { *self.get_ptr::<T>(address) }
     }
 
     //returns the data read and a flag indicating whether a page fault occured,
     //and the VM must read the remaining bytes again passing another address
     //and handle that accordingly
 
-    pub fn read_single(&self, address: u32) -> u8 {
-        self.mem[address as usize]
+    pub fn read_single(&self, address: Bytes) -> u8 {
+        self.mem[address.0 as usize]
     }
 
-    pub fn write(&mut self, address: u32, data: &[u8]) {
-        self.mem[address as usize..address as usize + data.len()].copy_from_slice(data);
+    pub fn write(&mut self, address: Bytes, data: &[u8]) {
+        self.mem[address.0 as usize..address.0 as usize + data.len()].copy_from_slice(data);
     }
 
-    pub fn write_value<T>(&mut self, address: u32, data: T) {
-        unsafe { *self.get_ptr_mut(address as isize) = data }
+    pub fn write_value<T>(&mut self, address: Bytes, data: T) {
+        unsafe { *self.get_ptr_mut(address) = data }
     }
 
-    pub fn copy<const LEN: usize>(&mut self, address_from: u32, address_to: u32) {
-        unsafe { 
+    pub fn copy<const LEN: usize>(&mut self, address_from: Bytes, address_to: Bytes) {
+        unsafe {
             std::ptr::copy_nonoverlapping::<u8>(
-            self.mem.as_ptr().offset(address_from as isize),
-            self.mem.as_mut_ptr().offset(address_to as isize),
-            LEN);
+                self.mem.as_ptr().offset(address_from.0 as isize),
+                self.mem.as_mut_ptr().offset(address_to.0 as isize),
+                LEN,
+            );
+        }
+    }
+    
+    pub fn copy_with_len(&mut self, address_from: Bytes, address_to: Bytes, len: Bytes) {
+        unsafe {
+            std::ptr::copy_nonoverlapping::<u8>(
+                self.mem.as_ptr().offset(address_from.0 as isize),
+                self.mem.as_mut_ptr().offset(address_to.0 as isize),
+                len.0 as usize,
+            );
         }
     }
 }

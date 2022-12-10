@@ -7,8 +7,8 @@ It will get more complex in the future with traits though.
 We store type information in the HIRExpr tree directly, but this proved to be a bad idea:
 
 ```
-HIRExpr::Trivial(
-    TrivialHIRExpr::StringLiteral("some"),
+HIRExpr::Literal(
+    LiteralHIRExpr::StringLiteral("some"),
     TypeInstance::Simple(type id of str)
 )
 ```
@@ -39,14 +39,14 @@ We will instead refactor this to have 2 databases:
 The HIR will continue storing type information, but we will only store a single ID:
 
 ```
-HIRExpr::Trivial(
-    TrivialHIRExpr::StringLiteral("some"),
+HIRExpr::Literal(
+    LiteralHIRExpr::StringLiteral("some"),
     TypeInstanceId(type id of str)
 )
 
 HIRExpr::Array(
-    [HIRExpr::TrivialHIRExpr(
-        TrivialHIRExpr::StringLiteral("some"),
+    [HIRExpr::LiteralHIRExpr(
+        LiteralHIRExpr::StringLiteral("some"),
         TypeInstanceId(type id of str)
     ]
     TypeInstanceId(type id of array<str>)

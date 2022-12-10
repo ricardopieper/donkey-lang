@@ -1,48 +1,51 @@
 use std::fmt::Display;
 
-use crate::donkey_vm::{asm::assembler::DonkeyProgram, vm::instructions::AddressJumpAddressSource};
+use crate::{
+    compiler::layouts::{ByteRange, Bytes},
+    donkey_vm::{asm::assembler::DonkeyProgram, vm::instructions::AddressJumpAddressSource},
+};
 
 use super::{
     instructions::{
-        ArithmeticOperation, CompareOperation, Instruction, LoadStoreAddressingMode, NumberOfBytes,
-        OperationMode, ShiftDirection, SignFlag,
+        ArithmeticOperation, CompareOperation, Instruction, InstructionPointer,
+        LoadStoreAddressingMode, NumberOfBytes, OperationMode, ShiftDirection, SignFlag,
     },
     memory::{Memory, NativeNumericType},
 };
 
 pub struct ControlRegisterValues {
-    pub ip: usize,
-    pub sp: u32,
-    pub bp: u32,
+    pub ip: InstructionPointer,
+    pub sp: Bytes,
+    pub bp: Bytes,
 }
 
 const IP_OFFSET: usize = 1_usize;
 
 pub struct AllocationRange {
-    pub start: u32,
-    pub size: u32,
+    pub start: Bytes,
+    pub size: Bytes,
     pub sign: SignFlag,
 }
 
 pub struct AllocationStack {
-    pub base: u32,
+    pub base: Bytes,
     pub ranges: Vec<AllocationRange>,
 }
 
 pub struct AllocationVisualizer {
-    pub current_sp: u32,
+    pub current_sp: Bytes,
     pub stacks: Vec<AllocationStack>,
 }
 
 pub trait AllocationInterceptor {
-    fn push(&mut self, size: u32, sign: SignFlag);
-    fn pop(&mut self, size: u32);
+    fn push(&mut self, size: Bytes, sign: SignFlag);
+    fn pop(&mut self, size: Bytes);
 
     fn change_top_sign(&mut self, sign: SignFlag);
 
     //if the current sp is larger than the new_sp or the same, we just update the current sp
     //otherwise, we take the difference and push a new allocation range in chunks of 4 bytes
-    fn offset(&mut self, new_sp: u32);
+    fn offset(&mut self, new_sp: Bytes);
 
     fn push_stack(&mut self);
 
@@ -54,7 +57,7 @@ impl AllocationVisualizer {
         AllocationVisualizer {
             current_sp: *&registers.sp,
             stacks: vec![AllocationStack {
-                base: *&registers.bp as u32,
+                base: *&registers.bp,
                 ranges: vec![],
             }],
         }
@@ -62,7 +65,7 @@ impl AllocationVisualizer {
 }
 
 impl AllocationInterceptor for AllocationVisualizer {
-    fn push(&mut self, size: u32, sign: SignFlag) {
+    fn push(&mut self, size: Bytes, sign: SignFlag) {
         self.stacks
             .last_mut()
             .unwrap()
@@ -74,7 +77,7 @@ impl AllocationInterceptor for AllocationVisualizer {
             });
         self.current_sp = self.current_sp + size;
     }
-    fn pop(&mut self, size: u32) {
+    fn pop(&mut self, size: Bytes) {
         let sp_before_pops = self.current_sp;
         let mut popped = self.stacks.last_mut().unwrap().ranges.pop().unwrap();
 
@@ -102,14 +105,14 @@ impl AllocationInterceptor for AllocationVisualizer {
 
     //if the current sp is larger than the new_sp or the same, we just update the current sp
     //otherwise, we take the difference and push a new allocation range in chunks of 4 bytes
-    fn offset(&mut self, new_sp: u32) {
+    fn offset(&mut self, new_sp: Bytes) {
         if new_sp > self.current_sp {
             let diff = new_sp - self.current_sp;
-            let push_size = diff.min(4);
-            self.push(push_size, SignFlag::Unsigned);
-            let remaining = diff - push_size;
+            let push_size = diff.0.min(4);
+            self.push(push_size.into(), SignFlag::Unsigned);
+            let remaining = diff.0 - push_size;
             if remaining > 0 {
-                self.offset(self.current_sp + remaining);
+                self.offset(self.current_sp + Bytes(remaining));
             }
         } else if new_sp < self.current_sp {
             self.current_sp = new_sp;
@@ -136,13 +139,13 @@ impl AllocationInterceptor for AllocationVisualizer {
 
 pub struct NoopInterceptor {}
 impl AllocationInterceptor for NoopInterceptor {
-    fn push(&mut self, _size: u32, _sign: SignFlag) {}
+    fn push(&mut self, _size: Bytes, _sign: SignFlag) {}
 
-    fn pop(&mut self, _size: u32) {}
+    fn pop(&mut self, _size: Bytes) {}
 
     fn change_top_sign(&mut self, _sign: SignFlag) {}
 
-    fn offset(&mut self, _new_sp: u32) {}
+    fn offset(&mut self, _new_sp: Bytes) {}
 
     fn push_stack(&mut self) {}
 
@@ -154,14 +157,9 @@ pub struct DonkeyVMRunner {
     pub reg: ControlRegisterValues,
 }
 
-
 impl DonkeyVMRunner {
-
     pub fn new(memory: Memory, reg: ControlRegisterValues) -> Self {
-        Self {
-            memory,
-            reg
-        }
+        Self { memory, reg }
     }
 
     pub fn stacked_bitshift<T>(&mut self, direction: ShiftDirection)
@@ -172,9 +170,9 @@ impl DonkeyVMRunner {
             + Copy,
         [(); std::mem::size_of::<T>()]:,
     {
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        self.reg.sp -= Bytes::size_of::<T>();
         let shift = self.memory.native_read::<T>(self.reg.sp);
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        self.reg.sp -= Bytes::size_of::<T>();
         let value = self.memory.native_read::<T>(self.reg.sp);
 
         let result = match direction {
@@ -194,7 +192,7 @@ impl DonkeyVMRunner {
             + Copy,
         [(); std::mem::size_of::<T>()]:,
     {
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        self.reg.sp -= Bytes::size_of::<T>();
         let value = self.memory.native_read::<T>(self.reg.sp);
 
         let result = match direction {
@@ -218,10 +216,10 @@ impl DonkeyVMRunner {
             + Copy,
         [(); std::mem::size_of::<T>()]:,
     {
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
-        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) };
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
-        let rhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) };
+        self.reg.sp -= Bytes::size_of::<T>();
+        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp) };
+        self.reg.sp -= Bytes::size_of::<T>();
+        let rhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp) };
 
         let result = match operation {
             ArithmeticOperation::Sum => lhs + rhs,
@@ -236,7 +234,7 @@ impl DonkeyVMRunner {
         };
 
         unsafe {
-            *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) = result;
+            *self.memory.get_ptr_mut::<T>(self.reg.sp) = result;
         };
 
         //self.memory.write_value(self.reg.sp, &result.to_bytes());
@@ -255,8 +253,8 @@ impl DonkeyVMRunner {
             + Copy,
         [(); std::mem::size_of::<T>()]:,
     {
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
-        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) };
+        self.reg.sp -= Bytes::size_of::<T>();
+        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp) };
         let rhs = T::from_bytes(&rhs);
         let bytes = match operation {
             ArithmeticOperation::Sum => lhs + rhs,
@@ -268,7 +266,7 @@ impl DonkeyVMRunner {
         };
 
         unsafe {
-            let ptr_mut = self.memory.get_ptr_mut(self.reg.sp as isize);
+            let ptr_mut = self.memory.get_ptr_mut(self.reg.sp);
             *(ptr_mut as *mut T) = bytes;
         }
 
@@ -280,9 +278,9 @@ impl DonkeyVMRunner {
         T: NativeNumericType<T> + std::cmp::PartialEq<T> + std::cmp::PartialOrd<T> + Display + Copy,
         [(); std::mem::size_of::<T>()]:,
     {
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        self.reg.sp -= Bytes::size_of::<T>();
         let lhs = self.memory.native_read::<T>(self.reg.sp);
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
+        self.reg.sp -= Bytes::size_of::<T>();
         let rhs = self.memory.native_read::<T>(self.reg.sp);
 
         //println!("Comparing {lhs} {operation:?} {rhs}");
@@ -306,8 +304,8 @@ impl DonkeyVMRunner {
         T: NativeNumericType<T> + std::cmp::PartialEq<T> + std::cmp::PartialOrd<T> + Copy + Display,
         [(); std::mem::size_of::<T>()]:,
     {
-        self.reg.sp -= std::mem::size_of::<T>() as u32;
-        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp as isize) }; // self.memory.native_read::<T>(self.reg.sp);
+        self.reg.sp -= Bytes::size_of::<T>();
+        let lhs = unsafe { *self.memory.get_ptr_mut::<T>(self.reg.sp) }; // self.memory.native_read::<T>(self.reg.sp);
         let rhs = T::from_bytes(&operand);
 
         //println!("Comparing imm {lhs} {operation:?} {rhs}");
@@ -321,20 +319,20 @@ impl DonkeyVMRunner {
             CompareOperation::GreaterThanOrEquals => lhs >= rhs,
         };
         unsafe {
-            *self.memory.get_ptr_mut::<u8>(self.reg.sp as isize) = if result { 1u8 } else { 0u8 };
+            *self.memory.get_ptr_mut::<u8>(self.reg.sp) = if result { 1u8 } else { 0u8 };
         }
         self.reg.sp += std::mem::size_of::<u8>() as u32;
     }
 
-    #[inline(never)] #[allow(clippy::match_same_arms, clippy::too_many_lines)] //Don't care about too many lines here`
+    #[allow(clippy::match_same_arms, clippy::too_many_lines)] //Don't care about too many lines here`
     pub fn execute(&mut self, inst: &Instruction) -> bool {
         match inst {
             Instruction::Noop => {
-                self.reg.ip += IP_OFFSET;
+                self.reg.ip.next();
             }
             Instruction::StackOffset { bytes } => {
-                self.reg.sp = self.reg.bp + bytes;
-                self.reg.ip += IP_OFFSET;
+                self.reg.sp = self.reg.bp + *bytes;
+                self.reg.ip.next();
                 // visualizer.offset(self.reg.sp)
             }
             Instruction::PushImmediate {
@@ -453,7 +451,7 @@ impl DonkeyVMRunner {
                     NumberOfBytes::Bytes8 => self.stacked_binop_arith::<f64>(*operation),
                     _ => panic!("Float size operation not allowed"),
                 }
-                self.reg.ip += IP_OFFSET;
+                self.reg.ip.next();
                 //visualizer.pop(bytes.get_bytes())
             }
             Instruction::FloatCompare { bytes, operation } => {
@@ -462,42 +460,42 @@ impl DonkeyVMRunner {
                     NumberOfBytes::Bytes8 => self.stacked_binop_compare::<f64>(*operation),
                     _ => panic!("Float size operation not allowed"),
                 }
-                self.reg.ip += IP_OFFSET;
+                self.reg.ip.next();
                 //visualizer.pop(bytes.get_bytes())
             }
             Instruction::PushFromRegister { control_register } => {
                 let regval = match control_register {
-                    super::instructions::ControlRegister::Base => self.reg.bp,
-                    super::instructions::ControlRegister::Stack => self.reg.sp,
-                    super::instructions::ControlRegister::Instruction => self.reg.ip as u32,
+                    super::instructions::ControlRegister::Base => self.reg.bp.0,
+                    super::instructions::ControlRegister::Stack => self.reg.sp.0,
+                    super::instructions::ControlRegister::Instruction => self.reg.ip.0 as u32,
                 };
                 self.memory.write_value(self.reg.sp, regval);
                 self.reg.sp += std::mem::size_of::<u32>() as u32;
-                self.reg.ip += IP_OFFSET;
+                self.reg.ip.next();
                 //visualizer.push(4, SignFlag::Unsigned);
             }
             Instruction::PopIntoRegister { control_register } => {
-                self.reg.sp -= std::mem::size_of::<u32>() as u32;
+                self.reg.sp -= Bytes::size_of::<u32>();
                 let popped = self.memory.native_read::<u32>(self.reg.sp);
 
                 match control_register {
                     super::instructions::ControlRegister::Base => {
-                        self.reg.bp = popped;
-                        self.reg.ip += IP_OFFSET;
+                        self.reg.bp = popped.into();
+                        self.reg.ip.next();
                     }
                     super::instructions::ControlRegister::Stack => {
-                        self.reg.sp = popped;
-                        self.reg.ip += IP_OFFSET;
+                        self.reg.sp = popped.into();
+                        self.reg.ip.next();
                     }
                     super::instructions::ControlRegister::Instruction => {
-                        self.reg.ip = popped as usize;
+                        self.reg.ip.0 = popped as usize;
                     }
                 };
                 //visualizer.pop(4);
             }
             Instruction::Pop { bytes } => {
                 self.reg.sp -= bytes.get_bytes();
-                self.reg.ip += IP_OFFSET;
+                self.reg.ip.next();
                 //visualizer.pop(bytes.get_bytes());
             }
             Instruction::Call { source, offset } => {
@@ -511,12 +509,12 @@ impl DonkeyVMRunner {
                 source: AddressJumpAddressSource::FromOperand,
                 offset,
             } => {
-                self.reg.sp -= std::mem::size_of::<u8>() as u32;
+                self.reg.sp -= Bytes::size_of::<u8>();
                 let popped = self.memory.read_single(self.reg.sp);
                 if popped == 0 {
-                    self.reg.ip = *offset as usize;
+                    self.reg.ip = *offset;
                 } else {
-                    self.reg.ip += 1;
+                    self.reg.ip.0 += 1;
                 }
                 //visualizer.pop(1);
             }
@@ -530,12 +528,12 @@ impl DonkeyVMRunner {
                 source: AddressJumpAddressSource::FromOperand,
                 offset,
             } => {
-                self.reg.sp -= std::mem::size_of::<u8>() as u32;
+                self.reg.sp -= Bytes::size_of::<u8>();
                 let popped = self.memory.read_single(self.reg.sp);
                 if popped == 0 {
-                    self.reg.ip += 1;
+                    self.reg.ip.0 += 1;
                 } else {
-                    self.reg.ip = *offset as usize;
+                    self.reg.ip = *offset;
                 }
                 //visualizer.pop(1); //pop bool
             }
@@ -543,14 +541,14 @@ impl DonkeyVMRunner {
                 source: AddressJumpAddressSource::PopFromStack,
                 ..
             } => {
-                self.reg.sp -= std::mem::size_of::<u8>() as u32;
+                self.reg.sp -= Bytes::size_of::<u8>();
                 let popped = self.memory.read_single(self.reg.sp);
-                self.reg.sp -= std::mem::size_of::<u32>() as u32;
+                self.reg.sp -= Bytes::size_of::<u32>();
                 let offset = self.memory.native_read::<u32>(self.reg.sp);
                 if popped == 0 {
-                    self.reg.ip += 1;
+                    self.reg.ip.0 += 1;
                 } else {
-                    self.reg.ip = offset as usize;
+                    self.reg.ip.0 = offset as usize;
                 }
                 //visualizer.pop(1); //pop bool
                 //visualizer.pop(4); //pop addr
@@ -559,15 +557,15 @@ impl DonkeyVMRunner {
                 source: AddressJumpAddressSource::FromOperand,
                 offset,
             } => {
-                self.reg.ip = *offset as usize;
+                self.reg.ip = *offset;
             }
             Instruction::JumpUnconditional {
                 source: AddressJumpAddressSource::PopFromStack,
                 ..
             } => {
-                self.reg.sp -= std::mem::size_of::<u32>() as u32;
+                self.reg.sp -= Bytes::size_of::<u32>();
                 let offset = self.memory.native_read::<u32>(self.reg.sp);
-                self.reg.ip = offset as usize;
+                self.reg.ip.0 = offset as usize;
                 //visualizer.pop(4); //pop addr
             }
         }
@@ -575,14 +573,14 @@ impl DonkeyVMRunner {
     }
 
     fn execute_jump_if_zero(&mut self) {
-        self.reg.sp -= std::mem::size_of::<u8>() as u32;
+        self.reg.sp -= Bytes::size_of::<u8>();
         let popped = self.memory.read_single(self.reg.sp);
-        self.reg.sp -= std::mem::size_of::<u32>() as u32;
-        let offset = unsafe { *self.memory.get_ptr_mut::<u32>(self.reg.sp as isize) };
+        self.reg.sp -= Bytes::size_of::<u32>();
+        let offset = unsafe { *self.memory.get_ptr_mut::<u32>(self.reg.sp) };
         if popped == 0 {
-            self.reg.ip = offset as usize;
+            self.reg.ip.0 = offset as usize;
         } else {
-            self.reg.ip += 1;
+            self.reg.ip.0 += 1;
         }
         //visualizer.pop(1);
         //pop bool
@@ -591,16 +589,16 @@ impl DonkeyVMRunner {
     }
 
     fn execute_return(&mut self) {
-        self.reg.sp -= std::mem::size_of::<u32>() as u32;
-        let popped = unsafe { *self.memory.get_ptr_mut::<u32>(self.reg.sp as isize) };
-        self.reg.ip = popped as usize;
+        self.reg.sp -= Bytes::size_of::<u32>();
+        let popped = unsafe { *self.memory.get_ptr_mut::<u32>(self.reg.sp) };
+        self.reg.ip.0 = popped as usize;
     }
 
-    fn execute_call(&mut self, source: AddressJumpAddressSource, offset: u32) {
+    fn execute_call(&mut self, source: AddressJumpAddressSource, offset: InstructionPointer) {
         match source {
             super::instructions::AddressJumpAddressSource::FromOperand => {
-                let return_ip = (self.reg.ip + IP_OFFSET) as u32;
-                self.reg.ip = offset as usize;
+                let return_ip = (self.reg.ip.0 + IP_OFFSET) as u32;
+                self.reg.ip = offset;
                 self.memory.write_value(self.reg.sp, return_ip);
                 self.reg.sp += std::mem::size_of::<u32>() as u32;
                 self.reg.bp = self.reg.sp;
@@ -608,10 +606,10 @@ impl DonkeyVMRunner {
                 //visualizer.push_stack();
             }
             super::instructions::AddressJumpAddressSource::PopFromStack => {
-                self.reg.sp -= std::mem::size_of::<u32>() as u32;
+                self.reg.sp -= Bytes::size_of::<u32>();
                 let popped = self.memory.native_read::<u32>(self.reg.sp);
-                let return_ip = (self.reg.ip + IP_OFFSET) as u32;
-                self.reg.ip = popped as usize;
+                let return_ip = (self.reg.ip.0 + IP_OFFSET) as u32;
+                self.reg.ip.0 = popped as usize;
                 self.memory.write_value(self.reg.sp, return_ip);
                 self.reg.sp += std::mem::size_of::<u32>() as u32;
                 self.reg.bp = self.reg.sp;
@@ -654,7 +652,7 @@ impl DonkeyVMRunner {
                 self.immediate_integer_compare::<i64>(operation, operand);
             }
         }
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
     fn execute_integer_compare_stack(
@@ -689,7 +687,7 @@ impl DonkeyVMRunner {
                 self.stacked_binop_compare::<i64>(operation);
             }
         }
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
     fn execute_integer_arith_imm(
@@ -719,8 +717,8 @@ impl DonkeyVMRunner {
                 self.immediate_integer_arith::<i16>(operation, operand);
             }
             (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                self.reg.sp -= std::mem::size_of::<i32>() as u32;
-                let lhs = unsafe { *self.memory.get_ptr_mut::<i32>(self.reg.sp as isize) };
+                self.reg.sp -= Bytes::size_of::<i32>();
+                let lhs = unsafe { *self.memory.get_ptr_mut::<i32>(self.reg.sp) };
                 let rhs = i32::from_bytes(&operand);
                 let bytes = match operation {
                     ArithmeticOperation::Sum => lhs + rhs,
@@ -732,7 +730,7 @@ impl DonkeyVMRunner {
                 };
 
                 unsafe {
-                    let ptr_mut = self.memory.get_ptr_mut(self.reg.sp as isize);
+                    let ptr_mut = self.memory.get_ptr_mut(self.reg.sp);
                     *(ptr_mut as *mut i32) = bytes;
                 }
 
@@ -743,7 +741,7 @@ impl DonkeyVMRunner {
                 self.immediate_integer_arith::<i64>(operation, operand);
             }
         }
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
     fn execute_integer_arith_stack(
@@ -754,31 +752,31 @@ impl DonkeyVMRunner {
     ) {
         match (bytes, sign) {
             (NumberOfBytes::Bytes1, SignFlag::Unsigned) => {
-                self.stacked_binop_arith::<u8>( operation);
+                self.stacked_binop_arith::<u8>(operation);
             }
             (NumberOfBytes::Bytes2, SignFlag::Unsigned) => {
-                self.stacked_binop_arith::<u16>( operation);
+                self.stacked_binop_arith::<u16>(operation);
             }
             (NumberOfBytes::Bytes4, SignFlag::Unsigned) => {
-                self.stacked_binop_arith::<u32>( operation);
+                self.stacked_binop_arith::<u32>(operation);
             }
             (NumberOfBytes::Bytes8, SignFlag::Unsigned) => {
-                self.stacked_binop_arith::<u64>( operation);
+                self.stacked_binop_arith::<u64>(operation);
             }
             (NumberOfBytes::Bytes1, SignFlag::Signed) => {
-                self.stacked_binop_arith::<i8>( operation);
+                self.stacked_binop_arith::<i8>(operation);
             }
             (NumberOfBytes::Bytes2, SignFlag::Signed) => {
-                self.stacked_binop_arith::<i16>( operation);
+                self.stacked_binop_arith::<i16>(operation);
             }
             (NumberOfBytes::Bytes4, SignFlag::Signed) => {
-                self.stacked_binop_arith::<i32>( operation);
+                self.stacked_binop_arith::<i32>(operation);
             }
             (NumberOfBytes::Bytes8, SignFlag::Signed) => {
-                self.stacked_binop_arith::<i64>( operation);
+                self.stacked_binop_arith::<i64>(operation);
             }
         }
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
     fn execute_bitshift_imm(
@@ -814,7 +812,7 @@ impl DonkeyVMRunner {
                 self.immediate_bitshift::<i64>(direction, i64::from(operand));
             }
         }
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
     fn execute_bitshift_stack(
@@ -849,10 +847,14 @@ impl DonkeyVMRunner {
                 self.stacked_bitshift::<i64>(direction);
             }
         }
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
-    fn execute_storeaddr<const LEN: usize>(&mut self, mode: LoadStoreAddressingMode, operand: u32) {
+    fn execute_storeaddr<const LEN: usize>(
+        &mut self,
+        mode: LoadStoreAddressingMode,
+        operand: Bytes,
+    ) {
         self.reg.sp -= LEN as u32;
         let addr_to_read = self.reg.sp;
         match mode {
@@ -861,7 +863,7 @@ impl DonkeyVMRunner {
                 self.reg.sp -= 4;
                 let stack_addr = self.reg.sp;
                 let address = self.memory.native_read::<u32>(stack_addr);
-                self.memory.copy::<LEN>(addr_to_read, address);
+                self.memory.copy::<LEN>(addr_to_read, address.into());
             }
             LoadStoreAddressingMode::RelativeForward => {
                 let address = self.reg.bp + operand;
@@ -876,17 +878,21 @@ impl DonkeyVMRunner {
                 self.memory.copy::<LEN>(addr_to_read, operand);
             }
         }
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
-    fn execute_loadaddr<const LEN: usize>(&mut self, mode: LoadStoreAddressingMode, operand: u32) {
+    fn execute_loadaddr<const LEN: usize>(
+        &mut self,
+        mode: LoadStoreAddressingMode,
+        operand: Bytes,
+    ) {
         match mode {
             LoadStoreAddressingMode::Stack => {
                 //load 32 bits from stack
                 self.reg.sp -= 4;
                 let stack_addr = self.reg.sp;
                 let address = self.memory.native_read::<u32>(stack_addr);
-                self.memory.copy::<LEN>(stack_addr, address);
+                self.memory.copy::<LEN>(stack_addr, address.into());
             }
             LoadStoreAddressingMode::RelativeForward => {
                 let address = self.reg.bp + operand;
@@ -901,7 +907,7 @@ impl DonkeyVMRunner {
             }
         }
         self.reg.sp += LEN as u32;
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
     fn execute_push_imm(
@@ -938,16 +944,14 @@ impl DonkeyVMRunner {
                 self.reg.sp += 8;
             }
         };
-        self.reg.ip += IP_OFFSET;
+        self.reg.ip.next();
     }
 
     pub fn run(&mut self, code: &DonkeyProgram) {
         self.reg.ip = code.entry_point;
         let code_len = code.instructions.len();
-        let mut instructions_run = 0;
-        let start = std::time::Instant::now();
         loop {
-            let inst = &code.instructions[self.reg.ip];
+            let inst = &code.instructions[self.reg.ip.0];
 
             /*println!(
                 "Executing instruction {inst:?} ip = {ip} sp = {sp} bp = {bp}",
@@ -961,15 +965,10 @@ impl DonkeyVMRunner {
             }
 
             //better_print_stack(memory, registers, visualizer);
-            instructions_run += 1;
-            if self.reg.ip >= code_len {
+            if self.reg.ip.0 >= code_len {
                 break;
             }
         }
-        let end = std::time::Instant::now();
-        let time = end - start;
-        let speed = instructions_run as f64 / (time.as_secs_f64());
-        println!("Ran {instructions_run} instructions, {ops} ops/s", ops = speed as u32);
     }
 }
 
@@ -1053,15 +1052,28 @@ pub fn prepare_vm() -> (Memory, ControlRegisterValues, impl AllocationIntercepto
     mem.write(mem.stack_start + 4, &u32::MAX.to_le_bytes());
 
     let registers = ControlRegisterValues {
-        ip: 0,
+        ip: 0.into(),
         sp: mem.stack_start + 8,
         bp: mem.stack_start + 8,
     };
     let mut visualizer = NoopInterceptor {}; //AllocationVisualizer::new(&registers);
-    visualizer.push(4, SignFlag::Unsigned);
-    visualizer.push(4, SignFlag::Unsigned);
+    visualizer.push(4.into(), SignFlag::Unsigned);
+    visualizer.push(4.into(), SignFlag::Unsigned);
 
     (mem, registers, visualizer)
+}
+
+pub fn prepare_vm_lambda() -> (Memory, ControlRegisterValues) {
+    let mut mem = Memory::new();
+    mem.make_ready();
+
+    let registers = ControlRegisterValues {
+        ip: 0.into(),
+        sp: mem.stack_start,
+        bp: mem.stack_start,
+    };
+
+    (mem, registers)
 }
 
 #[cfg(test)]
@@ -1072,9 +1084,7 @@ mod tests {
 
     use crate::donkey_vm::{
         asm::assembler::{as_donkey_vm_program, parse_asm, resolve, DonkeyProgram},
-        vm::{
-            memory::Memory
-        },
+        vm::memory::Memory,
     };
 
     use super::{prepare_vm, ControlRegisterValues, DonkeyVMRunner};
@@ -1225,10 +1235,10 @@ FUNC_main:
         let (mut memory, mut registers, __index__) = prepare_vm();
 
         for _ in 0..50 {
-            let inst = &assembled.instructions[registers.ip];
+            let inst = &assembled.instructions[registers.ip.0];
             //execute(inst, &mut memory, &mut registers);
         }
-        assert_eq!(registers.ip, 0);
+        assert_eq!(registers.ip.0, 0);
     }
 
     #[test]
@@ -1245,11 +1255,11 @@ FUNC_main:
         let beginning_sp = registers.sp;
         for _ in 0..(3 * 10) {
             //execute the entire loop 10 times
-            let inst = &assembled.instructions[registers.ip];
+            let inst = &assembled.instructions[registers.ip.0];
             //execute(inst, &mut memory, &mut registers);
             //print_stack(&memory, &registers);
         }
-        assert_eq!(registers.ip, 0); //gets back to ip = 0 at the end of execution
+        assert_eq!(registers.ip.0, 0); //gets back to ip = 0 at the end of execution
         assert_eq!(registers.sp, beginning_sp); //even pushes and pops result in not moving the stack ptr
     }
 
@@ -1272,6 +1282,6 @@ FUNC_main:
         let (mem, reg) = run_code(code);
         let x: u32 = mem.native_read(reg.bp);
         assert_eq!(x, 10); //even pushes and pops result in not moving the stack ptr
-        assert_eq!(reg.ip, 10);
+        assert_eq!(reg.ip.0, 10);
     }
 }

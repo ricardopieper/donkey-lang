@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use super::compiler_errors::CompilerError;
-use super::hir::{Checked, HIRExpr, NotChecked, TrivialHIRExpr};
+use super::hir::{Checked, HIRExpr, LiteralHIRExpr, NotChecked};
 use super::hir_printer::expr_str;
 use crate::ast::lexer::Operator;
 use crate::ast::parser::{Expr, AST};
@@ -20,7 +20,7 @@ use crate::types::type_instance_db::{
 
 use super::mir::{
     BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, ScopeId,
-    TypecheckedExpression, TypecheckedMIRBlock, TypecheckPendingExpression,
+    TypecheckPendingExpression, TypecheckedExpression, TypecheckedMIRBlock,
 };
 use super::name_registry::NameRegistry;
 
@@ -53,8 +53,8 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
         expr: &HIRExpr<TypeInstanceId, NotChecked>,
     ) -> Result<TypecheckedExpression, CompilerError> {
         match expr {
-            HIRExpr::Trivial(trivial, type_id, meta) => self.check_trivial_expr_value_bounds(
-                trivial,
+            HIRExpr::Literal(literal, type_id, meta) => self.check_literal_expr_value_bounds(
+                literal,
                 *type_id,
                 &self.type_db.common_types,
                 expr,
@@ -79,6 +79,9 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
             HIRExpr::Array(expr_array, inferred_type, meta) => {
                 self.check_expr_array(expr_array, *inferred_type, meta)
             }
+            HIRExpr::Variable(var, inferred_type, meta) => {
+                Ok(HIRExpr::Variable(var.clone(), *inferred_type, meta.clone()))
+            } //should be OK...
             HIRExpr::TypecheckTag(_) => unreachable!(),
         }
     }
@@ -289,16 +292,16 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
         }
     }
 
-    fn check_trivial_expr_value_bounds(
+    fn check_literal_expr_value_bounds(
         &mut self,
-        trivial: &TrivialHIRExpr,
+        literal: &LiteralHIRExpr,
         type_id: TypeInstanceId,
         common_types: &CommonTypeInstances,
         expr: &TypecheckPendingExpression,
         meta: &Expr,
     ) -> Result<TypecheckedExpression, CompilerError> {
-        let is_properly_typed = match trivial {
-            TrivialHIRExpr::IntegerValue(i) => {
+        let is_properly_typed = match literal {
+            LiteralHIRExpr::Integer(i) => {
                 let is_within_bounds = if type_id == common_types.i32 {
                     *i >= i128::from(i32::MIN) && *i <= i128::from(i32::MAX)
                 } else if type_id == common_types.i64 {
@@ -324,7 +327,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                     false
                 }
             }
-            TrivialHIRExpr::FloatValue(f) => {
+            LiteralHIRExpr::Float(f) => {
                 let f = f.0;
                 let is_within_bounds = if type_id == common_types.f32 {
                     f >= f64::from(f32::MIN) && f <= f64::from(f32::MAX)
@@ -347,13 +350,10 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                     false
                 }
             } //these are all ok, though None is not really implemented right now...
-            TrivialHIRExpr::StringValue(_)
-            | TrivialHIRExpr::BooleanValue(_)
-            | TrivialHIRExpr::Variable(_)
-            | TrivialHIRExpr::None => true,
+            LiteralHIRExpr::String(_) | LiteralHIRExpr::Boolean(_) | LiteralHIRExpr::None => true,
         };
         if is_properly_typed {
-            Ok(HIRExpr::Trivial(trivial.clone(), type_id, meta.clone()))
+            Ok(HIRExpr::Literal(literal.clone(), type_id, meta.clone()))
         } else {
             Err(CompilerError::TypeCheckError)
         }
@@ -364,10 +364,8 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
         obj: &TypecheckPendingExpression,
         name: &String,
         args: &[TypecheckPendingExpression],
-        meta: &Expr
+        meta: &Expr,
     ) -> Result<(TypecheckedExpression, Vec<TypecheckedExpression>), CompilerError> {
-        dbg!(obj);
-        dbg!(meta);
         let checked_method = self.typecheck(obj)?;
         let obj_type = self.type_db.get_instance(checked_method.get_type());
 
@@ -593,7 +591,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                 args,
                 meta_ast,
                 meta_expr,
-                return_type
+                return_type,
             } => {
                 let function_type = self.find_variable_and_get_type(&function, scope, scopes);
                 match self.function_call_check(
@@ -601,18 +599,14 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                     FunctionName::Function(function.to_string()),
                     &args,
                 ) {
-                    Ok(checked_args) => {
-                        Ok(MIRBlockNode::FunctionCall {
-                            function,
-                            args: checked_args,
-                            meta_ast,
-                            meta_expr,
-                            return_type
-                        })
-                    }
-                    Err(e) => {
-                        Err(e)
-                    }
+                    Ok(checked_args) => Ok(MIRBlockNode::FunctionCall {
+                        function,
+                        args: checked_args,
+                        meta_ast,
+                        meta_expr,
+                        return_type,
+                    }),
+                    Err(e) => Err(e),
                 }
             }
         }
@@ -629,12 +623,12 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
         loop {
             let bound_name = current_scope.boundnames.iter().find(|x| x.name == name);
             if let Some(name_and_type) = bound_name {
-                return name_and_type.typename;
+                return name_and_type.type_instance;
             }
-            if current_scope.index == 0 {
+            if current_scope.id.0 == 0 {
                 break;
             }
-            current_scope = &scopes[current_scope.index - 1];
+            current_scope = &scopes[current_scope.id.0 - 1];
         }
 
         //try find in the global scope
@@ -667,17 +661,12 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
 fn make_method_name_or_index(name: &String, obj_type_name: &String, expr: &Expr) -> FunctionName {
     dbg!(expr);
     match expr {
-        Expr::IndexAccess(_, _) => {
-            FunctionName::IndexAccess
+        Expr::IndexAccess(_, _) => FunctionName::IndexAccess,
+        _ => FunctionName::Method {
+            function_name: name.to_string(),
+            type_name: obj_type_name.to_string(),
         },
-        _ => {
-            FunctionName::Method {
-                function_name: name.to_string(),
-                type_name: obj_type_name.to_string(),
-            }
-        }
     }
-
 }
 
 pub fn check_type(

@@ -1,4 +1,4 @@
-use crate::ast::lexer::Operator;
+use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct TypeConstructorId(pub usize);
@@ -50,7 +50,7 @@ pub struct TypeConstructor {
     pub kind: TypeKind,
     pub sign: TypeSign,
     //Size of native primitive types, such as numbers, ptrs, etc
-    pub rep_size: Option<usize>,
+    pub rep_size: Option<Bytes>,
     pub name: String,
     //Type args are just Generic parameters, in the future we can add type bounds, in which we would add a Type enum here as well
     pub type_args: Vec<GenericParameter>,
@@ -104,7 +104,7 @@ impl TypeConstructorDatabase {
         kind: TypeKind,
         sign: TypeSign,
         name: &str,
-        rep_size: Option<usize>,
+        rep_size: Option<Bytes>,
     ) -> TypeConstructorId {
         let next_id = TypeConstructorId(self.types.len());
         self.types.push(TypeConstructor {
@@ -136,7 +136,7 @@ impl TypeConstructorDatabase {
         kind: TypeKind,
         name: &str,
         type_args: Vec<GenericParameter>,
-        rep_size: Option<usize>,
+        rep_size: Option<Bytes>,
     ) -> TypeConstructorId {
         let next_id = TypeConstructorId(self.types.len());
 
@@ -174,7 +174,7 @@ impl TypeConstructorDatabase {
     fn register_primitive_number(
         &mut self,
         name: &str,
-        size: usize,
+        size: Bytes,
         sign: TypeSign,
     ) -> TypeConstructorId {
         let type_id = self.add(TypeKind::Primitive, sign, name, Some(size));
@@ -250,6 +250,16 @@ impl TypeConstructorDatabase {
         self.add_unary_operator(type_id, Operator::Plus, TypeUsage::Given(type_id));
         self.add_unary_operator(type_id, Operator::Minus, TypeUsage::Given(type_id));
 
+        let str_id = self.find_by_name("str").unwrap().id;
+        self.add_method(
+            type_id,
+            TypeConstructorFunctionDeclaration {
+                name: "to_str".to_string(),
+                args: vec![],
+                return_type: TypeUsage::Given(str_id),
+            },
+        );
+
         type_id
     }
 
@@ -294,13 +304,14 @@ impl TypeConstructorDatabase {
 
     #[allow(clippy::similar_names)]
     fn init_builtin(&mut self) {
-        use std::mem;
+        //ptr + len
+        let str_type = self.add(TypeKind::Struct, TypeSign::Unsigned, "str", None);
 
         let void_type = self.add(
             TypeKind::Primitive,
             TypeSign::Unsigned,
             "Void",
-            Some(mem::size_of::<()>()),
+            Some(Bytes::size_of::<()>()),
         );
         self.common_types.void = void_type;
 
@@ -308,44 +319,41 @@ impl TypeConstructorDatabase {
             TypeKind::Primitive,
             TypeSign::Unsigned,
             "None",
-            Some(mem::size_of::<()>()),
+            Some(Bytes::size_of::<()>()),
         );
         self.common_types.bool = self.add(
             TypeKind::Primitive,
             TypeSign::Unsigned,
             "bool",
-            Some(mem::size_of::<bool>()),
+            Some(Bytes::size_of::<bool>()),
         );
 
         let i32_type =
-            self.register_primitive_number("i32", mem::size_of::<i32>(), TypeSign::Signed);
+            self.register_primitive_number("i32", Bytes::size_of::<i32>(), TypeSign::Signed);
         let u32_type =
-            self.register_primitive_number("u32", mem::size_of::<u32>(), TypeSign::Unsigned);
+            self.register_primitive_number("u32", Bytes::size_of::<u32>(), TypeSign::Unsigned);
         self.common_types.i32 = i32_type;
         self.common_types.u32 = u32_type;
 
         self.common_types.i64 =
-            self.register_primitive_number("i64", mem::size_of::<i64>(), TypeSign::Signed);
+            self.register_primitive_number("i64", Bytes::size_of::<i64>(), TypeSign::Signed);
         self.common_types.u64 =
-            self.register_primitive_number("u64", mem::size_of::<u64>(), TypeSign::Unsigned);
+            self.register_primitive_number("u64", Bytes::size_of::<u64>(), TypeSign::Unsigned);
         self.common_types.f32 =
-            self.register_primitive_number("f32", mem::size_of::<f32>(), TypeSign::Signed);
+            self.register_primitive_number("f32", Bytes::size_of::<f32>(), TypeSign::Signed);
         self.common_types.f64 =
-            self.register_primitive_number("f64", mem::size_of::<f64>(), TypeSign::Signed);
+            self.register_primitive_number("f64", Bytes::size_of::<f64>(), TypeSign::Signed);
 
-        let u8 = self.register_primitive_number("u8", mem::size_of::<u8>(), TypeSign::Unsigned);
+        let u8 = self.register_primitive_number("u8", Bytes::size_of::<u8>(), TypeSign::Unsigned);
 
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
         let ptr_type = self.add_generic(
             TypeKind::Primitive,
             "ptr",
             vec![GenericParameter("TPtr".into())],
-            Some(mem::size_of::<usize>()),
+            Some(Bytes::size_of::<usize>()),
         );
         self.common_types.ptr = ptr_type;
-
-        //ptr + len
-        let str_type = self.add(TypeKind::Struct, TypeSign::Unsigned, "str", None);
 
         self.add_generic_field(str_type, "ptr", ptr_type, &[u8]);
         self.add_simple_field(str_type, "len", u32_type);
@@ -365,14 +373,14 @@ impl TypeConstructorDatabase {
             TypeKind::Struct,
             "array",
             vec![GenericParameter("TItem".into())],
-            Some(mem::size_of::<usize>() + mem::size_of::<u32>()),
+            Some(Bytes::size_of::<usize>() + Bytes::size_of::<u32>()),
         );
 
         self.common_types.function = self.add(
             TypeKind::Primitive,
             TypeSign::Unsigned,
             "function",
-            Some(std::mem::size_of::<u32>()),
+            Some(Bytes::size_of::<u32>()),
         );
         self.add_method(
             arr_type,

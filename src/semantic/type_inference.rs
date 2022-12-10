@@ -1,5 +1,5 @@
 use crate::ast::parser::{Expr, AST};
-use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, TrivialHIRExpr, HIR};
+use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
 use crate::semantic::name_registry::NameRegistry;
 
@@ -50,7 +50,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
         type_hint: Option<TypeInstanceId>,
     ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
         match expression {
-            HIRExpr::Trivial(TrivialHIRExpr::Variable(var), _, meta) => {
+            HIRExpr::Variable(var, _, meta) => {
                 let decl_type = self.decls_in_scope.get(&var);
                 let Some(found_type) = decl_type else {
                     self.errors.variable_not_found.push(VariableNotFound {
@@ -59,27 +59,20 @@ impl FunctionTypeInferenceContext<'_, '_> {
                     });
                     return Err(CompilerError::TypeInferenceError);
                 };
-                Ok(HIRExpr::Trivial(
-                    TrivialHIRExpr::Variable(var.to_string()),
-                    *found_type,
-                    meta,
-                ))
+                Ok(HIRExpr::Variable(var.to_string(), *found_type, meta))
             }
-            HIRExpr::Trivial(trivial_expr, _, meta) => {
+            HIRExpr::Literal(literal_expr, _, meta) => {
                 let type_db = &self.type_db;
 
                 //@TODO maybe use a type hint here to resolve to u32, u64, etc whenever needed, as in index accessors
-                let typename = match trivial_expr {
-                    TrivialHIRExpr::IntegerValue(_) => type_db.common_types.i32,
-                    TrivialHIRExpr::FloatValue(_) => type_db.common_types.f32,
-                    TrivialHIRExpr::StringValue(_) => type_db.common_types.string,
-                    TrivialHIRExpr::BooleanValue(_) => type_db.common_types.bool,
-                    TrivialHIRExpr::None => todo!("Must implement None"),
-                    TrivialHIRExpr::Variable(_) => unreachable!(
-                        "trying to get type name of a variable, should be resolved by other match arm"
-                    ),
+                let typename = match literal_expr {
+                    LiteralHIRExpr::Integer(_) => type_db.common_types.i32,
+                    LiteralHIRExpr::Float(_) => type_db.common_types.f32,
+                    LiteralHIRExpr::String(_) => type_db.common_types.string,
+                    LiteralHIRExpr::Boolean(_) => type_db.common_types.bool,
+                    LiteralHIRExpr::None => todo!("Must implement None"),
                 };
-                Ok(HIRExpr::Trivial(trivial_expr, typename, meta))
+                Ok(HIRExpr::Literal(literal_expr, typename, meta))
             }
             HIRExpr::BinaryOperation(lhs, op, rhs, _, meta) => {
                 self.compute_infer_binop(*lhs, meta, *rhs, op)
@@ -276,7 +269,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
         fun_params: Vec<HIRExpr<()>>,
         meta: Expr,
     ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
-        let HIRExpr::Trivial(TrivialHIRExpr::Variable(var), .., fcall_meta) = fun_expr else {
+        let HIRExpr::Variable(var, .., fcall_meta) = fun_expr else {
             panic!("Functions should be bound to a name! This is a bug in the type inference phase or HIR expression reduction phase.");
         };
         //infer parameter types
@@ -294,12 +287,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
         let type_instance = self.type_db.get_instance(*decl_type);
 
-        let function_inferred = HIRExpr::Trivial(
-            TrivialHIRExpr::Variable(var.clone()),
-            type_instance.id,
-            fcall_meta,
-        )
-        .into();
+        let function_inferred = HIRExpr::Variable(var.clone(), type_instance.id, fcall_meta).into();
 
         if type_instance.is_function {
             Ok(HIRExpr::FunctionCall(
@@ -397,13 +385,9 @@ impl FunctionTypeInferenceContext<'_, '_> {
                     )?,
                 HIR::Return(expr, meta) => self.infer_types_in_return(expr, meta)?,
                 HIR::EmptyReturn => HIR::EmptyReturn,
-                HIR::While(condition, body, meta) => 
-                    self
-                    .infer_types_in_while_statement_and_blocks(
-                        condition,
-                        body,
-                        meta,
-                    )?,
+                HIR::While(condition, body, meta) => {
+                    self.infer_types_in_while_statement_and_blocks(condition, body, meta)?
+                }
             };
             new_mir.push(hir_node);
         }
@@ -420,14 +404,15 @@ impl FunctionTypeInferenceContext<'_, '_> {
         Ok(HIR::Return(typed_expr, meta))
     }
 
-    fn infer_types_in_while_statement_and_blocks(&mut self, condition: HIRExpr<()>, body: Vec<TypeInferenceInputHIR>, meta: AST) -> Result<InferredTypeHIR, CompilerError> {
+    fn infer_types_in_while_statement_and_blocks(
+        &mut self,
+        condition: HIRExpr<()>,
+        body: Vec<TypeInferenceInputHIR>,
+        meta: AST,
+    ) -> Result<InferredTypeHIR, CompilerError> {
         let body_inferred = self.infer_types_in_body(body)?;
         let condition_expr = self.compute_and_infer_expr_type(condition, None)?;
-        Ok(HIR::While(
-            condition_expr,
-            body_inferred,
-            meta,
-        ))
+        Ok(HIR::While(condition_expr, body_inferred, meta))
     }
 
     fn infer_types_in_if_statement_and_blocks(
@@ -539,7 +524,6 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
         new_ctx.infer_types_in_body(body)
     }
-
 }
 
 pub fn infer_types(

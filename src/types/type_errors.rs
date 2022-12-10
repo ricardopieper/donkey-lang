@@ -2,7 +2,11 @@ use std::fmt::Display;
 
 use crate::{
     ast::lexer::Operator,
-    semantic::{hir::{HIRType, HIRExpr, NotChecked}, hir_printer::{operator_str, expr_str}, type_checker::FunctionName},
+    semantic::{
+        hir::{HIRExpr, HIRType, NotChecked},
+        hir_printer::{expr_str, operator_str},
+        type_checker::FunctionName,
+    },
 };
 
 use super::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
@@ -90,7 +94,7 @@ impl TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
             FunctionName::Method {
                 function_name,
                 type_name,
-            } =>  
+            } =>
                 write!(f,  "Function argument type mismatch: In function {on_function}, on call to method {function_name} of {type_name}, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
                     on_function = self.on_function,
                     position = self.context.argument_position
@@ -196,10 +200,9 @@ impl TypeErrorDisplay for UnexpectedTypeFound {
     }
 }
 
-
 pub struct OutOfTypeBounds {
     pub on_function: String,
-    pub expr: HIRExpr<TypeInstanceId>
+    pub expr: HIRExpr<TypeInstanceId>,
 }
 
 impl TypeErrorDisplay for OutOfTypeBounds {
@@ -218,11 +221,10 @@ impl TypeErrorDisplay for OutOfTypeBounds {
     }
 }
 
-
 pub struct InvalidCast {
     pub on_function: String,
     pub expr: HIRExpr<TypeInstanceId>,
-    pub cast_to: TypeInstanceId
+    pub cast_to: TypeInstanceId,
 }
 
 impl TypeErrorDisplay for InvalidCast {
@@ -328,10 +330,9 @@ impl TypeErrorDisplay for InsufficientTypeInformationForArray {
     }
 }
 
-
 pub struct ArrayExpressionsNotAllTheSameType {
     pub on_function: String,
-    pub expected_type: TypeInstanceId
+    pub expected_type: TypeInstanceId,
 }
 
 impl TypeErrorDisplay for ArrayExpressionsNotAllTheSameType {
@@ -389,12 +390,11 @@ impl TypeErrorDisplay for TypeInferenceFailure {
     }
 }
 
-
 pub struct UnexpectedTypeInferenceMismatch {
     pub on_function: String,
     pub inferred: TypeInstanceId,
     pub checked: TypeInstanceId,
-    pub expr: HIRExpr<TypeInstanceId, NotChecked>
+    pub expr: HIRExpr<TypeInstanceId, NotChecked>,
 }
 
 impl TypeErrorDisplay for UnexpectedTypeInferenceMismatch {

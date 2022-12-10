@@ -87,7 +87,9 @@ impl<'a> InstructionDecoder<'a> {
             }
             0b01101 => {
                 let (_, value) = self.layout.get_part("num bytes", self.instruction);
-                return Instruction::StackOffset { bytes: value };
+                return Instruction::StackOffset {
+                    bytes: value.into(),
+                };
             }
             0b00010 => {
                 let (bytes_pattern, _) = self.layout.get_part("num bytes", self.instruction);
@@ -96,7 +98,7 @@ impl<'a> InstructionDecoder<'a> {
                 return Instruction::LoadAddress {
                     bytes: (bytes_pattern as u8).into(),
                     mode: (mode_pattern as u8).into(),
-                    operand: operand_value,
+                    operand: operand_value.into(),
                 };
             }
             0b00011 => {
@@ -106,7 +108,7 @@ impl<'a> InstructionDecoder<'a> {
                 return Instruction::StoreAddress {
                     bytes: (bytes_pattern as u8).into(),
                     mode: (mode_pattern as u8).into(),
-                    operand: operand_value,
+                    operand: operand_value.into(),
                 };
             }
             0b00100 => {
@@ -204,7 +206,7 @@ impl<'a> InstructionDecoder<'a> {
                 let (_, offset) = self.layout.get_part("offset", self.instruction);
                 return Instruction::Call {
                     source: (source_pattern as u8).into(),
-                    offset,
+                    offset: offset.into(),
                 };
             }
             0b01111 => {
@@ -245,7 +247,7 @@ impl LayoutHelper {
             Instruction::Noop => 0,
             Instruction::StackOffset { bytes } => self
                 .begin_encode("stackoffset")
-                .encode("num bytes", *bytes)
+                .encode("num bytes", (*bytes).into())
                 .make(),
             Instruction::PushImmediate {
                 bytes,
@@ -265,7 +267,7 @@ impl LayoutHelper {
                 .begin_encode("loadaddr")
                 .encode("num bytes", bytes.get_bytes())
                 .encode("mode", u32::from(mode.get_bit_pattern()))
-                .encode("operand", *operand)
+                .encode("operand", (*operand).into())
                 .make(),
             Instruction::StoreAddress {
                 bytes,
@@ -275,7 +277,7 @@ impl LayoutHelper {
                 .begin_encode("storeaddr")
                 .encode("num bytes", bytes.get_bytes())
                 .encode("mode", u32::from(mode.get_bit_pattern()))
-                .encode("operand", *operand as u32)
+                .encode("operand", (*operand).into())
                 .make(),
             Instruction::BitShift {
                 bytes,
@@ -358,22 +360,22 @@ impl LayoutHelper {
             Instruction::Call { source, offset } => self
                 .begin_encode("call")
                 .encode("source", u32::from(source.get_bit_pattern()))
-                .encode("offset", *offset)
+                .encode("offset", offset.0 as u32)
                 .make(),
             Instruction::JumpIfZero { source, offset } => self
                 .begin_encode("jz")
                 .encode("source", u32::from(source.get_bit_pattern()))
-                .encode("offset", *offset)
+                .encode("offset", offset.0 as u32)
                 .make(),
             Instruction::JumpIfNotZero { source, offset } => self
                 .begin_encode("jnz")
                 .encode("source", u32::from(source.get_bit_pattern()))
-                .encode("offset", *offset)
+                .encode("offset", offset.0 as u32)
                 .make(),
             Instruction::JumpUnconditional { source, offset } => self
                 .begin_encode("jmp")
                 .encode("source", u32::from(source.get_bit_pattern()))
-                .encode("offset", *offset)
+                .encode("offset", offset.0 as u32)
                 .make(),
             Instruction::Return => self.begin_encode("return").make(),
         }
@@ -484,7 +486,7 @@ mod tests {
             Instruction::LoadAddress {
                 bytes: NumberOfBytes::Bytes2,
                 mode: LoadStoreAddressingMode::Stack,
-                operand: 0
+                operand: 0.into()
             }
         );
 
@@ -512,7 +514,7 @@ mod tests {
             Instruction::LoadAddress {
                 bytes: NumberOfBytes::Bytes2,
                 mode: LoadStoreAddressingMode::RelativeForward,
-                operand: 45
+                operand: 45.into()
             }
         );
 
@@ -540,7 +542,7 @@ mod tests {
             Instruction::LoadAddress {
                 bytes: NumberOfBytes::Bytes8,
                 mode: LoadStoreAddressingMode::RelativeBackward,
-                operand: 453
+                operand: 453.into()
             }
         );
 
@@ -568,7 +570,7 @@ mod tests {
             Instruction::LoadAddress {
                 bytes: NumberOfBytes::Bytes1,
                 mode: LoadStoreAddressingMode::Absolute,
-                operand: 123
+                operand: 123.into()
             }
         );
 
@@ -595,7 +597,7 @@ mod tests {
             Instruction::StoreAddress {
                 bytes: NumberOfBytes::Bytes2,
                 mode: LoadStoreAddressingMode::Stack,
-                operand: 0
+                operand: 0.into()
             }
         );
 
@@ -623,7 +625,7 @@ mod tests {
             Instruction::StoreAddress {
                 bytes: NumberOfBytes::Bytes2,
                 mode: LoadStoreAddressingMode::RelativeForward,
-                operand: 45
+                operand: 45.into()
             }
         );
 
@@ -651,7 +653,7 @@ mod tests {
             Instruction::StoreAddress {
                 bytes: NumberOfBytes::Bytes8,
                 mode: LoadStoreAddressingMode::RelativeBackward,
-                operand: 453
+                operand: 453.into()
             }
         );
 
@@ -679,7 +681,7 @@ mod tests {
             Instruction::StoreAddress {
                 bytes: NumberOfBytes::Bytes1,
                 mode: LoadStoreAddressingMode::Absolute,
-                operand: 123
+                operand: 123.into()
             }
         );
 
@@ -1222,7 +1224,12 @@ mod tests {
 
         let decoded = encoder.begin_decode(encoded).decode();
 
-        assert_eq!(decoded, Instruction::StackOffset { bytes: 12347 });
+        assert_eq!(
+            decoded,
+            Instruction::StackOffset {
+                bytes: 12347.into()
+            }
+        );
 
         let reencoded = encoder.encode_instruction(&decoded);
         assert_eq!(reencoded, encoded);
@@ -1246,7 +1253,7 @@ mod tests {
             decoded,
             Instruction::Call {
                 source: AddressJumpAddressSource::FromOperand,
-                offset: 151
+                offset: 151.into()
             }
         );
 
@@ -1268,7 +1275,7 @@ mod tests {
             decoded,
             Instruction::Call {
                 source: AddressJumpAddressSource::PopFromStack,
-                offset: 0
+                offset: 0.into()
             }
         );
 

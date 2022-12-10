@@ -57,7 +57,10 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
     ) {
         Ok(final_hir) => analysis_result.hir = final_hir,
         Err(e) => {
-            println!("infer_types Err: {e:#?} errors: {errors}", errors = analysis_result.type_errors.count());
+            println!(
+                "infer_types Err: {e:#?} errors: {errors}",
+                errors = analysis_result.type_errors.count()
+            );
         }
     }
 

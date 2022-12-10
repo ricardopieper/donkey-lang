@@ -3,14 +3,17 @@ use crate::donkey_vm::asm::asm_instructions::{
     Annotation, AsmArithmeticBinaryOp, AsmControlRegister, AsmIntegerBitwiseBinaryOp,
     AsmIntegerCompareBinaryOp, AsmLoadStoreMode, AsmSignFlag, AssemblyInstruction,
 };
-use crate::semantic::hir::{HIRExpr, TrivialHIRExpr, Checked};
+use crate::semantic::hir::{Checked, HIRExpr, LiteralHIRExpr};
 use crate::semantic::mir::{
-    BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, MIRTypedBoundName, TypecheckedExpression,
+    BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, MIRTypedBoundName,
+    TypecheckedExpression, ScopeId,
 };
 use crate::types::type_constructor_db::TypeSign;
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use std::collections::{HashMap, HashSet};
+
+use super::layouts::{generate_function_layout, ByteRange, Bytes, ScopeVariables};
 
 pub struct DonkeyEmitter {
     pub assembly: Vec<AssemblyInstruction>,
@@ -35,10 +38,12 @@ impl DonkeyEmitter {
         instruction: AssemblyInstruction,
         annotation: S,
     ) {
-
         match instruction {
             AssemblyInstruction::StackOffset { bytes } => {
-                if let Some(AssemblyInstruction::StackOffset { bytes: existing_bytes }) = self.assembly.last_mut() {
+                if let Some(AssemblyInstruction::StackOffset {
+                    bytes: existing_bytes,
+                }) = self.assembly.last_mut()
+                {
                     *existing_bytes = bytes;
                 } else {
                     self.assembly.push(instruction);
@@ -46,7 +51,7 @@ impl DonkeyEmitter {
                         annotation: annotation.into(),
                     }));
                 }
-            },
+            }
             _ => {
                 self.assembly.push(instruction);
                 self.annotations.push(Some(Annotation {
@@ -54,8 +59,6 @@ impl DonkeyEmitter {
                 }));
             }
         }
-
-       
     }
 
     pub fn iter_annotated(
@@ -63,53 +66,6 @@ impl DonkeyEmitter {
     ) -> impl Iterator<Item = (&AssemblyInstruction, &Option<Annotation>)> {
         self.assembly.iter().zip(self.annotations.iter())
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ByteRange {
-    begin: u32,
-    end: u32,
-}
-impl ByteRange {
-    fn size(&self) -> u32 {
-        self.end - self.begin
-    }
-}
-
-fn build_write_scope_byte_layout(
-    scope: &MIRScope,
-    all_scopes: &[MIRScope],
-    type_db: &TypeInstanceManager,
-) -> HashMap<String, ByteRange> {
-    let mut current_index = scope.index;
-    let mut found_var = vec![];
-    loop {
-        let scope = &all_scopes[current_index];
-
-        for var in &scope.boundnames {
-            found_var.push((var.name.clone(), var.typename.size(type_db)));
-        }
-
-        if current_index == 0 {
-            break;
-        }
-        current_index = scope.inherit.0;
-    }
-
-    let mut map: HashMap<String, ByteRange> = HashMap::new();
-    let mut used_bytes = 0usize;
-    for (name, size) in found_var.into_iter().rev() {
-        map.insert(
-            name,
-            ByteRange {
-                begin: used_bytes as u32,
-                end: used_bytes as u32 + size as u32,
-            },
-        );
-        used_bytes += size;
-    }
-
-    map
 }
 
 //returns (upper 16 bits, lower 16 bits)
@@ -156,20 +112,20 @@ pub fn encode_u64(raw: i128) -> [[u8; 2]; 4] {
     ]
 }
 
-fn generate_trivial_expr(
+fn generate_literal_expr(
     type_db: &TypeInstanceManager,
-    expression: &TrivialHIRExpr,
-    trivial_type: TypeInstanceId,
+    expression: &LiteralHIRExpr,
+    literal_type: TypeInstanceId,
     bytecode: &mut DonkeyEmitter,
-    scope: &HashMap<String, ByteRange>,
-) -> u32 {
-    let size = trivial_type.size(type_db) as u8;
+    scope: &ScopeVariables,
+) -> Bytes {
+    let size = literal_type.size(type_db).try_into().unwrap();
     match &expression {
-        TrivialHIRExpr::IntegerValue(v) => {
+        LiteralHIRExpr::Integer(v) => {
             if size == 4 {
-                let (lower, upper) = if trivial_type == type_db.common_types.i32 {
+                let (lower, upper) = if literal_type == type_db.common_types.i32 {
                     encode_i32(*v)
-                } else if trivial_type == type_db.common_types.u32 {
+                } else if literal_type == type_db.common_types.u32 {
                     encode_u32(*v)
                 } else {
                     panic!("Tried to compile immediate push of a 4-byte type, but somehow types don't match size")
@@ -182,21 +138,21 @@ fn generate_trivial_expr(
                     });
                 } else {
                     bytecode.push(AssemblyInstruction::PushImmediate {
-                        bytes: trivial_type.size(type_db) as u8,
+                        bytes: literal_type.size(type_db).try_into().unwrap(),
                         shift_size: 16,
                         immediate: upper,
                     });
                     bytecode.push(AssemblyInstruction::IntegerArithmeticBinaryOperation {
-                        bytes: size,
+                        bytes: size.try_into().unwrap(),
                         operation: AsmArithmeticBinaryOp::Sum,
                         sign: AsmSignFlag::Unsigned, //we just want to set the bytes
                         immediate: Some(lower),
                     });
                 }
             } else if size == 8 {
-                let parts = if trivial_type == type_db.common_types.i64 {
+                let parts = if literal_type == type_db.common_types.i64 {
                     encode_i64(*v)
-                } else if trivial_type == type_db.common_types.u64 {
+                } else if literal_type == type_db.common_types.u64 {
                     encode_u64(*v)
                 } else {
                     panic!("Tried to compile immediate push of a 4-byte type, but somehow types don't match size")
@@ -234,11 +190,11 @@ fn generate_trivial_expr(
             } else {
                 todo!("Integers of size {size} not implemented in asm generator yet")
             }
-            u32::from(size)
+            u32::from(size).into()
         }
-        TrivialHIRExpr::FloatValue(_) => todo!("Floats not implemented in asm generator yet"),
-        TrivialHIRExpr::StringValue(_) => todo!("Strings not implemented in asm generator yet"),
-        TrivialHIRExpr::BooleanValue(v) => {
+        LiteralHIRExpr::Float(_) => todo!("Floats not implemented in asm generator yet"),
+        LiteralHIRExpr::String(_) => todo!("Strings not implemented in asm generator yet"),
+        LiteralHIRExpr::Boolean(v) => {
             bytecode.push(AssemblyInstruction::PushImmediate {
                 bytes: size,
                 shift_size: 0,
@@ -248,24 +204,9 @@ fn generate_trivial_expr(
                     0u16.to_le_bytes()
                 },
             });
-            1
+            Bytes(1)
         }
-        TrivialHIRExpr::Variable(var) => {
-            //emit a loadaddr_relY bp+X where Y = size in bits, X = start of the value
-            //println!("Vars in scope: {scope:?}");
-            let var_range = scope.get(var).unwrap_or_else(|| panic!("expected {var}"));
-            bytecode.push_annotated(
-                AssemblyInstruction::LoadAddress {
-                    bytes: var_range.size() as u8,
-                    mode: AsmLoadStoreMode::Relative {
-                        offset: var_range.begin as i32,
-                    },
-                },
-                format!("Loading variable {}", var),
-            );
-            var_range.size()
-        }
-        TrivialHIRExpr::None => {
+        LiteralHIRExpr::None => {
             todo!("None not implemented yet, probably should be a 0 as u32 behaving as a nullptr")
         }
     }
@@ -298,16 +239,16 @@ const fn is_compare(op: Operator) -> bool {
 
 struct ExprGenerated {
     //This is the offset from bp after the last instruction of the expression execute
-    offset_from_bp: u32,
+    offset_from_bp: Bytes,
 }
 
-fn format_jump_lbl(var_name: &str)-> String {
+fn format_jump_lbl(var_name: &str) -> String {
     format!("FUNC_{}", var_name)
 }
 
 fn generate_function_jump_lbl(expr: &TypecheckedExpression) -> String {
     match &expr {
-        HIRExpr::Trivial(TrivialHIRExpr::Variable(var_name), ..) => format_jump_lbl(var_name),
+        HIRExpr::Variable(var_name, ..) => format_jump_lbl(var_name),
         _ => {
             panic!(
                 "Not callable, this is a bug in the type checker: {:?}",
@@ -321,17 +262,19 @@ fn generate_expr(
     type_db: &TypeInstanceManager,
     expression: &TypecheckedExpression,
     bytecode: &mut DonkeyEmitter,
-    scope: &HashMap<String, ByteRange>,
-    offset_from_bp: u32,
+    scope: &ScopeVariables,
+    offset_from_bp: Bytes,
 ) -> ExprGenerated {
     match expression {
-        HIRExpr::Trivial(trivial_expr, typedef, ..) => {
+        HIRExpr::Literal(literal_expr, typedef, ..) => {
             let pushed_size =
-                generate_trivial_expr(type_db, trivial_expr, *typedef, bytecode, scope);
+                generate_literal_expr(type_db, literal_expr, *typedef, bytecode, scope);
             ExprGenerated {
                 offset_from_bp: offset_from_bp + pushed_size,
             }
         }
+
+        HIRExpr::Variable(var, ..) => generate_var_load_addr(scope, var, bytecode, offset_from_bp),
         HIRExpr::Cast(..) => todo!("Cast not supported yet"),
         HIRExpr::BinaryOperation(lhs, op, rhs, _, _) if is_arith(*op) => {
             generate_arith_binexpr_code(type_db, rhs, bytecode, scope, lhs, *op, offset_from_bp)
@@ -352,7 +295,7 @@ fn generate_expr(
             bytecode,
             args,
             scope,
-            generate_function_jump_lbl(function_expr)
+            generate_function_jump_lbl(function_expr),
         ),
         HIRExpr::UnaryExpression(_, _, _, _) => todo!("unary expression not implemented"),
         HIRExpr::MemberAccess(_, _, _, _) => todo!("member access not implemented"),
@@ -362,17 +305,40 @@ fn generate_expr(
     }
 }
 
+fn generate_var_load_addr(
+    scope: &ScopeVariables,
+    var: &String,
+    bytecode: &mut DonkeyEmitter,
+    offset_from_bp: Bytes,
+) -> ExprGenerated {
+    //emit a loadaddr_relY bp+X where Y = size in bits, X = start of the value
+    //println!("Vars in scope: {scope:?}");
+    let (var_range, _) = scope.get(var).unwrap_or_else(|| panic!("expected {var}"));
+    bytecode.push_annotated(
+        AssemblyInstruction::LoadAddress {
+            bytes: var_range.size().try_into().unwrap(),
+            mode: AsmLoadStoreMode::Relative {
+                offset: var_range.begin.0 as i32,
+            },
+        },
+        format!("Loading variable {}", var),
+    );
+    ExprGenerated {
+        offset_from_bp: offset_from_bp + var_range.size(),
+    }
+}
+
 fn generate_function_call(
     type_db: &TypeInstanceManager,
     return_type: TypeInstanceId,
-    offset_from_bp: u32,
+    offset_from_bp: Bytes,
     bytecode: &mut DonkeyEmitter,
     args: &[TypecheckedExpression],
-    scope: &HashMap<String, ByteRange>,
+    scope: &ScopeVariables,
     function_lbl: String,
 ) -> ExprGenerated {
     let return_size = return_type.size(type_db);
-    let mut offset_from_bp_arg = offset_from_bp + return_size as u32;
+    let mut offset_from_bp_arg = offset_from_bp + return_size;
     bytecode.push_annotated(
         AssemblyInstruction::StackOffset {
             bytes: offset_from_bp_arg,
@@ -392,8 +358,10 @@ fn generate_function_call(
         },
         "Saving base pointer for after the call",
     );
-   
-    bytecode.push(AssemblyInstruction::UnresolvedCall { label: Some(function_lbl) });
+
+    bytecode.push(AssemblyInstruction::UnresolvedCall {
+        label: Some(function_lbl),
+    });
     //great, now recover bp
     bytecode.push_annotated(
         AssemblyInstruction::PopRegister {
@@ -410,21 +378,19 @@ fn generate_function_call(
     );
     //@TODO allow generic type function returns here
     ExprGenerated {
-        offset_from_bp: offset_from_bp + return_size as u32,
+        offset_from_bp: offset_from_bp + return_size,
     }
 }
-
 
 fn generate_compare_binexpr_code(
     type_db: &TypeInstanceManager,
     rhs: &TypecheckedExpression,
     bytecode: &mut DonkeyEmitter,
-    scope: &HashMap<String, ByteRange>,
+    scope: &ScopeVariables,
     lhs: &TypecheckedExpression,
     op: Operator,
-    offset_from_bp: u32,
+    offset_from_bp: Bytes,
 ) -> ExprGenerated {
-
     let compare_op = match op {
         Operator::Equals => AsmIntegerCompareBinaryOp::Equals,
         Operator::NotEquals => AsmIntegerCompareBinaryOp::NotEquals,
@@ -434,8 +400,8 @@ fn generate_compare_binexpr_code(
         Operator::LessEquals => AsmIntegerCompareBinaryOp::LessThanOrEquals,
         _ => panic!("Not compare op: {op:?}"),
     };
-    
-    if let HIRExpr::Trivial(TrivialHIRExpr::IntegerValue(i), ..) = rhs && fits_16_bits(*i) {
+
+    if let HIRExpr::Literal(LiteralHIRExpr::Integer(i), ..) = rhs && fits_16_bits(*i) {
 
         let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, offset_from_bp);
 
@@ -451,7 +417,7 @@ fn generate_compare_binexpr_code(
 
         if is_integer(lhs_type, type_db) {
             bytecode.push(AssemblyInstruction::IntegerCompareBinaryOperation {
-                bytes: lhs_size as u8,
+                bytes: lhs_size.try_into().unwrap(),
                 operation: compare_op,
                 sign: sign_flag,
                 immediate: Some(raw_16_bits(*i)),
@@ -461,8 +427,8 @@ fn generate_compare_binexpr_code(
         } else {
             panic!("Could not generate binary arithmetic operation, type is not integer or float")
         }
-        let popped_size = lhs_size as u32;
-        let pushed_size = type_db.get_instance(type_db.common_types.bool).size as u32;
+        let popped_size = lhs_size;
+        let pushed_size = type_db.get_instance(type_db.common_types.bool).size;
         return ExprGenerated {
             offset_from_bp: lhs_gen.offset_from_bp + pushed_size - popped_size,
         };
@@ -476,14 +442,13 @@ fn generate_compare_binexpr_code(
     let type_db_record = type_db.get_instance(lhs_type);
     let constructor = type_db.constructors.find(type_db_record.base);
 
-  
     let sign_flag = match constructor.sign {
         TypeSign::Signed => AsmSignFlag::Signed,
         TypeSign::Unsigned => AsmSignFlag::Unsigned,
     };
     if is_integer(lhs_type, type_db) {
         bytecode.push(AssemblyInstruction::IntegerCompareBinaryOperation {
-            bytes: lhs_size as u8,
+            bytes: lhs_size.try_into().unwrap(),
             operation: compare_op,
             sign: sign_flag,
             immediate: None,
@@ -493,12 +458,11 @@ fn generate_compare_binexpr_code(
     } else {
         panic!("Could not generate binary arithmetic operation, type is not integer or float")
     }
-    //the binary operation pops values from stack
-    let popped_size = lhs_size * 2;
-
-    let pushed_size = type_db.get_instance(type_db.common_types.bool).size as u32;
+    //the binary operation pops 2 values of the same type from stack
+    let popped_size = lhs_size + lhs_size;
+    let pushed_size = type_db.get_instance(type_db.common_types.bool).size;
     ExprGenerated {
-        offset_from_bp: lhs_gen.offset_from_bp + pushed_size - popped_size as u32
+        offset_from_bp: lhs_gen.offset_from_bp + pushed_size - popped_size,
     }
 }
 
@@ -517,10 +481,10 @@ fn generate_bitwise_binexpr_code(
     type_db: &TypeInstanceManager,
     rhs: &TypecheckedExpression,
     bytecode: &mut DonkeyEmitter,
-    scope: &HashMap<String, ByteRange>,
+    scope: &ScopeVariables,
     lhs: &TypecheckedExpression,
     op: Operator,
-    offset_from_bp: u32,
+    offset_from_bp: Bytes,
 ) -> ExprGenerated {
     let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
     let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
@@ -541,7 +505,7 @@ fn generate_bitwise_binexpr_code(
     };
     if is_integer(lhs_type, type_db) {
         bytecode.push(AssemblyInstruction::IntegerBitwiseBinaryOperation {
-            bytes: lhs_type.size(type_db) as u8,
+            bytes: lhs_type.size(type_db).try_into().unwrap(),
             operation: bitwise_op,
             sign: sign_flag,
             immediate: None,
@@ -550,16 +514,15 @@ fn generate_bitwise_binexpr_code(
         panic!("Could not generate binary arithmetic operation, type is not integer or float")
     }
     let lhs_size = lhs_type.size(type_db);
-    let popped_size = lhs_size as u32 * 2;
-    let pushed_size = lhs_size as u32;
+    let popped_size = lhs_size + lhs_size;
+    let pushed_size = lhs_size;
     ExprGenerated {
         offset_from_bp: lhs_gen.offset_from_bp + pushed_size - popped_size,
     }
 }
 
 fn fits_16_bits(i: i128) -> bool {
-        (i >= i16::MIN.into() && i <= i16::MAX.into())
-    && (i >= u16::MIN.into() && i <= u16::MAX.into())
+    (i >= i16::MIN.into() && i <= i16::MAX.into()) && (i >= u16::MIN.into() && i <= u16::MAX.into())
 }
 
 fn raw_16_bits(i: i128) -> [u8; 2] {
@@ -575,12 +538,11 @@ fn generate_arith_binexpr_code(
     type_db: &TypeInstanceManager,
     rhs: &TypecheckedExpression,
     bytecode: &mut DonkeyEmitter,
-    scope: &HashMap<String, ByteRange>,
+    scope: &ScopeVariables,
     lhs: &TypecheckedExpression,
     op: Operator,
-    offset_from_bp: u32,
+    offset_from_bp: Bytes,
 ) -> ExprGenerated {
-
     let arith_op = match op {
         Operator::Plus => AsmArithmeticBinaryOp::Sum,
         Operator::Minus => AsmArithmeticBinaryOp::Subtract,
@@ -590,8 +552,7 @@ fn generate_arith_binexpr_code(
         _ => panic!("Not arithmetic: {op:?}"),
     };
 
-
-    if let HIRExpr::Trivial(TrivialHIRExpr::IntegerValue(i), ..) = rhs && fits_16_bits(*i) {
+    if let HIRExpr::Literal(LiteralHIRExpr::Integer(i), ..) = rhs && fits_16_bits(*i) {
 
         let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, offset_from_bp);
 
@@ -607,7 +568,7 @@ fn generate_arith_binexpr_code(
 
         if is_integer(lhs_type, type_db) {
             bytecode.push(AssemblyInstruction::IntegerArithmeticBinaryOperation {
-                bytes: lhs_size as u8,
+                bytes: lhs_size.try_into().unwrap(),
                 operation: arith_op,
                 sign: sign_flag,
                 immediate: Some(raw_16_bits(*i)),
@@ -617,13 +578,13 @@ fn generate_arith_binexpr_code(
         } else {
             panic!("Could not generate binary arithmetic operation, type is not integer or float")
         }
-        let pushed_size = lhs_size as u32;
-        let popped_size = lhs_size as u32;
+        let pushed_size = lhs_size;
+        let popped_size = lhs_size;
         return ExprGenerated {
             offset_from_bp: lhs_gen.offset_from_bp + pushed_size - popped_size,
         };
     }
-    
+
     let rhs_gen = generate_expr(type_db, rhs, bytecode, scope, offset_from_bp);
     let lhs_gen = generate_expr(type_db, lhs, bytecode, scope, rhs_gen.offset_from_bp);
 
@@ -638,7 +599,7 @@ fn generate_arith_binexpr_code(
     };
     if is_integer(lhs_type, type_db) {
         bytecode.push(AssemblyInstruction::IntegerArithmeticBinaryOperation {
-            bytes: lhs_size as u8,
+            bytes: lhs_size.try_into().unwrap(),
             operation: arith_op,
             sign: sign_flag,
             immediate: None,
@@ -648,8 +609,8 @@ fn generate_arith_binexpr_code(
     } else {
         panic!("Could not generate binary arithmetic operation, type is not integer or float")
     }
-    let pushed_size = lhs_size as u32;
-    let popped_size = lhs_size as u32 * 2;
+    let pushed_size = lhs_size;
+    let popped_size = lhs_size + lhs_size;
     ExprGenerated {
         offset_from_bp: lhs_gen.offset_from_bp + pushed_size - popped_size,
     }
@@ -669,18 +630,18 @@ fn generate_decl_function(
     });
 
     //generate load parameters
-    let mut args_stack_offset = -8_isize;
+    let mut args_stack_offset: isize = -8;
     for param in parameters {
-        let type_size = param.typename.size(type_db);
-        let position = args_stack_offset - (type_size as isize);
+        let type_size = param.type_instance.size(type_db);
+        let position = args_stack_offset as isize - type_size.0 as isize;
         let annotation = format!(
             "Loading parameter {} of type {}",
             param.name,
-            param.typename.as_string(type_db)
+            param.type_instance.as_string(type_db)
         );
         bytecode.push_annotated(
             AssemblyInstruction::LoadAddress {
-                bytes: type_size as u8,
+                bytes: type_size.try_into().unwrap(),
                 mode: AsmLoadStoreMode::Relative {
                     offset: position as i32,
                 },
@@ -690,32 +651,16 @@ fn generate_decl_function(
         args_stack_offset = position;
     }
 
-    let scope_byte_layout = scopes
-        .iter()
-        .map(|scope| build_write_scope_byte_layout(scope, scopes, type_db))
-        .collect::<Vec<_>>();
-
-    //println!("Scope byte layout built: {scope_byte_layout:#?}");
-
-    let mut largest_scope = 0;
-    for sbl in &scope_byte_layout {
-        let sum: u32 = sbl
-            .values()
-            .map(ByteRange::size)
-            .sum();
-        if sum > largest_scope {
-            largest_scope = sum;
-        }
-    }
+    let layout = generate_function_layout(scopes, type_db);
 
     bytecode.push_annotated(
         AssemblyInstruction::StackOffset {
-            bytes: largest_scope,
+            bytes: layout.largest_scope_size.try_into().unwrap(),
         },
         "Reserving space for stack values and parameters",
     );
 
-    let mut offset_from_bp = largest_scope;
+    let mut offset_from_bp = layout.largest_scope_size;
 
     //find the blocks that genuinely participate in some interesting control flow stuff
     let mut target_blocks = HashSet::new();
@@ -739,7 +684,7 @@ fn generate_decl_function(
     for block in body {
         generate_function_decl_block(
             parameters,
-            &scope_byte_layout,
+            &layout.variables_for_each_scope,
             block,
             &target_blocks,
             bytecode,
@@ -751,12 +696,12 @@ fn generate_decl_function(
 
 fn generate_function_decl_block(
     parameters: &[MIRTypedBoundName],
-    scope_byte_layout: &[HashMap<String, ByteRange>],
+    scope_byte_layout: &[HashMap<String, (ByteRange, ScopeId)>],
     block: &MIRBlock<Checked>,
     target_blocks: &HashSet<BlockId>,
     bytecode: &mut DonkeyEmitter,
     type_db: &TypeInstanceManager,
-    offset_from_bp: &mut u32,
+    offset_from_bp: &mut Bytes,
 ) {
     // println!("block: {block:?} {scope_byte_layout:#?}");
 
@@ -777,9 +722,9 @@ fn generate_function_decl_block(
                 *offset_from_bp = size.offset_from_bp;
                 bytecode.push_annotated(
                     AssemblyInstruction::StoreAddress {
-                        bytes: expression.get_type().size(type_db) as u8,
+                        bytes: expression.get_type().size(type_db).try_into().unwrap(),
                         mode: AsmLoadStoreMode::Relative {
-                            offset: range.begin as i32,
+                            offset: range.0.begin.0 as i32,
                         },
                     },
                     &format!("Assign to variable {}", var_name),
@@ -793,12 +738,20 @@ fn generate_function_decl_block(
                 args,
                 meta_ast: _,
                 meta_expr: _,
-                return_type
+                return_type,
             } => {
                 let label = format_jump_lbl(function);
-                let size = generate_function_call(type_db, *return_type, *offset_from_bp, bytecode, args, scope, label);
+                let size = generate_function_call(
+                    type_db,
+                    *return_type,
+                    *offset_from_bp,
+                    bytecode,
+                    args,
+                    scope,
+                    label,
+                );
                 *offset_from_bp = size.offset_from_bp
-            },
+            }
         }
     }
     generate_func_block_finish(parameters, block, type_db, bytecode, scope, offset_from_bp);
@@ -809,8 +762,8 @@ fn generate_func_block_finish(
     block: &MIRBlock<Checked>,
     type_db: &TypeInstanceManager,
     bytecode: &mut DonkeyEmitter,
-    scope: &HashMap<String, ByteRange>,
-    offset_from_bp: &mut u32,
+    scope: &ScopeVariables,
+    offset_from_bp: &mut Bytes,
 ) {
     match &block.finish {
         MIRBlockFinal::If(true_expr, true_branch, false_branch, ..) => {
@@ -851,28 +804,28 @@ fn generate_func_block_finish(
             let mut args_size = 0i32;
 
             for param in parameters {
-                args_size += param.typename.size(type_db) as i32;
+                args_size += param.type_instance.size(type_db).0 as i32;
             }
-            let pushed_size = expr.get_type().size(type_db) as u32;
+            let pushed_size = expr.get_type().size(type_db);
             //destroy stack
             bytecode.push_annotated(
                 AssemblyInstruction::StoreAddress {
-                    bytes:pushed_size as u8,
+                    bytes: pushed_size.try_into().unwrap(),
                     mode: AsmLoadStoreMode::Relative {
-                        offset: -8 - args_size - pushed_size as i32,
+                        offset: -8 - args_size - pushed_size.0 as i32,
                     }, //-8 - 4 for i32 would result in -12
                 },
                 "Writing result of function",
             );
             bytecode.push_annotated(
-                AssemblyInstruction::StackOffset { bytes: 0 },
+                AssemblyInstruction::StackOffset { bytes: Bytes(0) },
                 "Restoring function to BP",
             );
             bytecode.push(AssemblyInstruction::Return);
         }
         MIRBlockFinal::EmptyReturn => {
             bytecode.push_annotated(
-                AssemblyInstruction::StackOffset { bytes: 0 },
+                AssemblyInstruction::StackOffset { bytes: Bytes(0) },
                 "Restoring function to BP",
             );
             bytecode.push(AssemblyInstruction::Return);
@@ -899,7 +852,6 @@ fn generate_for_top_lvl(
         } => todo!(),
     }
 }
-
 
 pub fn generate_donkey_vm(
     type_db: &TypeInstanceManager,
@@ -928,8 +880,9 @@ mod test {
             },
         },
         semantic::{
+            hir::Checked,
             mir::{hir_to_mir, MIRTopLevelNode, TypecheckedExpression},
-            type_checker::check_type, hir::Checked,
+            type_checker::check_type,
         },
         types::{
             type_errors::{TypeErrorPrinter, TypeErrors},
@@ -1020,7 +973,7 @@ def main():
 
         let (memory, registers) = run_test(src);
 
-        let result_value = memory.native_read::<i32>(registers.bp + 4 );
+        let result_value = memory.native_read::<i32>(registers.bp + 4);
         assert_eq!(result_value, 10000 * 2 / 4 + 5 * 2 - 100);
     }
 
@@ -1135,8 +1088,6 @@ def main():
         assert_eq!(result_value, 6);
     }
 
-
-
     #[test]
     fn recursive_call() {
         let src = "
@@ -1151,7 +1102,7 @@ def main():
 ";
         let (memory, registers) = run_test(src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
-        //print_stack(&memory, &registers);
+                                                                        //print_stack(&memory, &registers);
         assert_eq!(result_value, 1);
     }
 
@@ -1169,7 +1120,7 @@ def main():
 ";
         let (memory, registers) = run_test(src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
-        //print_stack(&memory, &registers);
+                                                                        //print_stack(&memory, &registers);
         assert_eq!(result_value, 1);
     }
 
@@ -1187,10 +1138,9 @@ def main():
 ";
         let (memory, registers) = run_test(src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
-        //print_stack(&memory, &registers);
+                                                                        //print_stack(&memory, &registers);
         assert_eq!(result_value, 1);
     }
-
 
     //1, 1, 2, 3, 5, 8, ..
     //fib(0) = 1
@@ -1201,10 +1151,15 @@ def main():
         let chosen_num = 12;
 
         fn native_fib(i: i32) -> i32 {
-            if i <= 1 { 1 } else { native_fib(i - 1) + native_fib(i - 2)} 
+            if i <= 1 {
+                1
+            } else {
+                native_fib(i - 1) + native_fib(i - 2)
+            }
         }
 
-        let src =format!("
+        let src = format!(
+            "
 def fib(i: i32) -> i32:
     if i <= 1:
         return 1
@@ -1213,11 +1168,16 @@ def fib(i: i32) -> i32:
 
 def main():
     result: i32 = fib({chosen_num})
-");
+"
+        );
         let (memory, registers) = run_test(&src);
         let result_value = memory.native_read::<i32>(registers.bp + 4); //bp is 99 (x), bp+4 is result
-        //print_stack(&memory, &registers);
-        println!("Result should be {}, is {}", native_fib(chosen_num), result_value);
+                                                                        //print_stack(&memory, &registers);
+        println!(
+            "Result should be {}, is {}",
+            native_fib(chosen_num),
+            result_value
+        );
         assert_eq!(result_value, native_fib(chosen_num));
     }
 }

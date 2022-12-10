@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialOrd)]
 pub struct FloatLiteral(pub f64);
 
 impl Hash for FloatLiteral {

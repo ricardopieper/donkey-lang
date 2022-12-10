@@ -1,4 +1,3 @@
-
 use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::mir::MIRBlock;
@@ -9,7 +8,6 @@ use super::mir::MIRTopLevelNode;
 pub trait PrintableExpression {
     fn print_expr(&self) -> String;
 }
-
 
 fn print_mir_block<T>(block: &MIRBlock<T>) -> String {
     let mut buffer = String::new();
@@ -29,7 +27,11 @@ fn print_mir_block<T>(block: &MIRBlock<T>) -> String {
                 ));
             }
             MIRBlockNode::FunctionCall { function, args, .. } => {
-                let args_str = args.iter().map(|x| x.print_expr()).collect::<Vec<_>>().join(", ");
+                let args_str = args
+                    .iter()
+                    .map(|x| x.print_expr())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 buffer.push_str(&format!("        {}({})\n", function, args_str));
             }
         }
@@ -44,7 +46,7 @@ fn print_mir_block<T>(block: &MIRBlock<T>) -> String {
             gotoblock {}
 ",
                 condition.print_expr(), //if condition:
-                true_branch.0,       //gotoblock 0
+                true_branch.0,          //gotoblock 0
                 false_branch.0
             )); //gotoblock 1
         }
@@ -65,14 +67,14 @@ fn print_mir_block<T>(block: &MIRBlock<T>) -> String {
 fn print_mir_scope(scope: &MIRScope, type_db: &TypeInstanceManager) -> String {
     let mut buffer = String::new();
 
-    buffer.push_str(&format!("    defscope {}:\n", scope.index));
+    buffer.push_str(&format!("    defscope {}:\n", scope.id.0));
     buffer.push_str(&format!("        inheritscope {}\n", scope.inherit.0));
 
     for name in &scope.boundnames {
         buffer.push_str(&format!(
             "        {} : {}\n",
             name.name,
-            name.typename.as_string(type_db)
+            name.type_instance.as_string(type_db)
         ));
     }
 
@@ -90,7 +92,7 @@ fn print_mir_str<T>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) ->
         } => {
             let parameters = parameters
                 .iter()
-                .map(|param| format!("{}: {}", param.name, param.typename.as_string(type_db)))
+                .map(|param| format!("{}: {}", param.name, param.type_instance.as_string(type_db)))
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut function = format!(

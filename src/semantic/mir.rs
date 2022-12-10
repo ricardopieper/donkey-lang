@@ -3,7 +3,7 @@ use std::ops::Not;
 use super::{
     hir::{
         Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
-        InferredTypeHIRRoot, NotChecked, TrivialHIRExpr, HIR,
+        InferredTypeHIRRoot, LiteralHIRExpr, NotChecked, HIR,
     },
     hir_printer::expr_str,
     mir_printer::PrintableExpression,
@@ -90,7 +90,7 @@ pub enum MIRBlockNode<TTypecheckState> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MIRTypedBoundName {
     pub name: String,
-    pub typename: TypeInstanceId,
+    pub type_instance: TypeInstanceId,
 }
 
 /*
@@ -100,7 +100,7 @@ pub struct MIRTypedBoundName {
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MIRScope {
-    pub index: usize,
+    pub id: ScopeId,
     pub inherit: ScopeId,
     pub boundnames: Vec<MIRTypedBoundName>,
 }
@@ -160,7 +160,7 @@ impl MIRFunctionEmitter {
             current_scope: ScopeId(0),
             blocks: vec![],
             scopes: vec![],
-            goto_stack: vec![]
+            goto_stack: vec![],
         }
     }
 
@@ -171,7 +171,7 @@ impl MIRFunctionEmitter {
     fn create_scope(&mut self, parent_scope: ScopeId) -> ScopeId {
         let current_len = self.scopes.len();
         let new_scope = MIRScope {
-            index: current_len,
+            id: ScopeId(current_len),
             inherit: parent_scope,
             boundnames: vec![],
         };
@@ -195,7 +195,7 @@ impl MIRFunctionEmitter {
         let scope = &mut self.scopes[scope_id.0];
         scope.boundnames.push(MIRTypedBoundName {
             name: var,
-            typename: typedef,
+            type_instance: typedef,
         });
     }
 
@@ -338,8 +338,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 meta_expr,
             } => {
                 match &function {
-                    HIRExpr::Trivial(TrivialHIRExpr::Variable(var), function_type, ..) => {
-                        dbg!(function_type);
+                    HIRExpr::Variable(var, function_type, ..) => {
                         let pending_args = args.iter().map(std::clone::Clone::clone).collect();
 
                         emitter.emit(MIRBlockNode::FunctionCall {
@@ -367,7 +366,7 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
                 let while_body_block = emitter.new_block(while_body_scope);
 
                 let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
-               
+
                 //the code inside the the body needs to know where to return when their scope ends
                 //so we add this goto stack block for the body, otherwise it will make the function return
                 //so we make them return to the current block, reevaluate the condition and loop again
@@ -436,7 +435,8 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
 
                     if !emitted_block_returns {
                         if fallback_scope_and_block.is_none() {
-                            let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
+                            let fallback_block =
+                                generate_or_get_fallback_block(emitter, current_scope);
                             fallback_scope_and_block = Some(fallback_block);
                         }
                         let fallback_block = fallback_scope_and_block.unwrap();
@@ -475,7 +475,8 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
 
                     if !emitted_block_returns {
                         if fallback_scope_and_block.is_none() {
-                            let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
+                            let fallback_block =
+                                generate_or_get_fallback_block(emitter, current_scope);
                             fallback_scope_and_block = Some(fallback_block);
                         }
                         let fallback_block = fallback_scope_and_block.unwrap();
@@ -516,7 +517,10 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
     }
 }
 
-fn generate_or_get_fallback_block(emitter: &mut MIRFunctionEmitter, current_scope: ScopeId) -> BlockId {
+fn generate_or_get_fallback_block(
+    emitter: &mut MIRFunctionEmitter,
+    current_scope: ScopeId,
+) -> BlockId {
     let fallback_block = if let Some(block) = emitter.peek_goto_block() {
         *block
     } else {
@@ -562,7 +566,7 @@ pub fn process_hir_funcdecl(
             .iter()
             .map(|x| MIRTypedBoundName {
                 name: x.name.clone(),
-                typename: x.typename,
+                type_instance: x.typename,
             })
             .collect::<Vec<_>>(),
         body,

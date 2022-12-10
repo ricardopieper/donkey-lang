@@ -1,8 +1,10 @@
+use crate::{compiler::layouts::Bytes, donkey_vm::vm::instructions::InstructionPointer};
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AsmLoadStoreMode {
     StackPop,
     Relative { offset: i32 },
-    Immediate { absolute_address: u32 },
+    Immediate { absolute_address: Bytes },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -53,7 +55,7 @@ pub struct Annotation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssemblyInstruction {
     StackOffset {
-        bytes: u32,
+        bytes: Bytes,
     },
     LoadAddress {
         bytes: u8,
@@ -111,19 +113,19 @@ pub enum AssemblyInstruction {
         label: Option<String>, //if none pops from stack
     },
     Call {
-        offset: u32,
+        offset: InstructionPointer,
     },
     CallFromStack,
     JumpIfZero {
-        offset: u32,
+        offset: InstructionPointer,
     },
     JumpIfZeroFromStack,
     JumpIfNotZero {
-        offset: u32,
+        offset: InstructionPointer,
     },
     JumpIfNotZeroFromStack,
     Jump {
-        offset: u32,
+        offset: InstructionPointer,
     },
     JumpFromStack,
     Return,

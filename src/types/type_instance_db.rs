@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::lexer::Operator;
+use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
 use super::type_constructor_db::{
     TypeConstructor, TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeUsage,
@@ -21,8 +21,18 @@ impl TypeInstanceId {
         type_db.get_instance(self).name.to_string()
     }
 
-    pub fn size(self, type_db: &TypeInstanceManager) -> usize {
+    pub fn size(self, type_db: &TypeInstanceManager) -> Bytes {
         type_db.get_instance(self).size
+    }
+
+    pub fn is_integer(self, type_db: &TypeInstanceManager) -> bool {
+        let types = &type_db.common_types;
+        self == types.i32 || self == types.i64 || self == types.u32 || self == types.u64 
+    }
+
+    pub fn is_float(self, type_db: &TypeInstanceManager) -> bool {
+        let types = &type_db.common_types;
+        self == types.f32 || self == types.f64 
     }
 }
 
@@ -51,7 +61,7 @@ pub struct TypeInstanceStructField {
 pub struct TypeInstance {
     pub id: TypeInstanceId,
     pub base: TypeConstructorId,
-    pub size: usize,
+    pub size: Bytes,
     pub name: String,
     pub is_function: bool,
     //only valid if this is a function
@@ -95,7 +105,7 @@ pub struct TypeInstanceManager {
 pub enum FieldOrMethod<'type_db> {
     Field(&'type_db TypeInstanceStructField),
     Method(&'type_db TypeInstanceStructMethod),
-    NotFound
+    NotFound,
 }
 
 impl TypeInstanceManager {
@@ -115,13 +125,17 @@ impl TypeInstanceManager {
         &self.types[id.0]
     }
 
-    pub fn find_field_or_method<'this>(&'this self, id: TypeInstanceId, name: &str) -> FieldOrMethod<'this> {
+    pub fn find_field_or_method<'this>(
+        &'this self,
+        id: TypeInstanceId,
+        name: &str,
+    ) -> FieldOrMethod<'this> {
         let instance = self.get_instance(id);
         if let Some(field) = instance.fields.iter().find(|x| x.name == name) {
-            return FieldOrMethod::Field(field)
+            return FieldOrMethod::Field(field);
         }
         if let Some(method) = instance.methods.iter().find(|x| x.name == name) {
-            return FieldOrMethod::Method(method)
+            return FieldOrMethod::Method(method);
         }
         FieldOrMethod::NotFound
     }
@@ -406,7 +420,7 @@ impl TypeInstanceManager {
         Ok(methods)
     }
 
-    fn compute_size(&self, constructed: &TypeInstance) -> usize {
+    fn compute_size(&self, constructed: &TypeInstance) -> Bytes {
         //compute size of fields if they are struct, if they are primitive then the type constructor already has this info
         let constructor = self.constructors.find(constructed.base);
         if constructor.kind == TypeKind::Primitive {
@@ -451,7 +465,7 @@ fn make_base_instance(
     TypeInstance {
         id,
         base: constructor.id,
-        size: 0,
+        size: Bytes(0),
         name: constructor.name.to_string(),
         allowed_casts: vec![],
         rhs_binary_ops: vec![],

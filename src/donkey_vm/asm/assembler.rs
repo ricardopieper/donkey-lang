@@ -3,13 +3,16 @@ use std::{
     io::{Read, Write},
 };
 
-use crate::donkey_vm::{
-    asm::asm_instructions::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
-    encoder::LayoutHelper,
-    vm::instructions::{
-        AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation,
-        ControlRegister, Instruction, LeftShift, LoadStoreAddressingMode, NumberOfBytes,
-        OperationMode, SignFlag,
+use crate::{
+    compiler::layouts::Bytes,
+    donkey_vm::{
+        asm::asm_instructions::{AsmIntegerBitwiseBinaryOp, AsmIntegerCompareBinaryOp},
+        encoder::LayoutHelper,
+        vm::instructions::{
+            AddressJumpAddressSource, ArithmeticOperation, BitwiseOperation, CompareOperation,
+            ControlRegister, Instruction, InstructionPointer, LeftShift, LoadStoreAddressingMode,
+            NumberOfBytes, OperationMode, SignFlag,
+        },
     },
 };
 
@@ -88,8 +91,8 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
 
     Some(match mnems_str {
         ["stackoffset"] => {
-            let arg = splitted[1].parse().unwrap();
-            AssemblyInstruction::StackOffset { bytes: arg }
+            let arg: u32 = splitted[1].parse().unwrap();
+            AssemblyInstruction::StackOffset { bytes: arg.into() }
         }
         ["push", "reg"] => {
             let register = match splitted[1].as_str() {
@@ -145,8 +148,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                 }
                 ["imm", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
-                    let address = splitted[1].parse::<u32>().unwrap();
-
+                    let address = splitted[1].parse::<u32>().unwrap().into();
                     (
                         bytes,
                         AsmLoadStoreMode::Immediate {
@@ -183,7 +185,7 @@ fn parse_asm_line(line: u32, asm_line: &str) -> Option<AssemblyInstruction> {
                 }
                 ["imm", size] => {
                     let bytes = size.parse::<u8>().unwrap() / 8;
-                    let address = splitted[1].parse::<u32>().unwrap();
+                    let address = splitted[1].parse::<u32>().unwrap().into();
 
                     (
                         bytes,
@@ -352,21 +354,21 @@ pub fn parse_asm(asm: &str) -> Vec<AssemblyInstruction> {
 
 pub struct AsmProgram {
     pub instructions: Vec<AssemblyInstruction>,
-    pub symbol_table: std::collections::HashMap<String, u32>,
+    pub symbol_table: std::collections::HashMap<String, InstructionPointer>,
 }
 
 pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
-    let mut label_offsets = std::collections::HashMap::<String, u32>::new();
+    let mut label_offsets = std::collections::HashMap::<String, InstructionPointer>::new();
     let mut resolved_instructions = vec![];
 
-    let mut current_instruction_index: u32 = 0;
+    let mut current_instruction_index = InstructionPointer(0);
     for instruction in instructions {
         match instruction {
             AssemblyInstruction::Label { label } => {
                 label_offsets.insert(label.clone(), current_instruction_index);
             }
             _ => {
-                current_instruction_index += 1;
+                current_instruction_index.next();
             }
         }
     }
@@ -381,7 +383,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
                 label: Some(label), ..
             } => {
                 let offset = label_offsets.get(label);
-                current_instruction_index += 1;
+                current_instruction_index.next();
                 resolved_instructions.push(AssemblyInstruction::Call {
                     offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
                 });
@@ -393,7 +395,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
                 label: Some(label), ..
             } => {
                 let offset = label_offsets.get(label);
-                current_instruction_index += 1;
+                current_instruction_index.next();
                 resolved_instructions.push(AssemblyInstruction::JumpIfZero {
                     offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
                 });
@@ -402,7 +404,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
                 label: Some(label), ..
             } => {
                 let offset = label_offsets.get(label);
-                current_instruction_index += 1;
+                current_instruction_index.next();
                 resolved_instructions.push(AssemblyInstruction::JumpIfNotZero {
                     offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
                 });
@@ -415,7 +417,7 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
             }
             AssemblyInstruction::UnresolvedJump { label: Some(label) } => {
                 let offset = label_offsets.get(label);
-                current_instruction_index += 1;
+                current_instruction_index.next();
                 resolved_instructions.push(AssemblyInstruction::Jump {
                     offset: *offset.unwrap_or_else(|| panic!("Could not find label {label}")),
                 });
@@ -433,19 +435,19 @@ pub fn resolve(instructions: &[AssemblyInstruction]) -> AsmProgram {
     }
 }
 
-fn load_store(ls: AsmLoadStoreMode) -> (LoadStoreAddressingMode, u32) {
+fn load_store(ls: AsmLoadStoreMode) -> (LoadStoreAddressingMode, Bytes) {
     match ls {
-        AsmLoadStoreMode::StackPop => (LoadStoreAddressingMode::Stack, 0),
+        AsmLoadStoreMode::StackPop => (LoadStoreAddressingMode::Stack, Bytes(0)),
         AsmLoadStoreMode::Relative { offset } => {
             if offset > 0 {
                 (
                     LoadStoreAddressingMode::RelativeForward,
-                    offset.unsigned_abs(),
+                    offset.unsigned_abs().into(),
                 )
             } else {
                 (
                     LoadStoreAddressingMode::RelativeBackward,
-                    offset.unsigned_abs(),
+                    offset.unsigned_abs().into(),
                 )
             }
         }
@@ -523,14 +525,14 @@ fn control_register(sign: AsmControlRegister) -> ControlRegister {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DonkeyProgram {
     pub instructions: Vec<Instruction>,
-    pub entry_point: usize,
+    pub entry_point: InstructionPointer,
 }
 
 impl DonkeyProgram {
     pub fn write_program(&self, out_file: &str) {
         let mut file = File::create(out_file).unwrap();
         let instruction_layout = LayoutHelper::new();
-        file.write_all(&(self.entry_point as u32).to_le_bytes())
+        file.write_all(&(self.entry_point.0 as u32).to_le_bytes())
             .unwrap();
         for ins in &self.instructions {
             let encoded = instruction_layout.encode_instruction(ins);
@@ -545,7 +547,7 @@ impl DonkeyProgram {
         let mut file = File::open(in_file).unwrap();
         let mut all_bytes = vec![];
         file.read_to_end(&mut all_bytes).unwrap();
-        let entry_point = u32::from_le_bytes(all_bytes[0..4].try_into().unwrap()) as usize;
+        let entry_point = u32::from_le_bytes(all_bytes[0..4].try_into().unwrap());
         let mut instructions = vec![];
         for i in (4..all_bytes.len()).step_by(4) {
             let instruction_bytes = &all_bytes[i..=(i + 3)];
@@ -557,7 +559,7 @@ impl DonkeyProgram {
         }
         DonkeyProgram {
             instructions,
-            entry_point,
+            entry_point: InstructionPointer(entry_point as usize),
         }
     }
 }
@@ -669,7 +671,7 @@ pub fn as_donkey_vm_program(program: &AsmProgram) -> DonkeyProgram {
             },
             AssemblyInstruction::CallFromStack => Instruction::Call {
                 source: AddressJumpAddressSource::PopFromStack,
-                offset: 0,
+                offset: 0.into(),
             },
             AssemblyInstruction::Label { label: _ } => panic!("Label reached ASM compiler"),
             AssemblyInstruction::Return => Instruction::Return,
@@ -683,11 +685,11 @@ pub fn as_donkey_vm_program(program: &AsmProgram) -> DonkeyProgram {
             },
             AssemblyInstruction::JumpIfZeroFromStack { .. } => Instruction::JumpIfZero {
                 source: AddressJumpAddressSource::PopFromStack,
-                offset: 0,
+                offset: 0.into(),
             },
             AssemblyInstruction::JumpIfNotZeroFromStack { .. } => Instruction::JumpIfNotZero {
                 source: AddressJumpAddressSource::PopFromStack,
-                offset: 0,
+                offset: 0.into(),
             },
             AssemblyInstruction::Jump { offset } => Instruction::JumpUnconditional {
                 source: AddressJumpAddressSource::FromOperand,
@@ -695,7 +697,7 @@ pub fn as_donkey_vm_program(program: &AsmProgram) -> DonkeyProgram {
             },
             AssemblyInstruction::JumpFromStack => Instruction::JumpUnconditional {
                 source: AddressJumpAddressSource::PopFromStack,
-                offset: 0,
+                offset: 0.into(),
             },
             AssemblyInstruction::UnresolvedJumpIfZero { label: _ } => {
                 panic!("Unresolved jz reached ASM compiler!")
@@ -713,7 +715,7 @@ pub fn as_donkey_vm_program(program: &AsmProgram) -> DonkeyProgram {
         .symbol_table
         .get("FUNC_main")
         .or_else(|| program.symbol_table.get("main"))
-        .unwrap_or(&0_u32) as usize;
+        .unwrap_or(&InstructionPointer(0));
 
     DonkeyProgram {
         instructions,
@@ -776,7 +778,7 @@ main:
             AssemblyInstruction::Label {
                 label: "main".to_string(),
             },
-            AssemblyInstruction::StackOffset { bytes: 16 },
+            AssemblyInstruction::StackOffset { bytes: 16.into() },
             AssemblyInstruction::PushImmediate {
                 bytes: 4,
                 shift_size: 0,
@@ -887,18 +889,18 @@ another:
         let result = resolve(&parse_asm(asm));
 
         let expected = vec![
-            AssemblyInstruction::StackOffset { bytes: 16 },
-            AssemblyInstruction::Call { offset: 2 },
+            AssemblyInstruction::StackOffset { bytes: 16.into() },
+            AssemblyInstruction::Call { offset: 2.into() },
             AssemblyInstruction::PushImmediate {
                 bytes: 4,
                 shift_size: 0,
                 immediate: 2u16.to_le_bytes(),
             },
-            AssemblyInstruction::Jump { offset: 7 },
-            AssemblyInstruction::JumpIfZero { offset: 2 },
-            AssemblyInstruction::JumpIfNotZero { offset: 0 },
-            AssemblyInstruction::Call { offset: 7 },
-            AssemblyInstruction::Call { offset: 0 },
+            AssemblyInstruction::Jump { offset: 7.into() },
+            AssemblyInstruction::JumpIfZero { offset: 2.into() },
+            AssemblyInstruction::JumpIfNotZero { offset: 0.into() },
+            AssemblyInstruction::Call { offset: 7.into() },
+            AssemblyInstruction::Call { offset: 0.into() },
             AssemblyInstruction::Return,
         ];
 

@@ -1,5 +1,5 @@
 use crate::{
-    semantic::hir::{HIRExpr, HIRTypedBoundName, TrivialHIRExpr, HIR},
+    semantic::hir::{HIRExpr, HIRTypedBoundName, HIR},
     types::type_errors::{TypeErrors, VariableNotFound},
 };
 
@@ -15,7 +15,7 @@ fn check_expr<T>(
     errors: &mut TypeErrors,
 ) -> bool {
     match expr {
-        HIRExpr::Trivial(TrivialHIRExpr::Variable(v), ..) => {
+        HIRExpr::Variable(v, ..) => {
             if declarations_found.get(v).is_none() {
                 errors.variable_not_found.push(VariableNotFound {
                     on_function: function_name.to_string(),
