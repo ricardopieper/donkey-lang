@@ -1,14 +1,17 @@
 Donkey lang
 ==========
 
-Donkey is a python-like, interpreted (?), statically typed programming language.
+Donkey is a python-like, interpreted and compiled (with LLVM), statically typed programming language.
 
-Most of the parsing code was copied from my Horse interpreter at github.com/ricardopieper/horse repository. 
+This repo contains 3 execution backends:
 
-This interpreter is not production-ready nor it will ever be. This is for my study only.
+ - donkey_vm: A bytecode and VM built from scratch to study how to make interpreters. It's not particularly fast.
+ - lambda: A strategy of compiling from the MIR representation to closures. No bytecode, just closure functions generated from the code. I don't know how it would behave in large codebases, but it's a peculiar strategy that runs faster than bytecode interpretation.
+ - llvm: Just using llvm.
 
-I can barely run some code, call functions, and have a more or less functioning VM and assembler. It's all a mess
-since i'm just studying it and don't know how to properly represent things like types in memory. 
+This interpreter is not production-ready nor it will ever be. This is for my study only, which explains the mess. The many backends may not be compatible with each other.
+
+I can barely run some code, call functions, and have a more or less functioning VM and assembler. 
 
 Syntax will be based on python but the VM will be far more lightweight. Preferably in the future we won't have a VM. We wont have classes, just structs and impls like Rust. I will try to implement some trait-like system as well, so there will be syntax for that. While the syntax looks like python, it doesn't follow Python's object model or most of the language's built-in type naming. When it does it's coincidental. I'm not a fan of the lambda syntax in Python, so I might change that, preferably using more or less the same syntax as regular function definitions.
 
