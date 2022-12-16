@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::{
-    compiler::layouts::{ByteRange, Bytes},
+    compiler::layouts::{Bytes},
     donkey_vm::{asm::assembler::DonkeyProgram, vm::instructions::AddressJumpAddressSource},
 };
 
@@ -1097,7 +1097,7 @@ mod tests {
 
     fn run_code(code: &str) -> (Memory, ControlRegisterValues) {
         let assembled = assemble(code);
-        let (mut mem, mut registers, mut visualizer) = prepare_vm();
+        let (mem, registers, _visualizer) = prepare_vm();
         //print_stack(&mem, &registers);
         let mut donkey = DonkeyVMRunner::new(mem, registers);
         donkey.run(&assembled);
@@ -1232,10 +1232,10 @@ FUNC_main:
         jmp main
 ";
         let assembled = assemble(code);
-        let (mut memory, mut registers, __index__) = prepare_vm();
+        let (_memory, registers, __index__) = prepare_vm();
 
         for _ in 0..50 {
-            let inst = &assembled.instructions[registers.ip.0];
+            let _inst = &assembled.instructions[registers.ip.0];
             //execute(inst, &mut memory, &mut registers);
         }
         assert_eq!(registers.ip.0, 0);
@@ -1251,11 +1251,11 @@ FUNC_main:
         jmp main
 ";
         let assembled = assemble(code);
-        let (mut memory, mut registers, _) = prepare_vm();
+        let (_memory, registers, _) = prepare_vm();
         let beginning_sp = registers.sp;
         for _ in 0..(3 * 10) {
             //execute the entire loop 10 times
-            let inst = &assembled.instructions[registers.ip.0];
+            let _inst = &assembled.instructions[registers.ip.0];
             //execute(inst, &mut memory, &mut registers);
             //print_stack(&memory, &registers);
         }

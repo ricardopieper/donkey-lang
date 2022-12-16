@@ -108,7 +108,7 @@ impl Memory {
     pub fn get_ptr<T>(&self, offset: Bytes) -> *const T {
         unsafe { self.mem.as_ptr().offset(offset.0 as isize) as *const T }
     }
-    
+
     pub fn native_read<T: NativeNumericType<T> + Copy>(&self, address: Bytes) -> T {
         unsafe { *self.get_ptr::<T>(address) }
     }
@@ -138,7 +138,7 @@ impl Memory {
             );
         }
     }
-    
+
     pub fn copy_with_len(&mut self, address_from: Bytes, address_to: Bytes, len: Bytes) {
         unsafe {
             std::ptr::copy_nonoverlapping::<u8>(

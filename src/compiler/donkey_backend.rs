@@ -6,7 +6,7 @@ use crate::donkey_vm::asm::asm_instructions::{
 use crate::semantic::hir::{Checked, HIRExpr, LiteralHIRExpr};
 use crate::semantic::mir::{
     BlockId, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode, MIRTypedBoundName,
-    TypecheckedExpression, ScopeId,
+    ScopeId, TypecheckedExpression,
 };
 use crate::types::type_constructor_db::TypeSign;
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
@@ -117,7 +117,7 @@ fn generate_literal_expr(
     expression: &LiteralHIRExpr,
     literal_type: TypeInstanceId,
     bytecode: &mut DonkeyEmitter,
-    scope: &ScopeVariables,
+    _scope: &ScopeVariables,
 ) -> Bytes {
     let size = literal_type.size(type_db).try_into().unwrap();
     match &expression {
@@ -881,7 +881,7 @@ mod test {
         },
         semantic::{
             hir::Checked,
-            mir::{hir_to_mir, MIRTopLevelNode, TypecheckedExpression},
+            mir::{hir_to_mir, MIRTopLevelNode},
             type_checker::check_type,
         },
         types::{
@@ -939,7 +939,7 @@ mod test {
         let resolved = resolve(&generated_asm.assembly);
         let as_instructions = as_donkey_vm_program(&resolved);
 
-        let (mut memory, mut registers, mut visualizer) = runner::prepare_vm();
+        let (memory, registers, _visualizer) = runner::prepare_vm();
 
         let mut donkey = DonkeyVMRunner::new(memory, registers);
 

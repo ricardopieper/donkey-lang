@@ -27,12 +27,12 @@ impl TypeInstanceId {
 
     pub fn is_integer(self, type_db: &TypeInstanceManager) -> bool {
         let types = &type_db.common_types;
-        self == types.i32 || self == types.i64 || self == types.u32 || self == types.u64 
+        self == types.i32 || self == types.i64 || self == types.u32 || self == types.u64
     }
 
     pub fn is_float(self, type_db: &TypeInstanceManager) -> bool {
         let types = &type_db.common_types;
-        self == types.f32 || self == types.f64 
+        self == types.f32 || self == types.f64
     }
 }
 

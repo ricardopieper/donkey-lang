@@ -1,9 +1,9 @@
-use std::ops::Not;
+
 
 use super::{
     hir::{
         Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
-        InferredTypeHIRRoot, LiteralHIRExpr, NotChecked, HIR,
+        InferredTypeHIRRoot, NotChecked, HIR,
     },
     hir_printer::expr_str,
     mir_printer::PrintableExpression,

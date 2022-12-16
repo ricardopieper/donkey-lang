@@ -1523,7 +1523,6 @@ if x == 0:
         assert_eq!(expected, result);
     }
 
-    
     #[test]
     fn if_statement_with_print_after() {
         let tokens = tokenize(

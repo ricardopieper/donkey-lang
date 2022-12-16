@@ -4,7 +4,6 @@
 #![feature(generic_const_exprs)]
 #![feature(const_trait_impl)]
 
-
 mod ast;
 mod commons;
 mod compiler;
@@ -17,21 +16,21 @@ mod types;
 use crate::ast::lexer;
 use crate::ast::parser;
 use crate::compiler::donkey_backend::generate_donkey_vm;
-use crate::donkey_vm::asm::asm_printer;
+
 use crate::donkey_vm::asm::assembler::as_donkey_vm_program;
 use crate::donkey_vm::asm::assembler::resolve;
-use crate::donkey_vm::vm::instructions::Instruction;
+
 use crate::lambda_vm::lambda_compiler;
-use crate::lambda_vm::lambda_runner;
+
 use crate::lambda_vm::lambda_runner::LambdaRunner;
 use crate::semantic::hir_printer;
-use crate::semantic::hir_printer::print_hir;
+
 use std::env;
 use std::fs;
-use std::process::Command;
-use std::time::Instant;
 
-use crate::donkey_vm::vm::memory::Memory;
+
+
+
 use crate::donkey_vm::vm::runner;
 
 #[allow(unused_imports)]
@@ -51,14 +50,10 @@ use llvm::llvm_backend::generate_llvm;
 use semantic::analysis::AnalysisResult;
 use semantic::hir::Checked;
 use semantic::mir::MIRTopLevelNode;
-use tracy_client::frame_name;
-use tracy_client::Client;
 
 
 
 fn main() {
- 
-
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -85,7 +80,7 @@ fn main() {
 
         assert_eq!(program, program_decoded);
 
-        let (mut memory, mut registers, mut visualizer) = runner::prepare_vm();
+        let (memory, registers, _visualizer) = runner::prepare_vm();
 
         let mut runner = DonkeyVMRunner::new(memory, registers);
         runner.run(&program_decoded);
@@ -102,14 +97,19 @@ fn main() {
 
         program.write_program(out_file);
     } else if args.contains(&"native".to_string()) {
-
         let now = std::time::Instant::now();
 
-        let mod_5 = compute_mod5();
+        let mut mod_5: i32 = 0;
+        for _i in 0..1 {
+            mod_5 += compute_mod5();
+            println!("{mod_5}");
+        }
 
         let finish = now.elapsed();
-        println!("Time: {elapsed}ns, {mod_5}", elapsed = finish.as_nanos());
-
+        println!(
+            "Time avg: {elapsed}s, {mod_5}",
+            elapsed = finish.as_secs_f64() / 1.0
+        );
     } else if args.contains(&"lambda".to_string()) {
         let (analysis, mir) = analysis(&args[1]);
 
@@ -134,7 +134,6 @@ fn main() {
 
         let finish = now.elapsed();
         println!("Time: {elapsed}ms", elapsed = finish.as_millis());
-
     } else if args.contains(&"llvm".to_string()) {
         let (analysis, mir) = analysis(&args[1]);
 
@@ -149,8 +148,7 @@ fn main() {
         }
 
         generate_llvm(&analysis.type_db, &mir).unwrap();
-
-    }  else {
+    } else {
         let (generated_asm, ..) = compile(&args[1]);
 
         let (memory, registers, _) = runner::prepare_vm();
@@ -168,12 +166,12 @@ fn main() {
     }
 }
 
+#[inline(never)]
 fn compute_mod5() -> i32 {
-    let mut x = 0;
-    let mut y = 0;
-    let mut mod_5 = 0;
-    while x < 900000 {
-        y = y + 1;
+    let mut x: i32 = 0;
+
+    let mut mod_5: i32 = 0;
+    while x < 900000000 {
         x = x + 1;
         if x % 5 == 0 {
             mod_5 = mod_5 + 1

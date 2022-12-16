@@ -1,4 +1,4 @@
-use std::{collections::HashMap, mem, rc::Rc};
+use std::{collections::HashMap};
 
 use crate::{
     ast::lexer::Operator,
@@ -9,7 +9,7 @@ use crate::{
     },
     semantic::{
         hir::{Checked, HIRExpr, LiteralHIRExpr},
-        mir::{BlockId, MIRBlockFinal, MIRBlockNode, MIRTopLevelNode, TypecheckedExpression},
+        mir::{BlockId, MIRBlockFinal, MIRBlockNode, MIRTopLevelNode},
     },
     types::type_instance_db::{TypeInstanceId, TypeInstanceManager},
 };
@@ -176,7 +176,7 @@ impl<'memory, 'typemanager> LambdaCompiler<'memory, 'typemanager> {
                     Operator::LessEquals => todo!(),
                 };
             }
-            HIRExpr::MethodCall(obj, name, _, _, _) => {
+            HIRExpr::MethodCall(_obj, name, _, _, _) => {
                 println!("Method call to {name}");
                 todo!()
             }
@@ -313,11 +313,11 @@ pub fn compile(
     for node in mir {
         match node {
             MIRTopLevelNode::DeclareFunction {
-                function_name,
-                parameters,
+                function_name: _,
+                parameters: _,
                 body: block,
                 scopes,
-                return_type,
+                return_type: _,
             } => {
                 let function_layout = generate_function_layout(&scopes, type_db);
                 let mut lambda_function = LambdaFunction {
@@ -366,7 +366,7 @@ pub fn compile(
                                     }
                                     //todo!("Function calls not implemented")
                                 } else {
-                                    let panic_op = Box::new(move |mem: &mut Memory, ctrl: &mut ControlRegisterValues| {
+                                    let panic_op = Box::new(move |_mem: &mut Memory, _ctrl: &mut ControlRegisterValues| {
                                         panic!("Every function call other than print panics!");
                                     });
                                     block_code.push(panic_op);
@@ -377,20 +377,22 @@ pub fn compile(
 
                     block_code.reverse();
                     let accumulator: Lambda = if block_code.len() == 0 {
-                        Box::new(|mem, ctrl| ctrl.sp)
+                        Box::new(|_mem, ctrl| ctrl.sp)
                     } else {
                         let mut accumulator: Lambda = block_code.pop().unwrap();
                         while block_code.len() > 0 {
                             let next = block_code.pop().unwrap();
 
-                            accumulator = Box::new(move |mem: &mut Memory,ctrl: &mut ControlRegisterValues| {
-                                accumulator(mem, ctrl);
-                                next(mem, ctrl)
-                            });
+                            accumulator = Box::new(
+                                move |mem: &mut Memory, ctrl: &mut ControlRegisterValues| {
+                                    accumulator(mem, ctrl);
+                                    next(mem, ctrl)
+                                },
+                            );
                         }
                         accumulator
                     };
-                    
+
                     let lambda = LambdaBlock {
                         code: accumulator,
                         finish: match &code_block.finish {
@@ -405,12 +407,12 @@ pub fn compile(
                             }
                             MIRBlockFinal::GotoBlock(block) => {
                                 let block_clone = *block;
-                                Box::new(move |mem, ctrl| Some(block_clone))
+                                Box::new(move |_mem, _ctrl| Some(block_clone))
                             }
                             MIRBlockFinal::Return(_, _) => {
                                 panic!("Return value not supported yet")
                             }
-                            MIRBlockFinal::EmptyReturn => Box::new(move |mem, ctrl| None),
+                            MIRBlockFinal::EmptyReturn => Box::new(move |_mem, _ctrl| None),
                         },
                     };
 

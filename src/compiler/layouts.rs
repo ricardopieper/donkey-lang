@@ -1,15 +1,12 @@
 use std::{
-    borrow::Borrow,
     collections::HashMap,
-    convert::Infallible,
     fmt::Display,
     iter::Sum,
-    num::TryFromIntError,
-    ops::{Add, AddAssign, Deref, Shl, Sub, SubAssign},
+    ops::{Add, AddAssign, Shl, Sub, SubAssign},
 };
 
 use crate::{
-    donkey_vm::vm::memory::NativeNumericType, semantic::mir::{MIRScope, ScopeId},
+    semantic::mir::{MIRScope, ScopeId},
     types::type_instance_db::TypeInstanceManager,
 };
 
@@ -236,10 +233,13 @@ fn build_write_scope_byte_layout(
     for (name, size, scope) in found_var.into_iter().rev() {
         map.insert(
             name,
-            (ByteRange {
-                begin: used_bytes,
-                end: used_bytes + size,
-            }, scope)
+            (
+                ByteRange {
+                    begin: used_bytes,
+                    end: used_bytes + size,
+                },
+                scope,
+            ),
         );
         used_bytes += size;
     }
