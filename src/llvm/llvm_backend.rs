@@ -10,12 +10,8 @@ use inkwell::module::Module;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::{
-    AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
-};
-use inkwell::values::{
-    BasicValueEnum, FunctionValue, PointerValue,
-};
+use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{LLVMReference, OptimizationLevel};
 use llvm_sys::prelude::LLVMModuleRef;
 use llvm_sys::transforms::pass_builder::{

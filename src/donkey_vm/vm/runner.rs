@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::{
-    compiler::layouts::{Bytes},
+    compiler::layouts::Bytes,
     donkey_vm::{asm::assembler::DonkeyProgram, vm::instructions::AddressJumpAddressSource},
 };
 

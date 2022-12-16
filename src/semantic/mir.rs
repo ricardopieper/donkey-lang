@@ -1,5 +1,3 @@
-
-
 use super::{
     hir::{
         Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
