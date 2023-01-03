@@ -92,8 +92,8 @@ pub struct CommonTypeInstances {
     pub u64: TypeInstanceId,
     pub f32: TypeInstanceId,
     pub f64: TypeInstanceId,
+    pub u8: TypeInstanceId,
     pub bool: TypeInstanceId,
-    pub string: TypeInstanceId,
 }
 
 pub struct TypeInstanceManager {
@@ -102,8 +102,8 @@ pub struct TypeInstanceManager {
     pub common_types: CommonTypeInstances,
 }
 
-pub enum FieldOrMethod<'type_db> {
-    Field(&'type_db TypeInstanceStructField),
+pub enum StructMember<'type_db> {
+    Field(&'type_db TypeInstanceStructField, usize),
     Method(&'type_db TypeInstanceStructMethod),
     NotFound,
 }
@@ -120,24 +120,28 @@ impl TypeInstanceManager {
         item.init_builtin();
         item
     }
+    
+    pub fn find_by_name(&self, name: &str) -> Option<&TypeInstance> {
+        self.types.iter().find(|t| t.name == name)
+    }
 
     pub fn get_instance(&self, id: TypeInstanceId) -> &TypeInstance {
         &self.types[id.0]
     }
 
-    pub fn find_field_or_method<'this>(
+    pub fn find_struct_member<'this>(
         &'this self,
         id: TypeInstanceId,
         name: &str,
-    ) -> FieldOrMethod<'this> {
+    ) -> StructMember<'this> {
         let instance = self.get_instance(id);
-        if let Some(field) = instance.fields.iter().find(|x| x.name == name) {
-            return FieldOrMethod::Field(field);
+        if let Some((index, field)) = instance.fields.iter().enumerate().find(|x| x.1.name == name) {
+            return StructMember::Field(field, index);
         }
         if let Some(method) = instance.methods.iter().find(|x| x.name == name) {
-            return FieldOrMethod::Method(method);
+            return StructMember::Method(method);
         }
-        FieldOrMethod::NotFound
+        StructMember::NotFound
     }
 
     pub fn construct_function(
@@ -175,16 +179,20 @@ impl TypeInstanceManager {
             }
         }
 
+        let function_type = self
+            .constructors
+            .find(self.constructors.common_types.function);
+
+        let TypeKind::Primitive { size } = function_type.kind else {
+            panic!("Function type should be a primitive type")
+        };
+
         let new_type_id = TypeInstanceId(self.types.len());
         let constructed = TypeInstance {
             id: new_type_id,
             base: self.constructors.common_types.function,
             is_function: true,
-            size: self
-                .constructors
-                .find(self.constructors.common_types.function)
-                .rep_size
-                .unwrap(),
+            size,
             name: String::new(), //@TODO build name
             function_args: arg_types.to_vec(),
             function_return_type: Some(return_type),
@@ -423,10 +431,8 @@ impl TypeInstanceManager {
     fn compute_size(&self, constructed: &TypeInstance) -> Bytes {
         //compute size of fields if they are struct, if they are primitive then the type constructor already has this info
         let constructor = self.constructors.find(constructed.base);
-        if constructor.kind == TypeKind::Primitive {
-            constructor
-                .rep_size
-                .expect("Primitive type should have rep_size")
+        if let TypeKind::Primitive { size } = constructor.kind {
+            size
         } else {
             constructed
                 .fields
@@ -448,12 +454,12 @@ impl TypeInstanceManager {
         make_type!(i32);
         make_type!(void);
         make_type!(bool);
-        make_type!(string);
         make_type!(i64);
         make_type!(u32);
         make_type!(u64);
         make_type!(f32);
         make_type!(f64);
+        make_type!(u8);
     }
 }
 

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
+use crate::types::type_constructor_db::{TypeKind, TypeSign};
 use crate::types::type_errors::{TypeConstructionFailure, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::compiler_errors::CompilerError;
 use super::hir::{GlobalsInferredMIRRoot, HIRRoot, HIRType, HIRTypedBoundName, StartingHIRRoot};
-use super::hir_type_resolution::hir_type_to_usage;
+use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 
 #[derive(Debug, Clone)]
 pub struct PartiallyResolvedFunctionSignature {
@@ -64,6 +65,7 @@ impl NameRegistry {
     }
 }
 
+/*
 fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegistry) {
     let f64_f64 = type_db.construct_function(&[type_db.common_types.f64], type_db.common_types.f64);
     let f32_f32 = type_db.construct_function(&[type_db.common_types.f32], type_db.common_types.f32);
@@ -78,16 +80,16 @@ fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegis
     registry.insert("pow", f64_f64);
     registry.insert("print", string_void);
     registry.insert("panic", argless_void);
-}
+}*/
 
-/*Builds a name registry and resolves the top  */
+/*Builds a name registry and resolves the top level declarations*/
 pub fn build_name_registry_and_resolve_signatures(
     type_db: &mut TypeInstanceManager,
     registry: &mut NameRegistry,
     errors: &mut TypeErrors,
     mir: Vec<StartingHIRRoot>,
 ) -> Result<Vec<GlobalsInferredMIRRoot>, CompilerError> {
-    register_builtins(type_db, registry);
+    //register_builtins(type_db, registry);
     let mut new_mir = vec![];
 
     //first collect all globals by navigating through all functions and assignments
@@ -99,13 +101,18 @@ pub fn build_name_registry_and_resolve_signatures(
                 return_type,
                 body,
                 meta,
+                is_intrinsic,
             } => {
                 let mut param_types = vec![];
                 let mut resolved_params = vec![];
 
                 for type_def in parameters {
-                    let usage =
-                        hir_type_to_usage(&function_name, &type_def.typename, type_db, errors)?;
+                    let usage = hir_type_to_usage(
+                        RootElementType::Function(&function_name),
+                        &type_def.typename,
+                        type_db,
+                        errors,
+                    )?;
 
                     let constructed = type_db.construct_usage(&usage);
                     if let Err(e) = constructed {
@@ -125,7 +132,12 @@ pub fn build_name_registry_and_resolve_signatures(
                     param_types.push(type_id);
                 }
 
-                let usage = hir_type_to_usage(&function_name, &return_type, type_db, errors)?;
+                let usage = hir_type_to_usage(
+                    RootElementType::Function(&function_name),
+                    &return_type,
+                    type_db,
+                    errors,
+                )?;
 
                 let constructed = type_db.construct_usage(&usage);
                 if let Err(e) = constructed {
@@ -148,6 +160,53 @@ pub fn build_name_registry_and_resolve_signatures(
                     parameters: resolved_params,
                     body,
                     return_type,
+                    meta,
+                    is_intrinsic,
+                }
+            }
+            HIRRoot::StructDeclaration {
+                struct_name,
+                type_parameters,
+                fields,
+                meta,
+            } => {
+                let type_id =
+                    type_db
+                        .constructors
+                        .add(TypeKind::Struct, TypeSign::Unsigned, &struct_name);
+                let mut resolved_fields = vec![];
+                for field in fields.iter() {
+                    let type_usage = hir_type_to_usage(
+                        RootElementType::Struct(&struct_name),
+                        &field.typename,
+                        type_db,
+                        errors,
+                    )?;
+                    type_db
+                        .constructors
+                        .add_field(type_id, &field.name, &type_usage);
+
+                    let constructed = type_db.construct_usage(&type_usage);
+                    if let Err(e) = constructed {
+                        errors
+                            .type_construction_failure
+                            .push(TypeConstructionFailure {
+                                on_function: struct_name,
+                                error: e,
+                            });
+                        return Err(CompilerError::TypeInferenceError);
+                    }
+
+                    resolved_fields.push(HIRTypedBoundName {
+                        name: field.name.to_string(),
+                        typename: type_usage,
+                    })
+                }
+
+                HIRRoot::StructDeclaration {
+                    struct_name,
+                    fields: resolved_fields,
+                    type_parameters,
                     meta,
                 }
             }

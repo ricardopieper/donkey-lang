@@ -1,6 +1,9 @@
 use crate::{
     semantic::hir::HIRType,
-    types::type_instance_db::{TypeInstanceId, TypeInstanceManager},
+    types::{
+        type_constructor_db::TypeUsage,
+        type_instance_db::{TypeInstanceId, TypeInstanceManager},
+    },
 };
 pub trait TypeNamePrinter {
     fn print_name(&self, type_db: &TypeInstanceManager) -> String;
@@ -9,6 +12,26 @@ pub trait TypeNamePrinter {
 impl TypeNamePrinter for TypeInstanceId {
     fn print_name(&self, type_db: &TypeInstanceManager) -> String {
         type_db.get_instance(*self).name.clone()
+    }
+}
+
+impl TypeNamePrinter for TypeUsage {
+    fn print_name(&self, type_db: &TypeInstanceManager) -> String {
+        match self {
+            TypeUsage::Given(id) => type_db.constructors.find(*id).name.to_string(),
+            TypeUsage::Generic(parameter) => parameter.0.to_string(),
+            TypeUsage::Parameterized(constructor, parameters) => {
+                let root = type_db.constructors.find(*constructor).name.to_string();
+
+                let params = parameters
+                    .iter()
+                    .map(|_x| self.print_name(type_db))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                format!("{root}<{params}>")
+            }
+        }
     }
 }
 

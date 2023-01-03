@@ -139,7 +139,11 @@ fn print_hir_body_str(
 }
 
 fn print_hir_str(
-    node: &HIRRoot<impl TypeNamePrinter, HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>>,
+    node: &HIRRoot<
+        impl TypeNamePrinter,
+        HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
+        impl TypeNamePrinter,
+    >,
     indent: &str,
     type_db: &TypeInstanceManager,
 ) -> String {
@@ -203,6 +207,7 @@ pub fn print_hir(
     mir: &[HIRRoot<
         impl TypeNamePrinter,
         HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
+        impl TypeNamePrinter,
     >],
     type_db: &TypeInstanceManager,
 ) -> String {

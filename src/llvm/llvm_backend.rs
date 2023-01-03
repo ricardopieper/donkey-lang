@@ -1,34 +1,34 @@
 use std::collections::HashMap;
 use std::error::Error;
-use std::ffi::CString;
+
+use std::ptr::null;
 use std::time::Instant;
 
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 
+use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
-use inkwell::{LLVMReference, OptimizationLevel};
-use llvm_sys::prelude::LLVMModuleRef;
-use llvm_sys::transforms::pass_builder::{
-    LLVMCreatePassBuilderOptions, LLVMDisposePassBuilderOptions,
-    LLVMPassBuilderOptionsSetLicmMssaOptCap, LLVMPassBuilderOptionsSetLoopInterleaving,
-    LLVMPassBuilderOptionsSetLoopUnrolling, LLVMPassBuilderOptionsSetLoopVectorization,
-    LLVMPassBuilderOptionsSetMergeFunctions, LLVMPassBuilderOptionsSetSLPVectorization,
-    LLVMRunPasses,
+use inkwell::types::{
+    AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, PointerType, StructType,
 };
+use inkwell::values::{
+    AnyValue, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue,
+};
+use inkwell::{AddressSpace, LLVMReference, OptimizationLevel};
 
 use crate::ast::lexer::Operator;
 use crate::compiler::layouts::FunctionLayout;
-use crate::semantic::hir::HIRExpr;
+use crate::llvm::linker::{link, LinkerError};
+use crate::semantic::hir::{HIRExpr, LiteralHIRExpr};
 use crate::semantic::mir::{
     MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTypedBoundName, ScopeId,
 };
-use crate::types::type_instance_db::TypeInstanceId;
+use crate::types::type_constructor_db::TypeUsage;
+use crate::types::type_instance_db::{StructMember, TypeInstanceId};
 use crate::{
     semantic::{hir::Checked, mir::MIRTopLevelNode},
     types::type_instance_db::TypeInstanceManager,
@@ -40,6 +40,7 @@ pub struct CodeGen<'codegen_scope, 'ctx> {
     module: &'codegen_scope Module<'ctx>,
     type_db: &'codegen_scope TypeInstanceManager,
     type_cache: HashMap<TypeInstanceId, AnyTypeEnum<'ctx>>,
+    functions: HashMap<String, FunctionValue<'ctx>>,
     next_temporary: u32,
     //    fpm: PassManager<FunctionValue<'ctx>>
 }
@@ -58,7 +59,6 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
         }
 
         let this_type = self.type_db.get_instance(instance);
-
         let llvm_any_type: AnyTypeEnum = if instance == self.type_db.common_types.void {
             self.context.void_type().into()
         } else if instance == self.type_db.common_types.i32
@@ -75,10 +75,18 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
             self.context.f64_type().into()
         } else if instance == self.type_db.common_types.bool {
             self.context.bool_type().into()
+        } else if instance == self.type_db.common_types.u8 {
+            self.context.i8_type().into()
+        } else if this_type.base == self.type_db.constructors.common_types.ptr {
+            //@TODO LLVM is moving towards opaque ptrs, llvm 17 won't support this
+            let pointee = self.make_llvm_type(this_type.type_args[0]);
+            self.as_basic_type(pointee)
+                .ptr_type(AddressSpace::Generic)
+                .into()
         } else {
             //if it's not primitive then it's a struct or func
             if this_type.is_function {
-                todo!()
+                todo!("function types not implemented")
             } else {
                 let field_types = this_type
                     .fields
@@ -89,7 +97,12 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                     .iter()
                     .map(|x| self.as_basic_type(*x))
                     .collect::<Vec<_>>();
-                self.context.struct_type(&field_types, false).into()
+
+                let struct_type = self
+                    .context
+                    .opaque_struct_type(&format!("struct.{}", this_type.name));
+                struct_type.set_body(&field_types, false);
+                struct_type.into()
             }
         };
 
@@ -136,8 +149,7 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
         function: FunctionValue<'ctx>,
         var_name: &str,
         var_type: TypeInstanceId,
-        scope: Option<ScopeId>,
-    ) -> (String, PointerValue<'ctx>) {
+    ) -> PointerValue<'ctx> {
         //we create a new builder here because we want to ensure we create the variables in the very beginning
         let builder = self.context.create_builder();
 
@@ -150,13 +162,11 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
             None => builder.position_at_end(first_block),
         };
 
-        let name = make_var_name(scope, var_name);
-
         let llvm_type = self.make_llvm_type(var_type);
         let llvm_type = self.as_basic_type(llvm_type);
 
-        let alloca = builder.build_alloca(llvm_type, &name);
-        (name.to_string(), alloca)
+        let alloca = builder.build_alloca(llvm_type, &var_name);
+        alloca
     }
 
     pub fn generate_for_top_lvl(&mut self, node: &MIRTopLevelNode<Checked>) {
@@ -173,21 +183,21 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                 let function_signature =
                     self.compile_function_signature(&function_name, parameters, *return_type);
 
-                for param in parameters.iter() {
-                    self.create_variable_stack_alloc(
-                        function_signature,
-                        &param.name,
-                        param.type_instance,
-                        None,
-                    );
+                self.functions.insert(function_name.to_string(), function_signature);
+
+                let mut llvm_variables: HashMap<String, BasicValueEnum<'_>> = HashMap::new();
+
+                for (i, param) in function_signature.get_param_iter().enumerate() {
+                    let param_name = &parameters[i].name;
+                    let alloca = self.builder.build_alloca(param.get_type(), param_name);
+                    self.builder.build_store(alloca, param);
+                    llvm_variables.insert(param_name.to_string(), alloca.into());
                 }
 
                 //register the variables first by navigating in the scopes,
                 //but we will just create stack vars on the entry block
                 //if a variable is declared twice with the same name on different scopes
                 //i,e for loop variables, we attach the scope number in which they are.
-
-                let mut llvm_variables = HashMap::new();
 
                 for block in body.iter() {
                     let block_scope = &scopes[block.scope.0];
@@ -196,13 +206,16 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                         name,
                     } in block_scope.boundnames.iter()
                     {
-                        let (llvm_name, ptr) = self.create_variable_stack_alloc(
+                        //if this function has been already loaded by paarameters, then skip
+                        if llvm_variables.contains_key(name) {
+                            continue;
+                        };
+                        let ptr = self.create_variable_stack_alloc(
                             function_signature,
                             &name,
                             *type_instance,
-                            Some(block.scope),
                         );
-                        llvm_variables.insert(llvm_name, ptr);
+                        llvm_variables.insert(name.clone(), ptr.into());
                     }
                 }
 
@@ -247,9 +260,46 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                                     self.compile_expr(block.scope, &symbol_table, expression);
                                 let ptr =
                                     *symbol_table.get(&(path[0].as_str(), block.scope)).unwrap();
-                                self.builder.build_store(ptr, expr_compiled);
+                                match expr_compiled {
+                                    BasicValueEnum::PointerValue(expr_ptr) => {
+                                        let loaded = self
+                                            .builder
+                                            .build_load(expr_ptr, &self.make_temp("var"));
+                                        self.builder.build_store(ptr.into_pointer_value(), loaded);
+                                    }
+                                    _ => {
+                                        self.builder
+                                            .build_store(ptr.into_pointer_value(), expr_compiled);
+                                    }
+                                }
                             }
-                            MIRBlockNode::FunctionCall { .. } => {}
+                            MIRBlockNode::FunctionCall { function, args, .. } => {
+                                let llvm_args = args
+                                    .iter()
+                                    .map(|x| {
+                                        let expr_compiled =
+                                            self.compile_expr(block.scope, &symbol_table, x);
+
+                                            match expr_compiled {
+                                                BasicValueEnum::PointerValue(expr_ptr) => {
+                                                    let loaded =
+                                                        self.builder.build_load(expr_ptr, &self.make_temp("var"));
+                                                    loaded.into()
+                                                }
+                                                _ => {
+                                                    expr_compiled.into()
+                                                }
+                                            }
+
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                if let Some(f) = self.functions.get(function) {
+                                    self.builder.build_call(*f, &llvm_args, &self.make_temp(""));
+                                } else {
+                                    panic!("Function not yet added to llvm IR {function}");
+                                }
+                            }
                         }
                     }
 
@@ -270,7 +320,16 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                         MIRBlockFinal::Return(expr, _) => {
                             let expr_compiled =
                                 self.compile_expr(block.scope, &symbol_table, &expr);
-                            self.builder.build_return(Some(&expr_compiled));
+                            match expr_compiled {
+                                BasicValueEnum::PointerValue(expr_ptr) => {
+                                    let loaded =
+                                        self.builder.build_load(expr_ptr, &self.make_temp("var"));
+                                    self.builder.build_return(Some(&loaded));
+                                }
+                                _ => {
+                                    self.builder.build_return(Some(&expr_compiled));
+                                }
+                            }
                         }
                         MIRBlockFinal::EmptyReturn => {
                             self.builder.build_return(None);
@@ -288,8 +347,27 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
             }
             MIRTopLevelNode::StructDeclaration {
                 struct_name: _,
-                body: _,
-            } => todo!(),
+                fields,
+                type_parameters,
+            } => {}
+            MIRTopLevelNode::IntrinsicFunction {
+                function_name,
+                parameters: _,
+                return_type: _,
+            } => {
+                if function_name == "libc_puts" {
+                    let buf: BasicMetadataTypeEnum<'ctx> = self
+                        .context
+                        .i8_type()
+                        .ptr_type(AddressSpace::Generic)
+                        .into();
+
+                    let puts_fn = self.context.i32_type().fn_type(&[buf], false);
+                    let added_fn = self.module.add_function("puts", puts_fn, None);
+
+                    self.functions.insert("libc_puts".to_string(), added_fn);
+                }
+            }
         }
     }
 
@@ -302,7 +380,7 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
         let types = &self.type_db.common_types;
         match expression {
             HIRExpr::Literal(literal, literal_type, ..) => match literal {
-                crate::semantic::hir::LiteralHIRExpr::Integer(i) => {
+                LiteralHIRExpr::Integer(i) => {
                     if types.i32 == *literal_type {
                         self.context.i32_type().const_int(*i as u64, false).into()
                     } else if types.i64 == *literal_type {
@@ -315,7 +393,7 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                         panic!("Unkown type")
                     }
                 }
-                crate::semantic::hir::LiteralHIRExpr::Float(f) => {
+                LiteralHIRExpr::Float(f) => {
                     if types.f32 == *literal_type {
                         self.context
                             .f32_type()
@@ -327,19 +405,52 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                         panic!("Unkown type")
                     }
                 }
-                crate::semantic::hir::LiteralHIRExpr::Boolean(b) => self
+                LiteralHIRExpr::Boolean(b) => self
                     .context
                     .bool_type()
                     .const_int(if *b { 1 } else { 0 }, false)
                     .into(),
-                crate::semantic::hir::LiteralHIRExpr::String(_) => {
-                    todo!("string literals not implemented in llvm")
+                LiteralHIRExpr::String(s) => {
+                    //build a buf, len struct
+                    let mut null_terminated = s.to_string();
+                    null_terminated.push('\0');
+
+                    //let buf_val = self.context.const_string(null_terminated.as_bytes(), true);
+                    let len_val = self.context.i32_type().const_int(s.len() as u64, false);
+                    let str = self.type_db.find_by_name("str").unwrap();
+                    let llvm_str_type = self.make_llvm_type(str.id);
+
+                    let global_str = self
+                        .builder
+                        .build_global_string_ptr(&null_terminated, ".str");
+                    let buf_val = global_str.as_pointer_value();
+
+                    //allocate struct
+                    let str_alloc = self
+                        .builder
+                        .build_alloca(llvm_str_type.into_struct_type(), "_str");
+                    {
+                        let ptr_to_buf = self
+                            .builder
+                            .build_struct_gep(str_alloc, 0, "_str_buf")
+                            .unwrap();
+                        self.builder.build_store(ptr_to_buf, buf_val);
+                    }
+
+                    {
+                        let ptr_to_len = self
+                            .builder
+                            .build_struct_gep(str_alloc, 1, "_str_len")
+                            .unwrap();
+                        self.builder.build_store(ptr_to_len, len_val);
+                    }
+
+                    str_alloc.into()
                 }
-                crate::semantic::hir::LiteralHIRExpr::None => todo!("none not implemented in llvm"),
+                LiteralHIRExpr::None => todo!("none not implemented in llvm"),
             },
             HIRExpr::Variable(name, ..) => {
-                let ptr = *symbol_table.get(&(name.as_str(), current_scope)).unwrap();
-                self.builder.build_load(ptr, &self.make_temp("var")).into()
+                return *symbol_table.get(&(name.as_str(), current_scope)).unwrap();
             }
             HIRExpr::Cast(_, _, _) => todo!(),
             HIRExpr::BinaryOperation(lhs, op, rhs, _, ..) => {
@@ -702,7 +813,34 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                 }
             }
             HIRExpr::MethodCall(_, _, _, _, _) => todo!(),
-            HIRExpr::FunctionCall(_, _, _, _) => todo!(),
+            HIRExpr::FunctionCall(function_expr, arg_exprs, _, _) => {
+                //let expr = self.compile_expr(current_scope, symbol_table, &function_expr);
+                let HIRExpr::Variable(var_name, ..) = function_expr.as_ref() else {
+                    panic!(
+                        "Not callable, this is a bug in the type checker: {:?}",
+                        function_expr
+                    )
+                };
+
+                let mut args: Vec<BasicMetadataValueEnum> = vec![];
+                for e in arg_exprs {
+                    let expr_arg = self.compile_expr(current_scope, symbol_table, e);
+                    args.push(expr_arg.into());
+                }
+
+                let function_compiled = self
+                    .module
+                    .get_function(var_name)
+                    .expect("Function does not exist or was not compiled");
+                let call_site_val = self.builder.build_call(
+                    function_compiled,
+                    &args,
+                    &self.make_temp("call_result"),
+                );
+                call_site_val
+                    .try_as_basic_value()
+                    .expect_left("Expected function to return BasicValueEnum")
+            }
             HIRExpr::UnaryExpression(op, expr, ..) => {
                 let lhs_type = expr.get_type();
                 let compiled = self.compile_expr(current_scope, symbol_table, expr);
@@ -729,7 +867,29 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                     }
                 }
             }
-            HIRExpr::MemberAccess(_, _, _, _) => todo!(),
+            //getelementptr
+            HIRExpr::MemberAccess(obj, member, _, _) => {
+                let llvm_expr = self.compile_expr(current_scope, symbol_table, obj);
+
+                let index = match self.type_db.find_struct_member(obj.get_type(), member) {
+                    StructMember::Field(_, idx) => idx,
+                    StructMember::Method(_) => todo!("Unimplemented"),
+                    StructMember::NotFound => {
+                        panic!("Should not reach LLVM with not found struct member")
+                    }
+                };
+                match llvm_expr {
+                    BasicValueEnum::PointerValue(ptr) => self
+                        .builder
+                        .build_struct_gep(ptr, index as u32, &self.make_temp("var"))
+                        .unwrap()
+                        .into(),
+                    _ => {
+                        self.module.print_to_stderr();
+                        todo!("member access to non-ptr llvm type {llvm_expr:?}")
+                    }
+                }
+            }
             HIRExpr::Array(_, _, _) => todo!(),
             _ => {
                 panic!("Unimplemented expr")
@@ -744,55 +904,42 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
     }
 }
 
-type FunctionSymbolTable<'a, 'llvm_ctx> = HashMap<(&'a str, ScopeId), PointerValue<'llvm_ctx>>;
+type FunctionSymbolTable<'a, 'llvm_ctx> = HashMap<(&'a str, ScopeId), BasicValueEnum<'llvm_ctx>>;
 
 fn build_function_symbol_table<'mir, 'f, 'ctx>(
     body: &'mir [MIRBlock<Checked>],
     scopes: &'mir [MIRScope],
     function_layout: &'f FunctionLayout,
-    llvm_variables: HashMap<String, PointerValue<'ctx>>,
+    llvm_variables: HashMap<String, BasicValueEnum<'ctx>>,
 ) -> FunctionSymbolTable<'f, 'ctx> {
-    let mut symbol_table = HashMap::<(&'f str, ScopeId), PointerValue<'ctx>>::new();
+    let mut symbol_table = HashMap::<(&'f str, ScopeId), BasicValueEnum<'ctx>>::new();
     for block in body.iter() {
         let _block_scope = &scopes[block.scope.0];
 
         let variables_on_scope = &function_layout.variables_for_each_scope[block.scope.0];
 
-        for (name, (_, declaring_scope)) in variables_on_scope {
-            let llvm_name = make_var_name(Some(*declaring_scope), &name);
+        for (name, (_, _declaring_scope)) in variables_on_scope {
             let variable_llvm = llvm_variables
-                .get(&llvm_name)
+                .get(name)
                 .expect("Should find the variable here");
-            symbol_table.insert((name, block.scope), *variable_llvm);
+            symbol_table.insert((name, block.scope), (*variable_llvm).into());
         }
     }
     symbol_table
 }
 
-//@TODO maybe use Cow<&str>
-fn make_var_name(scope: Option<ScopeId>, var_name: &str) -> String {
-    match scope {
-        None => var_name.to_string(),
-        Some(ScopeId(0)) => var_name.to_string(),
-        Some(ScopeId(scope_id)) => format!("{var_name}{scope_id}"),
-    }
-}
+fn optimize_module(target_machine: &TargetMachine, module: &Module) {
+    let opts = PassBuilderOptions::create();
+    opts.set_loop_interleaving(true);
+    opts.set_loop_slp_vectorization(true);
+    opts.set_loop_vectorization(true);
+    opts.set_loop_unrolling(true);
+    opts.set_merge_functions(true);
+    opts.set_verify_each(true);
 
-fn optimize_module(target_machine: &TargetMachine, llmod: LLVMModuleRef) {
-    unsafe {
-        let opts = LLVMCreatePassBuilderOptions();
-        LLVMPassBuilderOptionsSetLoopUnrolling(opts, 1);
-        LLVMPassBuilderOptionsSetLoopInterleaving(opts, 1);
-        LLVMPassBuilderOptionsSetLoopVectorization(opts, 1);
-        LLVMPassBuilderOptionsSetLicmMssaOptCap(opts, 1);
-        LLVMPassBuilderOptionsSetSLPVectorization(opts, 1);
-        LLVMPassBuilderOptionsSetMergeFunctions(opts, 1);
-
-        let as_libc = CString::new("default<O3>").unwrap();
-        LLVMRunPasses(llmod, as_libc.as_ptr(), target_machine.get_ref(), opts);
-
-        LLVMDisposePassBuilderOptions(opts);
-    }
+    module
+        .run_passes("default<O0>", target_machine, opts)
+        .unwrap();
 }
 
 pub fn generate_llvm(
@@ -810,17 +957,20 @@ pub fn generate_llvm(
         type_db,
         type_cache: HashMap::new(),
         next_temporary: 0,
+        functions: HashMap::new()
     };
 
     for mir_node in mir_top_level_nodes {
         codegen.generate_for_top_lvl(mir_node);
     }
 
+    //module.print_to_stderr();
+
     let target_machine = get_native_target_machine();
 
-    optimize_module(&target_machine, unsafe { module.get_ref() });
+    optimize_module(&target_machine, &module);
 
-    module.print_to_stderr();
+    //module.print_to_stderr();
 
     let ee = module
         .create_jit_execution_engine(OptimizationLevel::Aggressive)
@@ -834,17 +984,9 @@ pub fn generate_llvm(
         }
     };
 
-    let now = Instant::now();
-    let mut out = 0;
-    for _i in 0..1 {
-        unsafe {
-            out += compiled_fn.call();
-            println!("{out}")
-        }
-    }
-
-    let elapsed = now.elapsed();
-    println!("Code took {}s to run, {out}", elapsed.as_secs_f64() / 1.0);
+    unsafe { compiled_fn.call(); };
+    //let elapsed = now.elapsed();
+    //println!("Code took {}s to run, {out}", elapsed.as_secs_f64() / 1.0);
 
     let asm_buffer = target_machine
         .write_to_memory_buffer(&mut codegen.module, FileType::Assembly)
@@ -855,8 +997,23 @@ pub fn generate_llvm(
         .unwrap();
     // let object_file = obj_buffer.create_object_file().unwrap();
 
-    std::fs::write("./compiled.asm", asm_buffer.as_slice()).unwrap();
-    std::fs::write("./compiled.obj", obj_buffer.as_slice()).unwrap();
+    let file_name = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .to_string();
+    let output_obj_file = format!("./donkey_{file_name}.obj");
+
+    std::fs::write("./last_compiled.asm", asm_buffer.as_slice()).unwrap();
+    std::fs::write(&output_obj_file, obj_buffer.as_slice()).unwrap();
+
+    match link(&output_obj_file, "./last_compiled") {
+        Ok(_) => {}
+        Err(LinkerError::GenericLinkerError(e)) => {
+            eprintln!("Linker error!\n{e}")
+        }
+    }
+    std::fs::remove_file(output_obj_file).unwrap();
 
     Ok(())
 }

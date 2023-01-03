@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod compiler_errors;
+pub mod context;
 pub mod first_assignments;
 pub mod hir;
 pub mod hir_printer;

@@ -5,6 +5,8 @@ use crate::ast::lexer::Operator;
 use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
+use crate::types::type_constructor_db::GenericParameter;
+use crate::types::type_constructor_db::TypeUsage;
 use crate::types::type_instance_db::TypeInstanceId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -47,13 +49,14 @@ pub type FirstAssignmentsDeclaredHIR = HIR<HIRTypeDef, HIRExpr<()>>;
 pub type InferredTypeHIR = HIR<TypeInstanceId, HIRExpr<TypeInstanceId>>;
 
 //HIR roots right after AST transformation
-pub type StartingHIRRoot = HIRRoot<HIRType, UninferredHIR>;
+pub type StartingHIRRoot = HIRRoot<HIRType, UninferredHIR, HIRType>;
 //HIR roots after inferring and registering globals, bodies have not changed
-pub type GlobalsInferredMIRRoot = HIRRoot<TypeInstanceId, UninferredHIR>;
+pub type GlobalsInferredMIRRoot = HIRRoot<TypeInstanceId, UninferredHIR, TypeUsage>;
 //HIR roots now with body changed, first assignments became declarations
-pub type FirstAssignmentsDeclaredHIRRoot = HIRRoot<TypeInstanceId, FirstAssignmentsDeclaredHIR>;
+pub type FirstAssignmentsDeclaredHIRRoot =
+    HIRRoot<TypeInstanceId, FirstAssignmentsDeclaredHIR, TypeUsage>;
 //HIR roots with bodies fully inferred
-pub type InferredTypeHIRRoot = HIRRoot<TypeInstanceId, InferredTypeHIR>;
+pub type InferredTypeHIRRoot = HIRRoot<TypeInstanceId, InferredTypeHIR, TypeUsage>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRTypeDef {
@@ -199,17 +202,19 @@ pub struct HIRTypedBoundName<TExprType> {
 The HIR expression is similar to the AST, but can have type information on every node.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HIRRoot<TGlobalTypes, TBodyType> {
+pub enum HIRRoot<TGlobalTypes, TBodyType, TStructFieldsType> {
     DeclareFunction {
         function_name: String,
         parameters: Vec<HIRTypedBoundName<TGlobalTypes>>,
         body: Vec<TBodyType>,
         return_type: TGlobalTypes,
         meta: HIRAstMetadata,
+        is_intrinsic: bool,
     },
     StructDeclaration {
         struct_name: String,
-        fields: Vec<HIRTypedBoundName<TGlobalTypes>>,
+        type_parameters: Vec<GenericParameter>,
+        fields: Vec<HIRTypedBoundName<TStructFieldsType>>,
         meta: HIRAstMetadata,
     },
 }
@@ -386,6 +391,7 @@ fn ast_to_hir(ast: &AST, accum: &mut Vec<UninferredHIR>) {
         AST::WhileStatement { expression, body } => {
             ast_while_to_hir(expression, accum, body, ast);
         }
+        AST::Intrinsic => panic!("Cannot use intrinsic keyword"),
         ast => panic!("Not implemented HIR for {:?}", ast),
     }
 }
@@ -398,6 +404,25 @@ fn ast_decl_function_to_hir(
     ast: &AST,
     accum: &mut Vec<StartingHIRRoot>,
 ) {
+    //special case: single intrinsic
+
+    if body.len() == 1 {
+        if let AST::Intrinsic = body[0] {
+            accum.push(HIRRoot::DeclareFunction {
+                function_name: function_name.to_string(),
+                parameters: create_type_bound_names(parameters),
+                body: vec![],
+                is_intrinsic: true,
+                return_type: match return_type {
+                    Some(x) => x.into(),
+                    None => HIRType::Simple("Void".into()),
+                },
+                meta: ast.clone(),
+            });
+            return;
+        }
+    }
+
     let mut function_body = vec![];
     for node in body {
         ast_to_hir(node, &mut function_body);
@@ -407,6 +432,7 @@ fn ast_decl_function_to_hir(
         function_name: function_name.to_string(),
         parameters: create_type_bound_names(parameters),
         body: function_body,
+        is_intrinsic: false,
         return_type: match return_type {
             Some(x) => x.into(),
             None => HIRType::Simple("Void".into()),
@@ -571,11 +597,19 @@ pub fn ast_globals_to_hir(ast: &AST, accum: &mut Vec<StartingHIRRoot>) {
                 ast_globals_to_hir(node, accum);
             }
         }
-        AST::StructDeclaration { struct_name, body } => {
+        AST::StructDeclaration {
+            struct_name,
+            type_parameters,
+            body,
+        } => {
             let fields = create_type_bound_names(body);
             accum.push(HIRRoot::StructDeclaration {
                 struct_name: struct_name.clone(),
                 fields,
+                type_parameters: type_parameters
+                    .iter()
+                    .map(|x| GenericParameter(x.to_string()))
+                    .collect(),
                 meta: ast.clone(),
             });
         }

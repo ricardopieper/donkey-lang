@@ -9,7 +9,10 @@ use super::{
 
 use crate::{
     ast::parser::{Expr, AST},
-    types::type_instance_db::TypeInstanceId,
+    types::{
+        type_constructor_db::{GenericParameter, TypeUsage},
+        type_instance_db::TypeInstanceId,
+    },
 };
 
 pub type TypecheckPendingExpression = HIRExpr<TypeInstanceId, NotChecked>;
@@ -38,6 +41,11 @@ but represent the main parts of the program.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRTopLevelNode<TTypecheckStateExpr> {
+    IntrinsicFunction {
+        function_name: String,
+        parameters: Vec<MIRTypedBoundName>,
+        return_type: TypeInstanceId,
+    },
     DeclareFunction {
         function_name: String,
         parameters: Vec<MIRTypedBoundName>,
@@ -45,10 +53,10 @@ pub enum MIRTopLevelNode<TTypecheckStateExpr> {
         scopes: Vec<MIRScope>,
         return_type: TypeInstanceId,
     },
-    #[allow(dead_code)]
     StructDeclaration {
         struct_name: String,
-        body: Vec<HIRTypedBoundName<TypeInstanceId>>,
+        type_parameters: Vec<GenericParameter>,
+        fields: Vec<HIRTypedBoundName<TypeUsage>>,
     },
 }
 
@@ -534,7 +542,22 @@ pub fn process_hir_funcdecl(
     parameters: &[HIRTypedBoundName<TypeInstanceId>],
     body: &[InferredTypeHIR],
     return_type: TypeInstanceId,
+    is_intrinsic: bool,
 ) -> MIRTopLevelNode<NotChecked> {
+    if is_intrinsic {
+        return MIRTopLevelNode::IntrinsicFunction {
+            function_name: function_name.to_string(),
+            parameters: parameters
+                .iter()
+                .map(|x| MIRTypedBoundName {
+                    name: x.name.clone(),
+                    type_instance: x.typename,
+                })
+                .collect::<Vec<_>>(),
+            return_type,
+        };
+    }
+
     let mut emitter = MIRFunctionEmitter::new();
 
     //create a new block for the main function decl node
@@ -583,12 +606,33 @@ pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode<NotC
                 body,
                 return_type,
                 meta: _,
+                is_intrinsic,
             } => {
-                let fdecl = process_hir_funcdecl(function_name, parameters, body, *return_type);
+                let fdecl = process_hir_funcdecl(
+                    function_name,
+                    parameters,
+                    body,
+                    *return_type,
+                    *is_intrinsic,
+                );
                 top_levels.push(fdecl);
             }
-            _ => {
-                panic!("Top-level HIR unsupported: {:?}", hir)
+            HIRRoot::StructDeclaration {
+                struct_name,
+                type_parameters,
+                fields,
+                meta: _,
+            } => {
+                let fields = fields.iter().map(|x| HIRTypedBoundName {
+                    name: x.name.to_string(),
+                    typename: x.typename.clone(),
+                });
+
+                top_levels.push(MIRTopLevelNode::StructDeclaration {
+                    struct_name: struct_name.to_string(),
+                    type_parameters: type_parameters.clone(),
+                    fields: fields.collect(),
+                })
             }
         }
     }

@@ -4,6 +4,7 @@ use super::mir::MIRBlock;
 use super::mir::MIRBlockNode;
 use super::mir::MIRScope;
 use super::mir::MIRTopLevelNode;
+use super::type_name_printer::TypeNamePrinter;
 
 pub trait PrintableExpression {
     fn print_expr(&self) -> String;
@@ -83,6 +84,25 @@ fn print_mir_scope(scope: &MIRScope, type_db: &TypeInstanceManager) -> String {
 
 fn print_mir_str<T>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) -> String {
     match node {
+        MIRTopLevelNode::IntrinsicFunction {
+            function_name,
+            parameters,
+            return_type,
+        } => {
+            let parameters = parameters
+                .iter()
+                .map(|param| format!("{}: {}", param.name, param.type_instance.as_string(type_db)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let function = format!(
+                "def {}({}) -> {}\n",
+                function_name,
+                parameters,
+                &return_type.as_string(type_db)
+            );
+
+            function
+        }
         MIRTopLevelNode::DeclareFunction {
             function_name,
             parameters,
@@ -96,7 +116,7 @@ fn print_mir_str<T>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) ->
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut function = format!(
-                "def {}({}) -> {}:\n",
+                "def {}({}) -> {}:\n    intrinsic",
                 function_name,
                 parameters,
                 &return_type.as_string(type_db)
@@ -113,10 +133,28 @@ fn print_mir_str<T>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) ->
             function
         }
         MIRTopLevelNode::StructDeclaration {
-            struct_name: _,
-            body: _,
+            struct_name,
+            fields: body,
+            type_parameters,
         } => {
-            todo!("Not implemented yet")
+            let fields = body
+                .iter()
+                .map(|x| {
+                    let typename = x.typename.print_name(type_db);
+                    format!("{}: {}", x.name, typename)
+                })
+                .collect::<Vec<_>>()
+                .join("\n\t");
+            if type_parameters.len() > 0 {
+                let types = type_parameters
+                    .iter()
+                    .map(|x| x.0.as_ref())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return format!("struct {struct_name}<{types}>:\n{fields}\n");
+            } else {
+                return format!("struct {struct_name}:\n{fields}\n");
+            }
         }
     }
 }

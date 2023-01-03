@@ -131,6 +131,7 @@ pub fn transform_first_assignment_into_declaration(
                 body,
                 return_type,
                 meta,
+                is_intrinsic,
             } => {
                 let new_body = make_assignments_into_declarations_in_function(&parameters, body);
                 HIRRoot::DeclareFunction {
@@ -139,9 +140,20 @@ pub fn transform_first_assignment_into_declaration(
                     body: new_body,
                     return_type,
                     meta,
+                    is_intrinsic,
                 }
             }
-            _ => todo!("Structs not implemented"),
+            HIRRoot::StructDeclaration {
+                struct_name,
+                type_parameters,
+                fields,
+                meta,
+            } => HIRRoot::StructDeclaration {
+                struct_name,
+                type_parameters,
+                fields,
+                meta,
+            },
         };
         new_mir.push(result);
     }

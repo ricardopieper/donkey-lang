@@ -15,7 +15,7 @@ use super::hir::{
     FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, HIRRoot, HIRTypeDef,
     InferredTypeHIR, InferredTypeHIRRoot,
 };
-use super::hir_type_resolution::hir_type_to_usage;
+use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 
 pub type TypeInferenceInputHIRRoot = FirstAssignmentsDeclaredHIRRoot;
 pub type TypeInferenceInputHIR = FirstAssignmentsDeclaredHIR;
@@ -29,7 +29,12 @@ pub struct FunctionTypeInferenceContext<'function_hir, 'compiler_state> {
 
 impl FunctionTypeInferenceContext<'_, '_> {
     pub fn instantiate_type(&mut self, typedef: &HIRType) -> Result<TypeInstanceId, CompilerError> {
-        let usage = hir_type_to_usage(self.on_function, typedef, self.type_db, self.errors)?;
+        let usage = hir_type_to_usage(
+            RootElementType::Function(self.on_function),
+            typedef,
+            self.type_db,
+            self.errors,
+        )?;
         match self.type_db.construct_usage(&usage) {
             Ok(instance_id) => Ok(instance_id),
             Err(e) => {
@@ -62,14 +67,15 @@ impl FunctionTypeInferenceContext<'_, '_> {
                 Ok(HIRExpr::Variable(var.to_string(), *found_type, meta))
             }
             HIRExpr::Literal(literal_expr, _, meta) => {
-                let type_db = &self.type_db;
-
                 //@TODO maybe use a type hint here to resolve to u32, u64, etc whenever needed, as in index accessors
                 let typename = match literal_expr {
-                    LiteralHIRExpr::Integer(_) => type_db.common_types.i32,
-                    LiteralHIRExpr::Float(_) => type_db.common_types.f32,
-                    LiteralHIRExpr::String(_) => type_db.common_types.string,
-                    LiteralHIRExpr::Boolean(_) => type_db.common_types.bool,
+                    LiteralHIRExpr::Integer(_) => self.type_db.common_types.i32,
+                    LiteralHIRExpr::Float(_) => self.type_db.common_types.f32,
+                    LiteralHIRExpr::String(_) => {
+                        let str_type = self.type_db.constructors.find_by_name("str").unwrap();
+                        self.type_db.construct_type(str_type.id, &[]).unwrap()
+                    }
+                    LiteralHIRExpr::Boolean(_) => self.type_db.common_types.bool,
                     LiteralHIRExpr::None => todo!("Must implement None"),
                 };
                 Ok(HIRExpr::Literal(literal_expr, typename, meta))
@@ -202,6 +208,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
         let field = type_data.fields.iter().find(|field| field.name == *name);
         if let Some(field) = field {
             let resolved_type = field.field_type;
+
             Ok(HIRExpr::MemberAccess(
                 obj_expr.into(),
                 name,
@@ -521,7 +528,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
             errors: self.errors,
             decls_in_scope: &mut decls_in_scope,
         };
-
+        
         new_ctx.infer_types_in_body(body)
     }
 }
@@ -542,6 +549,7 @@ pub fn infer_types(
                 body,
                 return_type,
                 meta,
+                is_intrinsic,
             } => {
                 let mut inference_ctx = FunctionTypeInferenceContext {
                     on_function: &function_name,
@@ -558,9 +566,20 @@ pub fn infer_types(
                     body: new_body,
                     return_type,
                     meta: meta.clone(),
+                    is_intrinsic,
                 }
             }
-            other => todo!("Type inference not implemented for: {other:#?}"),
+            HIRRoot::StructDeclaration {
+                struct_name,
+                fields,
+                type_parameters,
+                meta,
+            } => HIRRoot::StructDeclaration {
+                struct_name,
+                fields,
+                type_parameters,
+                meta,
+            },
         };
         new_mir.push(result);
     }

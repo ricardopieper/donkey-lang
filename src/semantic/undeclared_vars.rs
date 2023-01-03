@@ -148,9 +148,9 @@ fn detect_declaration_errors_in_function<T, T1, T2>(
     detect_decl_errors_in_body(&mut declarations_found, function_name, body, errors)
 }
 
-pub fn detect_undeclared_vars_and_redeclarations<T, T1, T2>(
+pub fn detect_undeclared_vars_and_redeclarations<T, T1, T2, T3>(
     globals: &NameRegistry,
-    mir: &[HIRRoot<T, HIR<T1, HIRExpr<T2>>>],
+    mir: &[HIRRoot<T, HIR<T1, HIRExpr<T2>>, T3>],
     errors: &mut TypeErrors,
 ) -> Result<(), CompilerError> {
     let mut declarations_found = HashSet::<String>::new();

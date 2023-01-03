@@ -1,0 +1,12 @@
+
+
+struct str:
+    buf: ptr<u8>
+    len: u32
+
+def libc_puts(null_terminated_char_ptr: ptr<u8>):
+    intrinsic
+
+def print(str_to_print: str):
+    null_terminated = str_to_print.buf
+    libc_puts(null_terminated)

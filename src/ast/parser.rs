@@ -67,6 +67,7 @@ pub enum AST {
     },
     StructDeclaration {
         struct_name: String,
+        type_parameters: Vec<String>,
         body: Vec<TypeBoundName>,
     },
     DeclareFunction {
@@ -76,6 +77,7 @@ pub enum AST {
         return_type: Option<ASTType>,
     },
     Break,
+    Intrinsic,
     Return(Option<Expr>),
     Raise(Expr),
     Root(Vec<AST>),
@@ -469,6 +471,7 @@ impl Parser {
 
             AST::StructDeclaration {
                 struct_name,
+                type_parameters: vec![],
                 body: fields,
             }
         });
@@ -650,6 +653,19 @@ impl Parser {
         None
     }
 
+    pub fn parse_intrinsic(&mut self) -> Option<AST> {
+        let tok = self.cur();
+        if let Token::IntrinsicKeyword = tok {
+            self.next();
+            if !self.can_go() {
+                return Some(AST::Intrinsic);
+            } else {
+                panic!("Intrinsic must be the only content of the method if it's present")
+            }
+        }
+        None
+    }
+
     pub fn parse_raise(&mut self) -> Option<AST> {
         let tok = self.cur();
         if let Token::RaiseKeyword = tok {
@@ -743,6 +759,7 @@ impl Parser {
             try_parse!("function definition", parse_def_statement);
             try_parse!("break", parse_break);
             try_parse!("return", parse_return);
+            try_parse!("intrinsic", parse_intrinsic);
             try_parse!("raise", parse_raise);
             try_parse!("standalone expression", parse_standalone_expr);
 
@@ -2883,6 +2900,7 @@ def my_function(param1: i32, param2: i32) -> i32:
             vec![
                 AST::StructDeclaration {
                     struct_name: "Struct1".into(),
+                    type_parameters: vec![],
                     body: vec![
                         TypeBoundName::simple("field1", "i32"),
                         TypeBoundName::simple("field2", "i64")
@@ -2926,6 +2944,7 @@ struct SomeStruct:
         let result = parse_ast(tokens);
         let expected = vec![AST::StructDeclaration {
             struct_name: "SomeStruct".into(),
+            type_parameters: vec![],
             body: vec![
                 TypeBoundName::simple("field", "i32"),
                 TypeBoundName::simple("otherfield", "str"),
