@@ -1,63 +1,43 @@
 Donkey lang
 ==========
 
-Donkey is a python-like, interpreted and compiled (with LLVM), statically typed programming language.
+Donkey is a Python-like statically typed programming language. It is a continuation of the work done in [my previous language called Horse](https://github.com/ricardopieper/horse) which was basically a Python clone, following Python's model almost closely. Donkey will not try to be Python, but rather a C-like Python with touches of Rust.
 
-This repo contains 3 execution backends:
+This is more of a study on how compilers work rather than a serious programming language. This study is guided by personal interest in compiler subjects, rather than the necessities of a real production compiler. Obviously, don't use it in production. That's why the user experience is not great, errors are not reported where they happen, and the compiler offers no diagnostics. This is an interesting topic that might be revisited later.
 
- - donkey_vm: A bytecode and VM built from scratch to study how to make interpreters. It's not particularly fast.
- - lambda: A strategy of compiling from the MIR representation to closures. No bytecode, just closure functions generated from the code. I don't know how it would behave in large codebases, but it's a peculiar strategy that runs faster than bytecode interpretation.
- - llvm: Just using llvm.
+Compiler Stages
+---------------
 
-This interpreter is not production-ready nor it will ever be. This is for my study only, which explains the mess. The many backends may not be compatible with each other.
+Donkey has the following compiler stages:
 
-I can barely run some code, call functions, and have a more or less functioning VM and assembler. 
+ - Parsing: Converts textual source code to AST. It's basically python, but typed.
+ - AST -> HIR: Lowers the AST to a format called HIR (High-level Intermediate Representation) that still retains most of the program's structure, but in a lower-level form. For instance, index operators (like `arr[i]`) are lowered to a method call (like `arr.__index__(i)`, like Python). For loops in collections would also be lowered to while loops.
+ - Type Inference: Fills the HIR with type information. This also detects non-existing variables.
+ - HIR -> MIR: Lowers the HIR to a format called MIR (Middle-level Intermediate Representation) that is composed of basic blocks, branches, return and gotos. Loops and ifs are lowered to Gotos and branches. Possible future language features, such as switch cases or pattern matching, would be automatically lowered to HIR IF statements, which then would be lowered to MIR, so that the code generator/interpreter does not need to be changed.
+ - Type Checking: Checks the types of the program (call arguments, inference of array types, variable assignments, etc). Also checks that all paths in a method return the same type, and that all paths return.
+ - Backend: This depends on the backend, which could be many.
 
-Syntax will be based on python but the VM will be far more lightweight. Preferably in the future we won't have a VM. We wont have classes, just structs and impls like Rust. I will try to implement some trait-like system as well, so there will be syntax for that. While the syntax looks like python, it doesn't follow Python's object model or most of the language's built-in type naming. When it does it's coincidental. I'm not a fan of the lambda syntax in Python, so I might change that, preferably using more or less the same syntax as regular function definitions.
+Backends
+--------
 
-This means that, compared to other python-like statically typed languages, the differences of this language to these others will be mostly cosmetic. However, this language is *not* to be used in production, it's just for studying purposes. That's why the features of the language will be implemented purely based on personal interest. Here are the things that, at the moment, I find interesting:
+So far, Donkey has 3 very incomplete execution backends: 
 
-  - Metaprogramming, or some level of type information available at compile time (or runtime)
-  - Trait system, like Rust
-  - Functional programming in general
-  - Generics
+ - donkey_vm: A bytecode and VM built from scratch to study how to make interpreters. It's not particularly fast. This repo includes an assembler for this bytecode too. So far it's the most complete, being able to call functions recursively.
+ - lambda: A strategy of compiling from the MIR representation to closures. No bytecode, just closure functions generated from the code. I don't know how it would behave in large codebases, but it's a peculiar strategy that runs slightly faster than bytecode interpretation.
+ - llvm: Uses inkwell, a high-level safe library to generate code with LLVM. This produces optimized code at the level of C, C++ and Rust.
 
-It doesn't mean I'll implement all of these things, but I would like to implement traits and generics at least.
+Why named Donkey?
+-----------------
 
-Here are the things that I'm not interested:
+Initially I wanted to name it pony, I created this repo with the name `pony-lang` but then I discovered there is already a programming language, a quite interesting one, called pony. I wonder if adoption of Pony is being held back by its unusual name. I wanted this name because my previous attempt at writing an interpreter was named Horse (whose origin was an internal joke, and is an animal name like python). 
 
-  - Exceptions
-  - Public/private members (everything will be public)
-  - Inheritance
+After discovering pony already existed, I asked a friend of mine to give me an animal name that's funny enough so that it turns off people from using it in production. In the end he offered me the name Donkey and it kinda makes sense: Donkeys are smaller and more lightweight than horses, and this language will be more lightweight at runtime than horse, I hope. 
 
-The goal is to be faster than the Horse interpreter but it won't be safe at all. You might need to 
-allocate memory manually, take pointers, defend against None (nullptr), etc. I'll try to add some error detecting in the VM, but not much. The VM internally will probably use a ton of `mem::transmute`, and hope for the type checker to do it's job.
-
-So yes, it's gonna be a statically typed, but interpreted language.
-
-It's called Donkey because my previous attempt at writing an interpreter was named horse, and for the following reasons:
-
- - It will have a smaller VM, or someday even no VM at all (maybe i'll write llvm IR and compile that), just like a donkey is, in general, smaller than a grown-up, adult, full-featured horse. Jokes aside, it's interesting to have a working interpreter to allow things like compile-time evaluation by just running the code.
-
- - Donkey's bodies stay closer to the ground, or in other words, "lower in the air" than horses, the same way donkey will be a lower level, closer to the metal language. Doesn't mean it will be a low-level language though.
-
- - I wanted to name it "pony" but there is an actual programming language with that name. 
-
-
-Having said that, it's probably gonna be a much larger effort than Horse.
 
 Standard library
 ----------------
 
-In Horse, implementing some of the standard library in python itself was a pretty cool thing. Maybe I'll do the same here. Types like `str` could be implemented using lower-level keywords yet to be designed.
-
-
-Typing
---------
-
-Python has support for explicit, gradual typing. We will be fully typed from the beginning. Every function has to declare the parameters and return types. Every struct will have to declare its field types.
-
-However, we will have some type inference as well. 
+In Horse, the stdlib was being written in Horse, which was cool. Maybe I'll do the same here. Types like `str` could be implemented using lower-level keywords yet to be desgiend.
 
 Struct declarations
 -------------------
@@ -70,9 +50,7 @@ struct SomeStruct:
     field2: i64
     field3: str
 
-# If generics are supported someday:
-
-struct SomeStruct<T>:
+struct SomeStructGeneric<T>:
     field1: i32
     field2: i64
     field3: T
@@ -109,11 +87,10 @@ struct Boeing777:
 
 impl Su27Flanker:
 
-    
     def init(radar: Radar) -> Su27Flanker:
     
         #Dictionary initialization, compiler will complain if you don't pass anything. 
-        #You can only pass None to traits.
+        #You can only pass None (nullptr) to traits.
         return Su27Flanker(
             max_speed = 2000,
             current_speed = 0
@@ -121,14 +98,10 @@ impl Su27Flanker:
             current_missiles = 96
             radar = radar)
 
-    def reduce_missile(): #methods
+    def reduce_missile(): 
         self.current_missiles = self.current_missiles - 1;
 
 impl Aircraft for Su27Flanker:
-
-    #These methods will be available for the value regardless if being accessed through interface (via dyamic dispatch) or statically
-
-    # All methods in a trait impl must receive self first
 
     def name(self) -> str:
         return "Su-27 Flanker" 
@@ -139,7 +112,6 @@ impl Aircraft for Su27Flanker:
     def throttle_up(self, rate: f32):
         self.current_acceleration = self.current_acceleration - rate
 
-# Traits must be implemented separately
 impl FighterJet for Su27Flanker
 
     def lock_missile(self, radar_target_id: i32) -> bool:
@@ -147,17 +119,17 @@ impl FighterJet for Su27Flanker
         #Here, type inference will be used, suppose get_entity_id returns i32
         entity_id = self.radar.get_entity_id(radar_target_id)
 
-        #Explicitly define type, suppose GetEntity returns Aircraft.
-        target: Aircraft = EntityManager.GetEntity(entity_id)
+        #Explicitly define type, suppose GetEntity returns an Optional<Aircraft>.
+        target: Optional<Aircraft> = EntityManager.GetEntity(entity_id)
   
-        #We will allow globals
+        #We will allow static calls globals
         SoundManager.Play("assets/sounds/sidewinder-growl-tone.wav")
        
         #Match on trait types
-        if target.get() is FighterJet: # cannot check for concrete type here.
+        if target.is_some() && target.get() is FighterJet: # cannot check for concrete type here.
             UIManager.ChangeRadarLockColor(radar_target_id, 255, 0, 0)
         else:
-            UIManager.ShowMessage("Warning: Civilian aircraft locked")
+            UIManager.ShowMessage("Warning: Civilian aircraft locked on radar, do not fire")
             UIManager.ChangeRadarLockColor(radar_target_id, 255, 255, 0)
 
 impl Aircraft for Boeing777:
@@ -174,8 +146,10 @@ impl Aircraft for Boeing777:
 
 ```
 
+Random notes / Idea dump
+------------
 
-This begs the question: how are we going to do dynamic dispatch and be able to check if a value implements a type?
+How are we going to do dynamic dispatch and be able to check if a value implements a type?
 
 For every interface impl we will generate a vtable for that type, and use fat pointers. When we need to pass a value using a trait object, we will pack the data into a fat pointer containing a pointer to the data, and a pointer to the required interface.
 
@@ -194,16 +168,6 @@ If we just receive the struct directly, then the compiler just won't resort to t
 The `is` keyword is only able to check if a type has a trait by checking if has a vtable for 
 that type. Casting to the type should be possible but syntax is yet to be defined. I like Jai's syntax for casting, where the cast seems to be an unary operator, like `cast(u8) expr`. Casting to a derived type is not allowed, as that would need to keep type information on the executable itself, and I don't want that for now.
 
-
-
-
-
-Pending typechecks:
-
- - Member access in exprs are valid
- - If statement reads from bool value
- - Item arrays are all the same type as the first one
- - All type errors during type inference
 
 Pending type inference improvements:
 
@@ -226,6 +190,7 @@ Features needed so we can write the stblib in the language itself:
     - ptr<T>: just an address that dereferences to a T value
         - has a raw_ptr field
         - special type, compiler allows all operations on ptr<T> as if it was in T
+         - Maybe not special by itself, maybe do something like Deref in Rust
         - ptr<T>.offset(items): moves the pointer by a given offset. It moves the pointer address by items * sizeof<T> bytes 
         - ptr<T>.get_address(): returns u64 pointer to address
         - ptr<T>.copy(destination, length)
@@ -234,6 +199,7 @@ Features needed so we can write the stblib in the language itself:
 
     - sized_ptr<T>: a pointer that contains a ptr<T> and a u32 size (bytes). Not exactly safer but remembers the allocated size
         - Also special, compiler allows all operations on sized_ptr<T> as if it was in T
+         - Or maybe not
         - implement through ptr<T>:
             - sized_ptr<T>.offset(items): moves the pointer by a given offset. It moves the pointer address by items * sizeof<T> bytes.
             - sized_ptr<T>.get_address(): returns u64 pointer to address
