@@ -278,7 +278,6 @@ impl TypeConstructorDatabase {
         });
     }
 
-
     #[allow(clippy::similar_names)]
     fn init_builtin(&mut self) {
         //ptr + len
@@ -324,7 +323,8 @@ impl TypeConstructorDatabase {
         self.common_types.f64 =
             self.register_primitive_number("f64", Bytes::size_of::<f64>(), TypeSign::Signed);
 
-        self.common_types.u8 = self.register_primitive_number("u8", Bytes::size_of::<u8>(), TypeSign::Unsigned);
+        self.common_types.u8 =
+            self.register_primitive_number("u8", Bytes::size_of::<u8>(), TypeSign::Unsigned);
 
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
         let ptr_type = self.add_generic(

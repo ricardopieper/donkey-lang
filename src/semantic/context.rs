@@ -35,9 +35,12 @@ impl Context {
             ast_hir,
         ) {
             Ok(hir) => hir,
-            Err(e) => {
+            Err(_e) => {
                 let printer = TypeErrorPrinter::new(&self.type_errors, &self.type_db);
-                panic!("build_name_registry_and_resolve_signatures Err\n{}", printer);
+                panic!(
+                    "build_name_registry_and_resolve_signatures Err\n{}",
+                    printer
+                );
             }
         };
 

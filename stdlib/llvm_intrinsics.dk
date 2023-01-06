@@ -1,12 +1,28 @@
-
-
 struct str:
     buf: ptr<u8>
-    len: u32
+    len: u64
 
-def libc_puts(null_terminated_char_ptr: ptr<u8>):
+def atoi(buf: ptr<u8>) -> i32:
     intrinsic
 
+def puts(null_terminated_char_ptr: ptr<u8>) -> u64:
+    intrinsic
+
+def exit(code: i32):
+    intrinsic
+
+def malloc(size: i32) -> ptr<u8>:
+    intrinsic
+
+def str_to_int(s: str) -> i32:
+    return atoi(s.buf)
+
+def get_str_buf(s: str) -> ptr<u8>:
+    return s.buf
+
 def print(str_to_print: str):
-    null_terminated = str_to_print.buf
-    libc_puts(null_terminated)
+    puts(str_to_print.buf)
+
+def panic(error: str):
+    print(error)
+    exit(1)

@@ -210,7 +210,6 @@ pub fn build_name_registry_and_resolve_signatures(
                     meta,
                 }
             }
-            _ => todo!(),
         };
         new_mir.push(globals_inferred);
     }

@@ -33,20 +33,20 @@ use std::fs;
 #[macro_use]
 extern crate time_test;
 
-use crate::semantic::mir::hir_to_mir;
-use crate::semantic::mir_printer;
-use crate::semantic::type_checker::typecheck;
 
-use crate::types::type_errors::TypeErrorPrinter;
+use crate::semantic::mir_printer;
+
+
+
 
 //use compiler::donkey_backend::DonkeyEmitter;
 //use donkey_vm::asm::assembler::DonkeyProgram;
 //use donkey_vm::vm::runner::DonkeyVMRunner;
 use llvm::llvm_backend::generate_llvm;
-use semantic::analysis::AnalysisResult;
+
 use semantic::context::Context;
-use semantic::hir::Checked;
-use semantic::mir::MIRTopLevelNode;
+
+
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -85,40 +85,6 @@ fn main() {
     generate_llvm(&ctx.type_db, &ctx.mir).unwrap();
 }
 
-#[inline(never)]
-fn compute_mod5() -> i32 {
-    let mut x: i32 = 0;
-
-    let mut mod_5: i32 = 0;
-    while x < 900000000 {
-        x = x + 1;
-        if x % 5 == 0 {
-            mod_5 = mod_5 + 1
-        }
-    }
-    mod_5
-}
-fn analysis(file_name: &str) -> (AnalysisResult, Vec<MIRTopLevelNode<Checked>>) {
-    let input = fs::read_to_string(file_name)
-        .unwrap_or_else(|_| panic!("Could not read file {}", file_name));
-    let tokens = lexer::tokenize(input.as_str());
-    let ast = parser::parse_ast(tokens.unwrap());
-    let root = parser::AST::Root(ast);
-    let mut result = crate::semantic::analysis::do_analysis(&root);
-    let mir = hir_to_mir(&result.hir);
-    let typechecked = typecheck(
-        mir,
-        &result.type_db,
-        &result.globals,
-        &mut result.type_errors,
-    );
-    if result.type_errors.count() > 0 {
-        let printer = TypeErrorPrinter::new(&result.type_errors, &result.type_db);
-        panic!("{}", printer);
-    }
-    let typechecked_clone = typechecked.unwrap().clone();
-    (result, typechecked_clone)
-}
 
 fn parse_and_add_to_ctx(file_name: &str, context: &mut Context) {
     let input = fs::read_to_string(file_name)

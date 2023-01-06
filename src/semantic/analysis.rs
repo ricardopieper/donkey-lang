@@ -13,6 +13,7 @@ pub struct AnalysisResult {
     pub type_errors: TypeErrors,
 }
 
+//@TODO migrate to Context and replace tests
 pub fn do_analysis(ast: &AST) -> AnalysisResult {
     let mut analysis_result = AnalysisResult {
         hir: vec![],

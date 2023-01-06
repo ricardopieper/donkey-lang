@@ -528,7 +528,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
             errors: self.errors,
             decls_in_scope: &mut decls_in_scope,
         };
-        
+
         new_ctx.infer_types_in_body(body)
     }
 }

@@ -116,7 +116,7 @@ fn print_mir_str<T>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) ->
                 .collect::<Vec<_>>()
                 .join(", ");
             let mut function = format!(
-                "def {}({}) -> {}:\n    intrinsic",
+                "def {}({}) -> {}:\n",
                 function_name,
                 parameters,
                 &return_type.as_string(type_db)

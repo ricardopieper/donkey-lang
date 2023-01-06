@@ -123,12 +123,6 @@ pub enum HIRExpr<TExprType, TTypechecked = NotChecked> {
     TypecheckTag(TTypechecked),
 }
 
-impl<TExpr, TTypechecked> HIRExpr<TExpr, TTypechecked> {
-    pub fn is_literal_integer(&self) -> bool {
-        matches!(self, HIRExpr::Literal(LiteralHIRExpr::Integer(_), _, _))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRType {
     Simple(String),

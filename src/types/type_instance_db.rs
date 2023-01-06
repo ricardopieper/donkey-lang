@@ -120,7 +120,7 @@ impl TypeInstanceManager {
         item.init_builtin();
         item
     }
-    
+
     pub fn find_by_name(&self, name: &str) -> Option<&TypeInstance> {
         self.types.iter().find(|t| t.name == name)
     }
@@ -135,7 +135,12 @@ impl TypeInstanceManager {
         name: &str,
     ) -> StructMember<'this> {
         let instance = self.get_instance(id);
-        if let Some((index, field)) = instance.fields.iter().enumerate().find(|x| x.1.name == name) {
+        if let Some((index, field)) = instance
+            .fields
+            .iter()
+            .enumerate()
+            .find(|x| x.1.name == name)
+        {
             return StructMember::Field(field, index);
         }
         if let Some(method) = instance.methods.iter().find(|x| x.name == name) {
