@@ -7,15 +7,15 @@ use crate::types::type_errors::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 
-pub struct Context {
-    pub mir: Vec<MIRTopLevelNode<Checked>>,
-    pub type_db: TypeInstanceManager,
-    pub globals: NameRegistry,
-    pub type_errors: TypeErrors,
+pub struct Context<'source, 'parser> {
+    pub mir: Vec<MIRTopLevelNode<'source, 'parser, Checked>>,
+    pub type_db: TypeInstanceManager<'source>,
+    pub globals: NameRegistry<'source>,
+    pub type_errors: TypeErrors<'source, 'parser>,
 }
 
-impl Context {
-    pub fn new() -> Context {
+impl<'source, 'parser> Context<'source, 'parser> {
+    pub fn new() -> Context<'source, 'parser> {
         Context {
             type_db: TypeInstanceManager::new(),
             globals: NameRegistry::new(),
@@ -24,7 +24,7 @@ impl Context {
         }
     }
 
-    pub fn add(&mut self, _name: &str, ast: &AST) {
+    pub fn add(&mut self, _name: &str, ast: &'parser AST<'source>) {
         let mut ast_hir = vec![];
         ast_globals_to_hir(ast, &mut ast_hir);
 

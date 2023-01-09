@@ -1,6 +1,6 @@
 use crate::{
     semantic::hir::{HIRExpr, HIRTypedBoundName, HIR},
-    types::type_errors::{TypeErrors, VariableNotFound},
+    types::type_errors::{TypeErrors, VariableNotFound}, ast::lexer::SourceString,
 };
 
 use std::collections::HashSet;
@@ -8,11 +8,11 @@ use std::collections::HashSet;
 use super::{compiler_errors::CompilerError, hir::HIRRoot, name_registry::NameRegistry};
 
 //Returns true if everything is valid
-fn check_expr<T>(
-    declarations_found: &HashSet<String>,
+fn check_expr<'source, 'parser, T>(
+    declarations_found: &HashSet<SourceString<'source>>,
     function_name: &str,
-    expr: &HIRExpr<T>,
-    errors: &mut TypeErrors,
+    expr: &HIRExpr<'source, 'parser, T>,
+    errors: &mut TypeErrors<'source, 'parser>,
 ) -> bool {
     match expr {
         HIRExpr::Variable(v, ..) => {
@@ -62,11 +62,12 @@ fn check_expr<T>(
     }
 }
 
-fn detect_decl_errors_in_body<T, T1>(
-    declarations_found: &mut HashSet<String>,
+//@TODO cloneless: use cow on declarations found
+fn detect_decl_errors_in_body<'source, 'parser, T, T1>(
+    declarations_found: &mut HashSet<SourceString<'source>>,
     function_name: &str,
-    body: &[HIR<T, HIRExpr<T1>>],
-    errors: &mut TypeErrors,
+    body: &[HIR<'source, 'parser, T, HIRExpr<'source, 'parser, T1>>],
+    errors: &mut TypeErrors<'source, 'parser>,
 ) -> bool {
     for node in body {
         match node {
@@ -78,7 +79,7 @@ fn detect_decl_errors_in_body<T, T1>(
                     "Variable {} declared more than once",
                     var
                 );
-                declarations_found.insert(var.clone());
+                declarations_found.insert(var);
                 if !check_expr(declarations_found, function_name, expression, errors) {
                     return false;
                 }
@@ -134,35 +135,35 @@ fn detect_decl_errors_in_body<T, T1>(
     true
 }
 
-fn detect_declaration_errors_in_function<T, T1, T2>(
-    mut declarations_found: HashSet<String>,
+fn detect_declaration_errors_in_function<'source, 'parser, T, T1, T2>(
+    mut declarations_found: HashSet<SourceString<'source>>,
     function_name: &str,
-    parameters: &[HIRTypedBoundName<T>],
-    body: &[HIR<T1, HIRExpr<T2>>],
-    errors: &mut TypeErrors,
+    parameters: &[HIRTypedBoundName<'source, T>],
+    body: &[HIR<'source, 'parser, T1, HIRExpr<'source, 'parser, T2>>],
+    errors: &mut TypeErrors<'source, 'parser>,
 ) -> bool {
     for p in parameters {
-        declarations_found.insert(p.name.clone());
+        declarations_found.insert(p.name);
     }
 
     detect_decl_errors_in_body(&mut declarations_found, function_name, body, errors)
 }
 
-pub fn detect_undeclared_vars_and_redeclarations<T, T1, T2, T3>(
-    globals: &NameRegistry,
-    mir: &[HIRRoot<T, HIR<T1, HIRExpr<T2>>, T3>],
-    errors: &mut TypeErrors,
+pub fn detect_undeclared_vars_and_redeclarations<'source, 'parser, T, T1, T2, T3>(
+    globals: &NameRegistry<'source>,
+    mir: &[HIRRoot<'source, 'parser, T, HIR<'source, 'parser, T1, HIRExpr<'source, 'parser, T2>>, T3>],
+    errors: &mut TypeErrors<'source, 'parser>,
 ) -> Result<(), CompilerError> {
-    let mut declarations_found = HashSet::<String>::new();
+    let mut declarations_found = HashSet::<SourceString<'source>>::new();
 
     for name in globals.get_names() {
-        declarations_found.insert(name.to_string());
+        declarations_found.insert(name);
     }
 
     //first collect all globals
     for node in mir.iter() {
         if let HIRRoot::DeclareFunction { function_name, .. } = node {
-            declarations_found.insert(function_name.clone());
+            declarations_found.insert(function_name);
         };
     }
 

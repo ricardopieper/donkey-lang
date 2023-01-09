@@ -6,16 +6,18 @@ use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 use super::hir::{ast_globals_to_hir, InferredTypeHIRRoot};
 use super::name_registry::NameRegistry;
 
-pub struct AnalysisResult {
-    pub hir: Vec<InferredTypeHIRRoot>,
-    pub type_db: TypeInstanceManager,
-    pub globals: NameRegistry,
-    pub type_errors: TypeErrors,
+pub struct AnalysisResult<'source, 'parser> {
+    pub ast: AST<'source>,
+    pub hir: Vec<InferredTypeHIRRoot<'source, 'parser>>,
+    pub type_db: TypeInstanceManager<'source>,
+    pub globals: NameRegistry<'source>,
+    pub type_errors: TypeErrors<'source, 'parser>,
 }
 
 //@TODO migrate to Context and replace tests
-pub fn do_analysis(ast: &AST) -> AnalysisResult {
+pub fn do_analysis<'source, 'parser>(ast: AST<'source>) -> AnalysisResult<'source, 'parser> {
     let mut analysis_result = AnalysisResult {
+        ast,
         hir: vec![],
         type_db: TypeInstanceManager::new(),
         globals: NameRegistry::new(),
@@ -23,7 +25,7 @@ pub fn do_analysis(ast: &AST) -> AnalysisResult {
     };
 
     let mut ast_hir = vec![];
-    ast_globals_to_hir(ast, &mut ast_hir);
+    ast_globals_to_hir(&analysis_result.ast, &mut ast_hir);
 
     let inferred_globals_hir = match name_registry::build_name_registry_and_resolve_signatures(
         &mut analysis_result.type_db,
@@ -82,14 +84,14 @@ mod tests {
     use super::*;
 
     //Parses a single expression
-    fn hir(source: &str) -> AnalysisResult {
+    fn hir<'source>(source: &'source str) -> AnalysisResult<'source, '_> {
         let tokenized = crate::ast::lexer::Tokenizer::new(source)
             .tokenize()
             .ok()
             .unwrap();
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast());
-        do_analysis(&ast)
+        do_analysis(ast)
     }
 
     #[test]

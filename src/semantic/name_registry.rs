@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::ast::lexer::SourceString;
 use crate::types::type_constructor_db::{TypeKind, TypeSign};
 use crate::types::type_errors::{TypeConstructionFailure, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
@@ -9,19 +10,19 @@ use super::hir::{GlobalsInferredMIRRoot, HIRRoot, HIRType, HIRTypedBoundName, St
 use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 
 #[derive(Debug, Clone)]
-pub struct PartiallyResolvedFunctionSignature {
-    pub args: Vec<HIRType>,
-    pub return_type: HIRType,
+pub struct PartiallyResolvedFunctionSignature<'source> {
+    pub args: Vec<HIRType<'source>>,
+    pub return_type: HIRType<'source>,
 }
 
 #[derive(Debug, Clone)]
-pub struct NameRegistry {
-    names: HashMap<String, TypeInstanceId>,
+pub struct NameRegistry<'source> {
+    names: HashMap<SourceString<'source>, TypeInstanceId>,
     //This could help still provide some type inference when just enough information is available
-    partially_resolved_function_sigs: HashMap<String, PartiallyResolvedFunctionSignature>,
+    partially_resolved_function_sigs: HashMap<SourceString<'source>, PartiallyResolvedFunctionSignature<'source>>,
 }
 
-impl NameRegistry {
+impl<'source> NameRegistry<'source> {
     pub fn new() -> Self {
         NameRegistry {
             names: HashMap::new(),
@@ -32,7 +33,7 @@ impl NameRegistry {
     #[allow(dead_code)]
     pub fn insert_partially_resolved_signature(
         &mut self,
-        name: String,
+        name: SourceString<'source>,
         sig: PartiallyResolvedFunctionSignature,
     ) {
         self.partially_resolved_function_sigs.insert(name, sig);
@@ -41,14 +42,14 @@ impl NameRegistry {
     #[allow(dead_code)]
     pub fn find_partially_resolved_sig(
         &mut self,
-        name: &str,
+        name: &SourceString<'source>,
     ) -> Option<&PartiallyResolvedFunctionSignature> {
         self.partially_resolved_function_sigs.get(name)
     }
 
     pub fn include(&mut self, outer: &NameRegistry) {
         for (k, v) in &outer.names {
-            self.names.insert(k.to_string(), *v);
+            self.names.insert(*k, *v);
         }
     }
 
@@ -56,12 +57,12 @@ impl NameRegistry {
         self.names.get(name)
     }
 
-    pub fn get_names(&self) -> impl Iterator<Item = &String> {
+    pub fn get_names(&self) -> impl Iterator<Item = &SourceString<'source>> {
         self.names.keys()
     }
 
-    pub fn insert(&mut self, variable_name: &str, var_type: TypeInstanceId) {
-        self.names.insert(variable_name.to_string(), var_type);
+    pub fn insert(&mut self, variable_name: &SourceString<'source>, var_type: TypeInstanceId) {
+        self.names.insert(*variable_name, var_type);
     }
 }
 
@@ -83,12 +84,12 @@ fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegis
 }*/
 
 /*Builds a name registry and resolves the top level declarations*/
-pub fn build_name_registry_and_resolve_signatures(
+pub fn build_name_registry_and_resolve_signatures<'source, 'parser>(
     type_db: &mut TypeInstanceManager,
     registry: &mut NameRegistry,
-    errors: &mut TypeErrors,
-    mir: Vec<StartingHIRRoot>,
-) -> Result<Vec<GlobalsInferredMIRRoot>, CompilerError> {
+    errors: &mut TypeErrors<'source, 'parser>,
+    mir: Vec<StartingHIRRoot<'source, 'parser>>,
+) -> Result<Vec<GlobalsInferredMIRRoot<'source, 'parser>>, CompilerError> {
     //register_builtins(type_db, registry);
     let mut new_mir = vec![];
 
@@ -119,7 +120,7 @@ pub fn build_name_registry_and_resolve_signatures(
                         errors
                             .type_construction_failure
                             .push(TypeConstructionFailure {
-                                on_function: function_name,
+                                on_function: function_name.to_string(),
                                 error: e,
                             });
                         return Err(CompilerError::TypeInferenceError);
@@ -144,7 +145,7 @@ pub fn build_name_registry_and_resolve_signatures(
                     errors
                         .type_construction_failure
                         .push(TypeConstructionFailure {
-                            on_function: function_name,
+                            on_function: function_name.to_string(),
                             error: e,
                         });
                     return Err(CompilerError::TypeInferenceError);
@@ -191,14 +192,14 @@ pub fn build_name_registry_and_resolve_signatures(
                         errors
                             .type_construction_failure
                             .push(TypeConstructionFailure {
-                                on_function: struct_name,
+                                on_function: struct_name.to_string(),
                                 error: e,
                             });
                         return Err(CompilerError::TypeInferenceError);
                     }
 
                     resolved_fields.push(HIRTypedBoundName {
-                        name: field.name.to_string(),
+                        name: field.name,
                         typename: type_usage,
                     })
                 }

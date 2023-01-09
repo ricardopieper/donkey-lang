@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use super::compiler_errors::CompilerError;
 use super::hir::{Checked, HIRExpr, LiteralHIRExpr, NotChecked};
 use super::hir_printer::expr_str;
-use crate::ast::lexer::Operator;
+use crate::ast::lexer::{Operator, SourceString};
 use crate::ast::parser::{Expr, AST};
 use crate::types::type_errors::{
     ArrayExpressionsNotAllTheSameType, AssignContext, FunctionCallArgumentCountMismatch,
@@ -36,14 +36,14 @@ pub enum FunctionName {
     },
 }
 
-pub struct TypeCheckContext<'compiler_context, 'check_target> {
-    names: &'compiler_context NameRegistry,
-    type_db: &'compiler_context TypeInstanceManager,
-    errors: &'compiler_context mut TypeErrors,
+pub struct TypeCheckContext<'compiler_context, 'check_target, 'source, 'parser> {
+    names: &'compiler_context NameRegistry<'source>,
+    type_db: &'compiler_context TypeInstanceManager<'source>,
+    errors: &'compiler_context mut TypeErrors<'source, 'parser>,
     on_function: &'check_target str,
 }
 
-impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'check_target> {
+impl<'compiler_context, 'check_target, 'source, 'parser> TypeCheckContext<'compiler_context, 'check_target, 'source, 'parser> {
     //We will check that function arguments and index operators are receiving the correct types.
     //Binary operators are actually certainly correct, since type inference will report errors if it can't find an appropriate operator.
     //We might implement sanity checks here, to prevent bugs in the type inference propagating to the backend code.
@@ -65,7 +65,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                 self.check_fun_expr_bin_op(lhs, rhs, *op, *expr_type, meta)
             }
             HIRExpr::MethodCall(obj, name, args, return_type, meta) => {
-                self.check_expr_method_call(obj, name, args, *return_type, meta)
+                self.check_expr_method_call(obj, *name, args, *return_type, meta)
             }
             HIRExpr::FunctionCall(function_expr, args, return_type, meta) => {
                 self.check_expr_function_call(function_expr, args, *return_type, meta)
@@ -74,7 +74,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                 self.check_expr_unary(rhs, *op, *inferred_type, meta)
             }
             HIRExpr::MemberAccess(obj, member, inferred_type, meta) => {
-                self.check_expr_member_access(obj, member, *inferred_type, meta)
+                self.check_expr_member_access(obj, *member, *inferred_type, meta)
             }
             HIRExpr::Array(expr_array, inferred_type, meta) => {
                 self.check_expr_array(expr_array, *inferred_type, meta)
@@ -101,14 +101,14 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
             checked_func.into(),
             checked_args,
             return_type,
-            meta.clone(),
+            meta,
         ))
     }
 
     fn check_expr_method_call(
         &mut self,
-        obj: &TypecheckPendingExpression,
-        name: &String,
+        obj: &TypecheckPendingExpression<'source, 'parser>,
+        name: SourceString<'source>,
         args: &[TypecheckPendingExpression],
         return_type: TypeInstanceId,
         meta: &Expr,
@@ -116,10 +116,10 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
         let (checked_obj, checked_args) = self.method_call_check(obj, name, args, meta)?;
         Ok(HIRExpr::MethodCall(
             checked_obj.into(),
-            name.to_string(),
+            name,
             checked_args,
             return_type,
-            meta.clone(),
+            meta,
         ))
     }
 
@@ -142,7 +142,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
             Ok(HIRExpr::Array(
                 all_array_exprs_checked,
                 inferred_type,
-                meta.clone(),
+                meta,
             ))
         } else {
             self.errors.array_expressions_not_all_the_same_type.push(
@@ -158,14 +158,14 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
     fn check_expr_member_access(
         &mut self,
         obj: &TypecheckPendingExpression,
-        member: &String,
+        member: SourceString<'source>,
         inferred_type: TypeInstanceId,
         meta: &Expr,
     ) -> Result<TypecheckedExpression, CompilerError> {
         let checked_obj = self.typecheck(obj)?;
         let member_type = match self
             .type_db
-            .find_struct_member(checked_obj.get_type(), member)
+            .find_struct_member(checked_obj.get_type(), &member)
         {
             StructMember::Field(f, _) => f.field_type,
             StructMember::Method(m) => m.function_type,
@@ -196,7 +196,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
             checked_obj.into(),
             member.clone(),
             inferred_type,
-            meta.clone(),
+            meta,
         ))
     }
 
@@ -222,7 +222,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                 op,
                 checked_rhs.into(),
                 inferred_type,
-                meta.clone(),
+                meta,
             ))
         } else {
             self.errors.unary_op_not_found.push(UnaryOperatorNotFound {
@@ -257,7 +257,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                 op,
                 checked_rhs.into(),
                 expr_type,
-                meta.clone(),
+                meta,
             ))
         } else {
             self.errors
@@ -282,7 +282,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
         //is type of expr castable to cast_to?
         let type_data = self.type_db.get_instance(expr.get_type());
         if type_data.allowed_casts.contains(&cast_to) {
-            Ok(HIRExpr::Cast(checked.into(), cast_to, meta.clone()))
+            Ok(HIRExpr::Cast(checked.into(), cast_to, meta))
         } else {
             self.errors.invalid_casts.push(InvalidCast {
                 on_function: self.on_function.to_string(),
@@ -354,7 +354,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
             LiteralHIRExpr::String(_) | LiteralHIRExpr::Boolean(_) | LiteralHIRExpr::None => true,
         };
         if is_properly_typed {
-            Ok(HIRExpr::Literal(literal.clone(), type_id, meta.clone()))
+            Ok(HIRExpr::Literal(literal.clone(), type_id, meta))
         } else {
             Err(CompilerError::TypeCheckError)
         }
@@ -362,11 +362,11 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
 
     fn method_call_check(
         &mut self,
-        obj: &TypecheckPendingExpression,
-        name: &String,
-        args: &[TypecheckPendingExpression],
-        meta: &Expr,
-    ) -> Result<(TypecheckedExpression, Vec<TypecheckedExpression>), CompilerError> {
+        obj: &TypecheckPendingExpression<'source, 'parser>,
+        name: SourceString<'source>,
+        args: &[TypecheckPendingExpression<'source, 'parser>],
+        meta: &Expr<'source>,
+    ) -> Result<(TypecheckedExpression<'source, 'parser>, Vec<TypecheckedExpression<'source, 'parser>>), CompilerError> {
         let checked_method = self.typecheck(obj)?;
         let obj_type = self.type_db.get_instance(checked_method.get_type());
 
@@ -393,7 +393,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                 .function_call_argument_count
                 .push(FunctionCallArgumentCountMismatch {
                     on_function: self.on_function.to_string(),
-                    called_function_name: make_method_name_or_index(name, &obj_type.name, meta),
+                    called_function_name: make_method_name_or_index(&name, &obj_type.name, meta),
                     expected_count: function_type.function_args.len(),
                     passed_count: checked_args.len(),
                 });
@@ -414,7 +414,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
             self.errors.function_call_mismatches.push(TypeMismatch {
                 on_function: self.on_function.to_string(),
                 context: FunctionCallContext {
-                    called_function_name: make_method_name_or_index(name, &obj_type.name, meta),
+                    called_function_name: make_method_name_or_index(&name, &obj_type.name, meta),
                     argument_position: arg_pos,
                 },
                 expected: *types.0,
@@ -497,7 +497,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
                     let checked_return_expr = self.typecheck(&return_expr)?;
                     let expr_type = return_expr.get_type();
                     if return_type == expr_type {
-                        MIRBlockFinal::Return(checked_return_expr, ast_meta.clone())
+                        MIRBlockFinal::Return(checked_return_expr, ast_meta)
                     } else {
                         self.errors.return_type_mismatches.push(TypeMismatch {
                             context: ReturnTypeContext(),
@@ -641,7 +641,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
         expr: &TypecheckPendingExpression,
         goto_true: BlockId,
         goto_false: BlockId,
-        ast: AST,
+        ast: &AST,
     ) -> Result<MIRBlockFinal<Checked>, CompilerError> {
         let expr_checked = self.typecheck(expr)?;
         let expr_type = expr.get_type();
@@ -659,7 +659,7 @@ impl<'compiler_context, 'check_target> TypeCheckContext<'compiler_context, 'chec
     }
 }
 
-fn make_method_name_or_index(name: &String, obj_type_name: &String, expr: &Expr) -> FunctionName {
+fn make_method_name_or_index(name: &str, obj_type_name: &str, expr: &Expr) -> FunctionName {
     dbg!(expr);
     match expr {
         Expr::IndexAccess(_, _) => FunctionName::IndexAccess,
@@ -670,12 +670,12 @@ fn make_method_name_or_index(name: &String, obj_type_name: &String, expr: &Expr)
     }
 }
 
-pub fn typecheck(
-    top_nodes: Vec<MIRTopLevelNode<NotChecked>>,
-    type_db: &TypeInstanceManager,
-    names: &NameRegistry,
-    errors: &mut TypeErrors,
-) -> Result<Vec<MIRTopLevelNode<Checked>>, CompilerError> {
+pub fn typecheck<'source, 'parser>(
+    top_nodes: Vec<MIRTopLevelNode<'source, 'parser, NotChecked>>,
+    type_db: &TypeInstanceManager<'source>,
+    names: &NameRegistry<'source>,
+    errors: &mut TypeErrors<'source, 'parser>,
+) -> Result<Vec<MIRTopLevelNode<'source, 'parser, Checked>>, CompilerError> {
     let mut new_mir = vec![];
     for node in top_nodes {
         match node {
@@ -730,21 +730,21 @@ mod tests {
     };
     use pretty_assertions::assert_eq;
 
-    pub struct TestContext {
-        mir: Vec<MIRTopLevelNode<NotChecked>>,
-        database: TypeInstanceManager,
-        globals: NameRegistry,
-        errors: TypeErrors,
+    pub struct TestContext<'source, 'parser> {
+        mir: Vec<MIRTopLevelNode<'source, 'parser, NotChecked>>,
+        database: TypeInstanceManager<'source>,
+        globals: NameRegistry<'source>,
+        errors: TypeErrors<'source, 'parser>,
     }
 
     fn prepare(source: &str) -> TestContext {
-        let tokenized = crate::ast::lexer::Tokenizer::new(source)
+        let tokenized = crate::ast::lexer::Tokenizer::new(source.to_string())
             .tokenize()
             .ok()
             .unwrap();
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast());
-        let analysis_result = crate::semantic::analysis::do_analysis(&ast);
+        let analysis_result = crate::semantic::analysis::do_analysis(ast);
         let mir = hir_to_mir(&analysis_result.hir);
 
         println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
@@ -758,7 +758,7 @@ mod tests {
     }
 
     //Parses a single expression
-    fn run_test(mut ctx: TestContext) -> (TypeErrors, TypeInstanceManager) {
+    fn run_test<'source, 'parser>(mut ctx: TestContext<'source, 'parser>) -> (TypeErrors<'source, 'parser>, TypeInstanceManager<'source>) {
         if typecheck(ctx.mir, &ctx.database, &ctx.globals, &mut ctx.errors).is_err() {
             println!("Type errors:");
         }

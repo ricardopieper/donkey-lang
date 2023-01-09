@@ -20,12 +20,12 @@ impl<'s> RootElementType<'s> {
     }
 }
 
-pub fn hir_type_to_usage<'s>(
+pub fn hir_type_to_usage<'s, 'source, 'parser>(
     on_code_element: RootElementType<'s>,
-    typedef: &HIRType,
-    type_db: &TypeInstanceManager,
-    errors: &mut TypeErrors,
-) -> Result<TypeUsage, CompilerError> {
+    typedef: &HIRType<'source>,
+    type_db: &TypeInstanceManager<'source>,
+    errors: &mut TypeErrors<'source, 'parser>,
+) -> Result<TypeUsage<'source>, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
             if let Some(type_id) = type_db.constructors.find_by_name(name) {
@@ -33,7 +33,7 @@ pub fn hir_type_to_usage<'s>(
             } else {
                 errors.type_not_found.push(TypeNotFound {
                     on_function: on_code_element.get_name().to_string(),
-                    type_name: HIRType::Simple(name.to_string()),
+                    type_name: HIRType::Simple(name.clone()),
                 });
                 Err(CompilerError::TypeInferenceError)
             }
@@ -51,7 +51,7 @@ pub fn hir_type_to_usage<'s>(
             } else {
                 errors.type_not_found.push(TypeNotFound {
                     on_function: on_code_element.get_name().to_string(),
-                    type_name: HIRType::Simple(base.to_string()),
+                    type_name: HIRType::Simple(base.clone()),
                 });
                 Err(CompilerError::TypeInferenceError)
             }

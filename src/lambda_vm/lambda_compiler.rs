@@ -303,7 +303,7 @@ pub struct LambdaProgram {
 
 pub fn compile(
     mir: &[MIRTopLevelNode<Checked>],
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     memory: &mut Memory,
 ) -> LambdaProgram {
     let mut lambda_compiler = LambdaCompiler::new(memory, type_db);

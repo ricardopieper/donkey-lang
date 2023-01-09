@@ -27,7 +27,7 @@ pub fn operator_str(op: lexer::Operator) -> String {
 
 pub fn expr_str<T, T1>(expr: &HIRExpr<T, T1>) -> String {
     match expr {
-        HIRExpr::Variable(s, ..) => s.clone(),
+        HIRExpr::Variable(s, ..) => s.to_string(),
         HIRExpr::Literal(literal, ..) => literal_expr_str(literal),
         HIRExpr::FunctionCall(f, args, ..) => {
             let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
@@ -69,10 +69,10 @@ fn literal_expr_str(expr: &LiteralHIRExpr) -> String {
 }
 
 #[allow(dead_code)]
-fn print_hir_body_str(
+fn print_hir_body_str<'source>(
     node: &HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
     indent: &str,
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
 ) -> String {
     match node {
         HIR::Assign {
@@ -138,14 +138,14 @@ fn print_hir_body_str(
     }
 }
 
-fn print_hir_str(
+fn print_hir_str<'source>(
     node: &HIRRoot<
         impl TypeNamePrinter,
         HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
         impl TypeNamePrinter,
     >,
     indent: &str,
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
 ) -> String {
     match node {
         HIRRoot::DeclareFunction {
@@ -203,13 +203,13 @@ fn print_hir_str(
 }
 
 #[allow(dead_code)]
-pub fn print_hir(
+pub fn print_hir<'source>(
     mir: &[HIRRoot<
         impl TypeNamePrinter,
         HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
         impl TypeNamePrinter,
     >],
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
 ) -> String {
     let mut buffer = String::new();
     for node in mir {

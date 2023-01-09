@@ -14,7 +14,7 @@ use super::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanc
 pub trait TypeErrorDisplay {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result;
 }
@@ -33,7 +33,7 @@ pub struct AssignContext {
 impl TypeErrorDisplay for TypeMismatch<AssignContext> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         let var_type_str = self.expected.as_string(type_db);
@@ -51,7 +51,7 @@ pub struct ReturnTypeContext();
 impl TypeErrorDisplay for TypeMismatch<ReturnTypeContext> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         let passed_name = self.actual.as_string(type_db);
@@ -72,7 +72,7 @@ pub struct FunctionCallContext {
 impl TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         let passed_name = self.actual.as_string(type_db);
@@ -113,7 +113,7 @@ pub struct FunctionCallArgumentCountMismatch {
 impl TypeErrorDisplay for FunctionCallArgumentCountMismatch {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         match &self.called_function_name {
@@ -148,7 +148,7 @@ pub struct CallToNonCallableType {
 impl TypeErrorDisplay for CallToNonCallableType {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -160,15 +160,15 @@ impl TypeErrorDisplay for CallToNonCallableType {
     }
 }
 
-pub struct TypeNotFound {
+pub struct TypeNotFound<'source> {
     pub on_function: String,
-    pub type_name: HIRType,
+    pub type_name: HIRType<'source>,
 }
 
-impl TypeErrorDisplay for TypeNotFound {
+impl TypeErrorDisplay for TypeNotFound<'_> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -188,7 +188,7 @@ pub struct UnexpectedTypeFound {
 impl TypeErrorDisplay for UnexpectedTypeFound {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -200,15 +200,15 @@ impl TypeErrorDisplay for UnexpectedTypeFound {
     }
 }
 
-pub struct OutOfTypeBounds {
+pub struct OutOfTypeBounds<'source, 'parser> {
     pub on_function: String,
-    pub expr: HIRExpr<TypeInstanceId>,
+    pub expr: HIRExpr<'source, 'parser, TypeInstanceId>,
 }
 
-impl TypeErrorDisplay for OutOfTypeBounds {
+impl TypeErrorDisplay for OutOfTypeBounds<'_, '_> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -221,16 +221,16 @@ impl TypeErrorDisplay for OutOfTypeBounds {
     }
 }
 
-pub struct InvalidCast {
+pub struct InvalidCast<'source, 'parser> {
     pub on_function: String,
-    pub expr: HIRExpr<TypeInstanceId>,
+    pub expr: HIRExpr<'source, 'parser, TypeInstanceId>,
     pub cast_to: TypeInstanceId,
 }
 
-impl TypeErrorDisplay for InvalidCast {
+impl TypeErrorDisplay for InvalidCast<'_, '_> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -254,7 +254,7 @@ pub struct BinaryOperatorNotFound {
 impl TypeErrorDisplay for BinaryOperatorNotFound {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -277,7 +277,7 @@ pub struct UnaryOperatorNotFound {
 impl TypeErrorDisplay for UnaryOperatorNotFound {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -299,7 +299,7 @@ pub struct FieldOrMethodNotFound {
 impl TypeErrorDisplay for FieldOrMethodNotFound {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -319,7 +319,7 @@ pub struct InsufficientTypeInformationForArray {
 impl TypeErrorDisplay for InsufficientTypeInformationForArray {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -338,7 +338,7 @@ pub struct ArrayExpressionsNotAllTheSameType {
 impl TypeErrorDisplay for ArrayExpressionsNotAllTheSameType {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -358,7 +358,7 @@ pub struct IfStatementNotBoolean {
 impl TypeErrorDisplay for IfStatementNotBoolean {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -378,7 +378,7 @@ pub struct TypeInferenceFailure {
 impl TypeErrorDisplay for TypeInferenceFailure {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -390,17 +390,17 @@ impl TypeErrorDisplay for TypeInferenceFailure {
     }
 }
 
-pub struct UnexpectedTypeInferenceMismatch {
+pub struct UnexpectedTypeInferenceMismatch<'source, 'parser> {
     pub on_function: String,
     pub inferred: TypeInstanceId,
     pub checked: TypeInstanceId,
-    pub expr: HIRExpr<TypeInstanceId, NotChecked>,
+    pub expr: HIRExpr<'source, 'parser, TypeInstanceId, NotChecked>,
 }
 
-impl TypeErrorDisplay for UnexpectedTypeInferenceMismatch {
+impl TypeErrorDisplay for UnexpectedTypeInferenceMismatch<'_, '_> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -422,7 +422,7 @@ pub struct TypeConstructionFailure {
 impl TypeErrorDisplay for TypeConstructionFailure {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -442,7 +442,7 @@ pub struct VariableNotFound {
 impl TypeErrorDisplay for VariableNotFound {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeInstanceManager<'_>,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -457,14 +457,14 @@ impl TypeErrorDisplay for VariableNotFound {
 macro_rules! make_type_errors {
     ($($field:ident : $typename:ty), *) => {
 
-        pub struct TypeErrors {
+        pub struct TypeErrors<'source, 'parser>{
             $(
                 pub $field: $typename,
             )*
         }
 
-        impl TypeErrors {
-            pub fn new() -> TypeErrors {
+        impl<'source, 'parser> TypeErrors<'source, 'parser> {
+            pub fn new() -> TypeErrors<'source, 'parser> {
                 TypeErrors {
                     $(
                         $field: vec![],
@@ -478,7 +478,7 @@ macro_rules! make_type_errors {
             }
         }
 
-        impl<'errors, 'callargs, 'type_db> Display for TypeErrorPrinter<'errors, 'type_db> {
+        impl<'errors, 'callargs, 'type_db, 'source, 'parser> Display for TypeErrorPrinter<'errors, 'type_db, 'source, 'parser> {
 
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 if self.errors.count() == 0 {
@@ -496,16 +496,16 @@ macro_rules! make_type_errors {
         }
 
 
-        pub struct TypeErrorPrinter<'errors, 'type_db> {
-            pub errors: &'errors TypeErrors,
-            pub type_db: &'type_db TypeInstanceManager,
+        pub struct TypeErrorPrinter<'errors, 'type_db, 'source, 'parser> {
+            pub errors: &'errors TypeErrors<'source, 'parser>,
+            pub type_db: &'type_db TypeInstanceManager<'source>,
         }
 
-        impl<'errors, 'callargs, 'type_db> TypeErrorPrinter<'errors, 'type_db> {
+        impl<'errors, 'callargs, 'type_db, 'source, 'parser> TypeErrorPrinter<'errors, 'type_db, 'source, 'parser> {
             pub fn new(
-                errors: &'errors TypeErrors,
-                type_db: &'type_db TypeInstanceManager,
-            ) -> TypeErrorPrinter<'errors, 'type_db> {
+                errors: &'errors TypeErrors<'source, 'parser>,
+                type_db: &'type_db TypeInstanceManager<'source>,
+            ) -> TypeErrorPrinter<'errors, 'type_db, 'source, 'parser> {
                 TypeErrorPrinter { errors, type_db }
             }
         }
@@ -520,7 +520,7 @@ make_type_errors!(
     function_call_mismatches: Vec<TypeMismatch<FunctionCallContext>>,
     function_call_argument_count: Vec<FunctionCallArgumentCountMismatch>,
     call_non_callable: Vec<CallToNonCallableType>,
-    type_not_found: Vec<TypeNotFound>,
+    type_not_found: Vec<TypeNotFound<'source>>,
     variable_not_found: Vec<VariableNotFound>,
     unexpected_types: Vec<UnexpectedTypeFound>,
     binary_op_not_found: Vec<BinaryOperatorNotFound>,
@@ -531,7 +531,7 @@ make_type_errors!(
     if_statement_unexpected_type: Vec<IfStatementNotBoolean>,
     type_inference_failure: Vec<TypeInferenceFailure>,
     type_construction_failure: Vec<TypeConstructionFailure>,
-    out_of_bounds: Vec<OutOfTypeBounds>,
-    invalid_casts: Vec<InvalidCast>,
-    type_inference_check_mismatch: Vec<UnexpectedTypeInferenceMismatch>
+    out_of_bounds: Vec<OutOfTypeBounds<'source, 'parser>>,
+    invalid_casts: Vec<InvalidCast<'source, 'parser>>,
+    type_inference_check_mismatch: Vec<UnexpectedTypeInferenceMismatch<'source, 'parser>>
 );

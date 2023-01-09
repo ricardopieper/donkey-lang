@@ -8,17 +8,17 @@ use super::{
 };
 
 use crate::{
-    ast::parser::{Expr, AST},
+    ast::{parser::{Expr, AST}, lexer::SourceString},
     types::{
         type_constructor_db::{GenericParameter, TypeUsage},
         type_instance_db::TypeInstanceId,
     },
 };
 
-pub type TypecheckPendingExpression = HIRExpr<TypeInstanceId, NotChecked>;
-pub type TypecheckedExpression = HIRExpr<TypeInstanceId, Checked>;
+pub type TypecheckPendingExpression<'source, 'parser> = HIRExpr<'source, 'parser, TypeInstanceId, NotChecked>;
+pub type TypecheckedExpression<'source, 'parser> = HIRExpr<'source, 'parser, TypeInstanceId, Checked>;
 
-impl<T> PrintableExpression for HIRExpr<TypeInstanceId, T> {
+impl<'source, 'parser, T> PrintableExpression for HIRExpr<'source, 'parser, TypeInstanceId, T> {
     fn print_expr(&self) -> String {
         expr_str(self)
     }
@@ -40,23 +40,23 @@ A MIRTopLevelNode is a top-level declaration. They are not executable per se (do
 but represent the main parts of the program.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRTopLevelNode<TTypecheckStateExpr> {
+pub enum MIRTopLevelNode<'source, 'parser, TTypecheckStateExpr> {
     IntrinsicFunction {
-        function_name: String,
-        parameters: Vec<MIRTypedBoundName>,
+        function_name: SourceString<'source>,
+        parameters: Vec<MIRTypedBoundName<'source>>,
         return_type: TypeInstanceId,
     },
     DeclareFunction {
-        function_name: String,
-        parameters: Vec<MIRTypedBoundName>,
-        body: Vec<MIRBlock<TTypecheckStateExpr>>,
-        scopes: Vec<MIRScope>,
+        function_name: SourceString<'source>,
+        parameters: Vec<MIRTypedBoundName<'source>>,
+        body: Vec<MIRBlock<'source, 'parser, TTypecheckStateExpr>>,
+        scopes: Vec<MIRScope<'source>>,
         return_type: TypeInstanceId,
     },
     StructDeclaration {
-        struct_name: String,
-        type_parameters: Vec<GenericParameter>,
-        fields: Vec<HIRTypedBoundName<TypeUsage>>,
+        struct_name: SourceString<'source>,
+        type_parameters: Vec<GenericParameter<'source>>,
+        fields: Vec<HIRTypedBoundName<'source, TypeUsage<'source>>>,
     },
 }
 
@@ -70,18 +70,18 @@ A MIRFunctionNode represents nodes inside a block. They can be executed within t
 a scope and a block.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRBlockNode<TTypecheckState> {
+pub enum MIRBlockNode<'source, 'parser, TTypecheckState> {
     Assign {
-        path: Vec<String>,
-        expression: HIRExpr<TypeInstanceId, TTypecheckState>,
-        meta_ast: AST,
-        meta_expr: Expr,
+        path: Vec<SourceString<'source>>,
+        expression: HIRExpr<'source, 'parser, TypeInstanceId, TTypecheckState>,
+        meta_ast: &'parser AST<'source>,
+        meta_expr: &'parser Expr<'source>,
     },
     FunctionCall {
-        function: String,
-        args: Vec<HIRExpr<TypeInstanceId, TTypecheckState>>,
-        meta_ast: AST,
-        meta_expr: Expr,
+        function: SourceString<'source>,
+        args: Vec<HIRExpr<'source, 'parser, TypeInstanceId, TTypecheckState>>,
+        meta_ast: &'parser AST<'source>,
+        meta_expr: &'parser Expr<'source>,
         return_type: TypeInstanceId,
     },
     //@TODO Add method call here
@@ -94,8 +94,8 @@ pub enum MIRBlockNode<TTypecheckState> {
  Everything that needs a name and a type can use a `MIRTypedBoundName`.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRTypedBoundName {
-    pub name: String,
+pub struct MIRTypedBoundName<'source> {
+    pub name: SourceString<'source>,
     pub type_instance: TypeInstanceId,
 }
 
@@ -105,24 +105,24 @@ pub struct MIRTypedBoundName {
   can introduce a new scope, and you don't have access to variables declared after the fact.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRScope {
+pub struct MIRScope<'source> {
     pub id: ScopeId,
     pub inherit: ScopeId,
-    pub boundnames: Vec<MIRTypedBoundName>,
+    pub boundnames: Vec<MIRTypedBoundName<'source>>,
 }
 
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRBlockFinal<TTypecheckState> {
+pub enum MIRBlockFinal<'source, 'parser, TTypecheckState> {
     //expression, true, else, meta
     If(
-        HIRExpr<TypeInstanceId, TTypecheckState>,
+        HIRExpr<'source, 'parser, TypeInstanceId, TTypecheckState>,
         BlockId,
         BlockId,
-        HIRAstMetadata,
+        HIRAstMetadata<'source, 'parser>,
     ),
     GotoBlock(BlockId),
-    Return(HIRExpr<TypeInstanceId, TTypecheckState>, HIRAstMetadata),
+    Return(HIRExpr<'source, 'parser, TypeInstanceId, TTypecheckState>, HIRAstMetadata<'source, 'parser>),
     EmptyReturn,
 }
 
@@ -134,32 +134,32 @@ pub enum MIRBlockFinal<TTypecheckState> {
 
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRBlock<TTypecheckState> {
+pub struct MIRBlock<'source, 'parser, TTypecheckState> {
     pub index: usize,
     pub scope: ScopeId,
-    pub finish: MIRBlockFinal<TTypecheckState>,
-    pub nodes: Vec<MIRBlockNode<TTypecheckState>>,
+    pub finish: MIRBlockFinal<'source, 'parser, TTypecheckState>,
+    pub nodes: Vec<MIRBlockNode<'source, 'parser, TTypecheckState>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRMaybeUnfinishedBlock {
+pub struct MIRMaybeUnfinishedBlock<'source, 'parser> {
     pub index: usize,
     pub scope: ScopeId,
-    pub finish: Option<MIRBlockFinal<NotChecked>>,
-    pub block: Vec<MIRBlockNode<NotChecked>>,
+    pub finish: Option<MIRBlockFinal<'source, 'parser, NotChecked>>,
+    pub block: Vec<MIRBlockNode<'source, 'parser, NotChecked>>,
 }
 
-pub type TypecheckedMIRBlock = MIRBlock<Checked>;
+pub type TypecheckedMIRBlock<'source, 'parser> = MIRBlock<'source, 'parser, Checked>;
 
-struct MIRFunctionEmitter {
+struct MIRFunctionEmitter<'source, 'parser> {
     current_scope: ScopeId,
     current_block: BlockId,
-    blocks: Vec<MIRMaybeUnfinishedBlock>,
-    scopes: Vec<MIRScope>,
+    blocks: Vec<MIRMaybeUnfinishedBlock<'source, 'parser>>,
+    scopes: Vec<MIRScope<'source>>,
     goto_stack: Vec<BlockId>,
 }
 
-impl MIRFunctionEmitter {
+impl<'source, 'parser> MIRFunctionEmitter<'source, 'parser> {
     fn new() -> Self {
         MIRFunctionEmitter {
             current_block: BlockId(0),
@@ -197,7 +197,7 @@ impl MIRFunctionEmitter {
         BlockId(current_len)
     }
 
-    fn scope_add_variable(&mut self, scope_id: ScopeId, var: String, typedef: TypeInstanceId) {
+    fn scope_add_variable(&mut self, scope_id: ScopeId, var: SourceString<'source>, typedef: TypeInstanceId) {
         let scope = &mut self.scopes[scope_id.0];
         scope.boundnames.push(MIRTypedBoundName {
             name: var,
@@ -239,7 +239,7 @@ impl MIRFunctionEmitter {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::EmptyReturn);
     }
 
-    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<NotChecked>>) {
+    fn finish(self) -> (Vec<MIRScope<'source>>, Vec<MIRBlock<'source, 'parser, NotChecked>>) {
         let blocks = self
             .blocks
             .into_iter()
@@ -523,8 +523,8 @@ fn process_body(emitter: &mut MIRFunctionEmitter, body: &[InferredTypeHIR]) {
     }
 }
 
-fn generate_or_get_fallback_block(
-    emitter: &mut MIRFunctionEmitter,
+fn generate_or_get_fallback_block<'source, 'parser>(
+    emitter: &mut MIRFunctionEmitter<'source, 'parser>,
     current_scope: ScopeId,
 ) -> BlockId {
     let fallback_block = if let Some(block) = emitter.peek_goto_block() {
@@ -537,16 +537,16 @@ fn generate_or_get_fallback_block(
     fallback_block
 }
 
-pub fn process_hir_funcdecl(
-    function_name: &str,
-    parameters: &[HIRTypedBoundName<TypeInstanceId>],
-    body: &[InferredTypeHIR],
+pub fn process_hir_funcdecl<'source, 'parser>(
+    function_name: SourceString<'source>,
+    parameters: &[HIRTypedBoundName<'source, TypeInstanceId>],
+    body: &[InferredTypeHIR<'source, 'parser>],
     return_type: TypeInstanceId,
     is_intrinsic: bool,
-) -> MIRTopLevelNode<NotChecked> {
+) -> MIRTopLevelNode<'source, 'parser, NotChecked> {
     if is_intrinsic {
         return MIRTopLevelNode::IntrinsicFunction {
-            function_name: function_name.to_string(),
+            function_name,
             parameters: parameters
                 .iter()
                 .map(|x| MIRTypedBoundName {
@@ -582,7 +582,7 @@ pub fn process_hir_funcdecl(
 
     let (scopes, body) = emitter.finish();
     return MIRTopLevelNode::DeclareFunction {
-        function_name: function_name.to_string(),
+        function_name,
         parameters: parameters
             .iter()
             .map(|x| MIRTypedBoundName {
@@ -596,7 +596,7 @@ pub fn process_hir_funcdecl(
     };
 }
 
-pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode<NotChecked>> {
+pub fn hir_to_mir<'source, 'parser>(hir_nodes: &[InferredTypeHIRRoot<'source, 'parser>]) -> Vec<MIRTopLevelNode<'source, 'parser, NotChecked>> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
@@ -609,7 +609,7 @@ pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode<NotC
                 is_intrinsic,
             } => {
                 let fdecl = process_hir_funcdecl(
-                    function_name,
+                    *function_name,
                     parameters,
                     body,
                     *return_type,
@@ -624,12 +624,12 @@ pub fn hir_to_mir(hir_nodes: &[InferredTypeHIRRoot]) -> Vec<MIRTopLevelNode<NotC
                 meta: _,
             } => {
                 let fields = fields.iter().map(|x| HIRTypedBoundName {
-                    name: x.name.to_string(),
+                    name: x.name,
                     typename: x.typename.clone(),
                 });
 
                 top_levels.push(MIRTopLevelNode::StructDeclaration {
-                    struct_name: struct_name.to_string(),
+                    struct_name: *struct_name,
                     type_parameters: type_parameters.clone(),
                     fields: fields.collect(),
                 })
@@ -652,14 +652,14 @@ mod tests {
 
     //Parses a single expression
     fn mir(source: &str) -> (Vec<MIRTopLevelNode<NotChecked>>, TypeInstanceManager) {
-        let tokenized = crate::ast::lexer::Tokenizer::new(source)
+        let tokenized = crate::ast::lexer::Tokenizer::new(source.to_string())
             .tokenize()
             .ok()
             .unwrap();
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast());
         println!("AST: {:?}", &ast);
-        let analysis_result = crate::semantic::analysis::do_analysis(&ast);
+        let analysis_result = crate::semantic::analysis::do_analysis(ast);
         println!("HIR: {:?}", &analysis_result.hir);
         (hir_to_mir(&analysis_result.hir), analysis_result.type_db)
     }

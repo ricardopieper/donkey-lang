@@ -1,6 +1,6 @@
 use crate::{
     semantic::hir::{HIRTypedBoundName, HIR},
-    types::type_instance_db::TypeInstanceId,
+    types::type_instance_db::TypeInstanceId, ast::lexer::SourceString,
 };
 
 use std::collections::HashSet;
@@ -10,11 +10,11 @@ use super::hir::{
     HIRTypeDef, UninferredHIR,
 };
 
-fn make_first_assignments_in_body(
-    body: Vec<UninferredHIR>,
-    declarations_found: &mut HashSet<String>,
-) -> Vec<FirstAssignmentsDeclaredHIR> {
-    let mut new_mir: Vec<FirstAssignmentsDeclaredHIR> = vec![];
+fn make_first_assignments_in_body<'source, 'parser>(
+    body: Vec<UninferredHIR<'source, 'parser>>,
+    declarations_found: &mut HashSet<SourceString<'source>>,
+) -> Vec<FirstAssignmentsDeclaredHIR<'source, 'parser>> {
+    let mut new_mir: Vec<FirstAssignmentsDeclaredHIR<'source, 'parser>> = vec![];
     for node in body {
         let mir_node = match node {
             HIR::Declare {
@@ -24,7 +24,7 @@ fn make_first_assignments_in_body(
                 meta_ast,
                 meta_expr,
             } => {
-                declarations_found.insert(var.clone());
+                declarations_found.insert(var);
                 HIR::Declare {
                     var,
                     typedef: HIRTypeDef::Provided(typedef),
@@ -48,7 +48,7 @@ fn make_first_assignments_in_body(
                         meta_expr,
                     }
                 } else {
-                    declarations_found.insert(var.clone());
+                    declarations_found.insert(var);
                     HIR::Declare {
                         var: var.clone(),
                         typedef: HIRTypeDef::PendingInference,
@@ -97,10 +97,10 @@ fn make_first_assignments_in_body(
     new_mir
 }
 
-fn make_assignments_into_declarations_in_function(
-    parameters: &[HIRTypedBoundName<TypeInstanceId>],
-    body: Vec<UninferredHIR>,
-) -> Vec<FirstAssignmentsDeclaredHIR> {
+fn make_assignments_into_declarations_in_function<'source, 'parser>(
+    parameters: &[HIRTypedBoundName<'source, TypeInstanceId>],
+    body: Vec<UninferredHIR<'source, 'parser>>,
+) -> Vec<FirstAssignmentsDeclaredHIR<'source, 'parser>> {
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
 
@@ -111,16 +111,18 @@ fn make_assignments_into_declarations_in_function(
     //therefore we need to navigate node by node, collect the declarations
     //and check assignments, as we go
 
-    let mut declarations_found = HashSet::<String>::new();
+    //@TODO there is some trouble here with lifetimes, because the body is consumed, the strings
+    //move to the new body and cannot be stored as refs in the declarations_found set.
+    let mut declarations_found = HashSet::<SourceString<'source>>::new();
     for p in parameters {
-        declarations_found.insert(p.name.to_string());
+        declarations_found.insert(p.name);
     }
     make_first_assignments_in_body(body, &mut declarations_found)
 }
 
-pub fn transform_first_assignment_into_declaration(
-    mir: Vec<GlobalsInferredMIRRoot>,
-) -> Vec<FirstAssignmentsDeclaredHIRRoot> {
+pub fn transform_first_assignment_into_declaration<'source, 'parser>(
+    mir: Vec<GlobalsInferredMIRRoot<'source, 'parser>>,
+) -> Vec<FirstAssignmentsDeclaredHIRRoot<'source, 'parser>> {
     let mut new_mir = vec![];
 
     for node in mir {

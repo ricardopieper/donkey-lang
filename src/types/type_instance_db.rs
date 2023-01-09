@@ -96,8 +96,8 @@ pub struct CommonTypeInstances {
     pub bool: TypeInstanceId,
 }
 
-pub struct TypeInstanceManager {
-    pub constructors: TypeConstructorDatabase,
+pub struct TypeInstanceManager<'source> {
+    pub constructors: TypeConstructorDatabase<'source>,
     pub types: Vec<TypeInstance>,
     pub common_types: CommonTypeInstances,
 }
@@ -108,8 +108,8 @@ pub enum StructMember<'type_db> {
     NotFound,
 }
 
-impl TypeInstanceManager {
-    pub fn new() -> TypeInstanceManager {
+impl<'source> TypeInstanceManager<'source> {
+    pub fn new() -> TypeInstanceManager<'source> {
         let mut item = TypeInstanceManager {
             types: vec![],
             constructors: TypeConstructorDatabase::new(),
@@ -240,7 +240,7 @@ impl TypeInstanceManager {
         match usage {
             TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
             TypeUsage::Generic(param) => type_args
-                .get(&param.0)
+                .get(param.0)
                 .ok_or_else(|| TypeConstructionError::TypeNotFound {
                     name: param.0.to_string(),
                 })
@@ -491,7 +491,7 @@ fn make_base_instance(
     }
 }
 
-impl Default for TypeInstanceManager {
+impl Default for TypeInstanceManager<'_> {
     fn default() -> Self {
         Self::new()
     }

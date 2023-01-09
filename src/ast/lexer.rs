@@ -1,3 +1,4 @@
+
 use crate::commons::float::FloatLiteral;
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
@@ -21,13 +22,17 @@ pub enum Operator {
     LessEquals,
 }
 
+pub type SourceString<'source> = &'source str;
+
+pub const WHITESPACE: PartialToken<'static> = PartialToken::UndefinedOrWhitespace;
+
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Token {
+pub enum Token<'source> {
     LiteralFloat(FloatLiteral),
     LiteralInteger(i128),
-    LiteralString(String),
+    LiteralString(String), //not zero copy because it's an escaped string, it's a different allocation
     Operator(Operator),
-    Identifier(String),
+    Identifier(SourceString<'source>),
     NewLine,
     Assign,
     True,
@@ -56,7 +61,7 @@ pub enum Token {
     Indentation,
 }
 
-impl Token {
+impl<'source> Token<'source> {
     pub const fn name(&self) -> &'static str {
         match self {
             Token::LiteralFloat(_) => "float literal",
@@ -94,12 +99,12 @@ impl Token {
 }
 
 #[derive(Debug)]
-enum PartialToken {
+enum PartialToken<'source> {
     UndefinedOrWhitespace,
-    LiteralFloat(String),
-    Operator(String),
-    Identifier(String),
-    String(String),
+    LiteralFloat(SourceString<'source>),
+    Operator(SourceString<'source>),
+    Identifier(SourceString<'source>),
+    String(String), //this one is not zero copy because the string is escaped during lexical analysis, it's a new allocation
     NewLine,
     Comma,
     OpenArrayBracket,
@@ -108,13 +113,13 @@ enum PartialToken {
     Colon,
 }
 
-impl PartialToken {
-    fn to_token(&self) -> Token {
+impl<'source> PartialToken<'source> {
+    fn to_token(self) -> Token<'source> {
         match self {
             Self::UndefinedOrWhitespace => {
                 panic!("Unexpected undefined token. This is a tokenizer bug.")
             }
-            Self::Identifier(s) => match s.as_str() {
+            Self::Identifier(s) => match s.as_ref() {
                 "None" => Token::None,
                 "not" => Token::Operator(Operator::Not),
                 "True" => Token::True,
@@ -155,7 +160,7 @@ impl PartialToken {
                 }
             }
             Self::String(s) => Token::LiteralString(s.clone()),
-            Self::Operator(s) => match s.as_str() {
+            Self::Operator(s) => match s.as_ref() {
                 "+" => Token::Operator(Operator::Plus),
                 "-" => Token::Operator(Operator::Minus),
                 "*" => Token::Operator(Operator::Multiply),
@@ -180,19 +185,22 @@ impl PartialToken {
     }
 }
 
-pub struct Tokenizer {
+pub struct Tokenizer<'source> {
     index: usize,
+    source: SourceString<'source>,
     chars: Vec<char>,
-    cur_partial_token: PartialToken,
-    final_result: Vec<Token>,
-    eater_buf: String,
+    cur_partial_token: PartialToken<'source>,
+    final_result: Vec<Token<'source>>,
+    eater_buf: String
 }
 
-impl Tokenizer {
-    pub fn new(source: &str) -> Tokenizer {
+impl<'source> Tokenizer<'source> {
+    pub fn new(source: SourceString<'source>) -> Tokenizer<'source> {
+        let chars = source.chars().collect::<Vec<_>>();
         Tokenizer {
             index: 0,
-            chars: source.chars().collect(),
+            source,
+            chars,
             cur_partial_token: PartialToken::UndefinedOrWhitespace,
             final_result: vec![],
             eater_buf: String::new(),
@@ -208,10 +216,10 @@ impl Tokenizer {
     }
 
     fn advance(&mut self, offset: usize) {
-        self.index += offset;
+        self.index = self.index + offset;
     }
 
-    fn cur(&self) -> char {
+    fn cur(& self) -> char {
         self.cur_offset(0)
     }
 
@@ -233,7 +241,8 @@ impl Tokenizer {
         ate
     }
 
-    fn eat_identifier(&mut self) -> bool {
+    fn eat_identifier(&mut self) -> Option<&'source str> {
+        let start = self.index;
         let first_char_is_valid_identifier =
             self.can_go() && self.cur().is_ascii_alphabetic() || self.cur() == '_';
 
@@ -241,15 +250,17 @@ impl Tokenizer {
             self.eater_buf.push(self.cur());
             self.next();
         } else {
-            return false;
+            return None;
         }
 
         while self.can_go() && (self.cur().is_ascii_alphanumeric() || self.cur() == '_') {
             self.eater_buf.push(self.cur());
             self.next();
         }
+        let end = self.index;
 
-        true
+
+        Some(&self.source[start..end])
     }
 
     fn eat_char(&mut self, char_to_eat: char) -> bool {
@@ -309,11 +320,11 @@ impl Tokenizer {
         if let PartialToken::UndefinedOrWhitespace = self.cur_partial_token {
             return;
         }
-        let cur_token = std::mem::replace(
-            &mut self.cur_partial_token,
-            PartialToken::UndefinedOrWhitespace,
-        );
-        self.final_result.push(cur_token.to_token());
+        
+        let cur_token = std::mem::replace(&mut self.cur_partial_token, WHITESPACE);
+
+        let as_token = cur_token.to_token();
+        self.final_result.push(as_token);
     }
 
     fn clone_buf(&self) -> String {
@@ -331,18 +342,20 @@ impl Tokenizer {
         (true, matched_chars)
     }
 
-    fn match_first_and_advance<'a>(&mut self, query: &'a [&'a str]) -> Option<&'a str> {
+    fn match_first_and_advance<'a>(&mut self, query: &'a [&'a str]) -> Option<&'source str> {
         for q in query {
+            let cur_idx = self.index;
             let (success, len) = self.match_partial(q);
             if success {
                 self.advance(len);
-                return Some(q);
+                let new_idx = self.index;
+                return Some(&self.source[cur_idx..new_idx]);
             }
         }
         None
     }
 
-    pub fn tokenize(mut self) -> Result<Vec<Token>, String> {
+    pub fn tokenize(mut self) -> Result<Vec<Token<'source>>, String> {
         let operators = &[
             "+", "->", "-", "*", "%", "/", "<<", ">>", "<=", ">=", ">", "<", "!=", "==", "=", "^",
             "(", ")",
@@ -350,6 +363,7 @@ impl Tokenizer {
         while self.can_go() {
             self.commit_current_token();
             if self.cur().is_numeric() {
+                let cur_idx = self.index;
                 self.reset_eater_buffer();
                 self.eat_numbers();
                 self.eat_char('.');
@@ -357,7 +371,8 @@ impl Tokenizer {
                 self.eat_char('e');
                 self.eat_char('-');
                 self.eat_numbers();
-                self.cur_partial_token = PartialToken::LiteralFloat(self.clone_buf());
+                let end_idx = self.index;
+                self.cur_partial_token = PartialToken::LiteralFloat(&self.source[cur_idx..end_idx]);
                 self.reset_eater_buffer();
             } else if self.cur() == ',' {
                 self.cur_partial_token = PartialToken::Comma;
@@ -401,11 +416,11 @@ impl Tokenizer {
                 //if it's whitespace and there's a pending token, add it
                 self.next();
             } else if let Some(s) = self.match_first_and_advance(operators) {
-                self.cur_partial_token = PartialToken::Operator(String::from(s));
+                self.cur_partial_token = PartialToken::Operator(s);
                 self.commit_current_token();
             } else if self.cur().is_ascii_alphabetic() || self.cur() == '_' {
-                self.eat_identifier();
-                self.cur_partial_token = PartialToken::Identifier(self.clone_buf());
+                let identifier = self.eat_identifier().unwrap();
+                self.cur_partial_token = PartialToken::Identifier(identifier);
                 self.reset_eater_buffer();
             } else if self.cur() == '\'' || self.cur() == '"' {
                 self.eat_string_literal();
@@ -418,11 +433,12 @@ impl Tokenizer {
             }
         }
         self.commit_current_token();
-        Ok(self.final_result)
+        let final_result = self.final_result.drain(0 .. self.final_result.len());
+        Ok(final_result.collect())
     }
 }
 
-pub fn tokenize(source: &str) -> Result<Vec<Token>, String> {
+pub fn tokenize<'source>(source: &'source str) -> Result<Vec<Token<'source>>, String> {
     Tokenizer::new(source).tokenize()
 }
 
@@ -628,7 +644,7 @@ mod tests {
     #[test]
     fn tokenizer_identifier() -> Result<(), String> {
         let result = tokenize("some_identifier")?;
-        assert_eq!(result, [Token::Identifier(String::from("some_identifier"))]);
+        assert_eq!(result, [Token::Identifier(("some_identifier").into())]);
         Ok(())
     }
 
@@ -638,7 +654,7 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(String::from("some_identifier")),
+                Token::Identifier(("some_identifier").into()),
                 Token::OpenParen,
                 Token::LiteralInteger(1),
                 Token::CloseParen
@@ -653,7 +669,7 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(String::from("x")),
+                Token::Identifier("x".into()),
                 Token::Assign,
                 Token::LiteralInteger(1)
             ]
@@ -688,28 +704,28 @@ mod tests {
     #[test]
     fn string_literal() -> Result<(), String> {
         let result = tokenize("'abc'")?;
-        assert_eq!(result, [Token::LiteralString(String::from("abc"))]);
+        assert_eq!(result, [Token::LiteralString("abc".to_string().into())]);
         Ok(())
     }
 
     #[test]
     fn string_literal_doublequotes() -> Result<(), String> {
         let result = tokenize("\"abc\"")?;
-        assert_eq!(result, [Token::LiteralString(String::from("abc"))]);
+        assert_eq!(result, [Token::LiteralString("abc".to_string().into())]);
         Ok(())
     }
 
     #[test]
     fn string_literal_escapedouble() -> Result<(), String> {
         let result = tokenize("\"a\\\"b\\\"c\"")?;
-        assert_eq!(result, [Token::LiteralString(String::from("a\"b\"c"))]);
+        assert_eq!(result, [Token::LiteralString("a\"b\"c".to_string().into())]);
         Ok(())
     }
 
     #[test]
     fn string_literal_escapesingle() -> Result<(), String> {
         let result = tokenize("\'a\\'b\\'c\'")?;
-        assert_eq!(result, [Token::LiteralString(String::from("a'b'c"))]);
+        assert_eq!(result, [Token::LiteralString("a'b'c".to_string().into())]);
         Ok(())
     }
 
@@ -723,15 +739,15 @@ mod tests {
             result,
             [
                 Token::IfKeyword,
-                Token::Identifier(String::from("x")),
+                Token::Identifier("x".into()),
                 Token::Operator(Operator::Equals),
                 Token::LiteralInteger(0),
                 Token::Colon,
                 Token::NewLine,
                 Token::Indentation,
-                Token::Identifier(String::from("x")),
+                Token::Identifier("x".into()),
                 Token::Assign,
-                Token::Identifier(String::from("x")),
+                Token::Identifier("x".into()),
                 Token::Operator(Operator::Plus),
                 Token::LiteralInteger(1)
             ]
@@ -745,9 +761,9 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(String::from("obj")),
+                Token::Identifier("obj".into()),
                 Token::MemberAccessor,
-                Token::Identifier(String::from("method")),
+                Token::Identifier("method".into()),
             ]
         );
         Ok(())
@@ -759,9 +775,9 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(String::from("obj")),
+                Token::Identifier("obj".into()),
                 Token::MemberAccessor,
-                Token::Identifier(String::from("method")),
+                Token::Identifier("method".into()),
             ]
         );
         Ok(())

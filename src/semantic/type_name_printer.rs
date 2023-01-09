@@ -15,7 +15,7 @@ impl TypeNamePrinter for TypeInstanceId {
     }
 }
 
-impl TypeNamePrinter for TypeUsage {
+impl<'source> TypeNamePrinter for TypeUsage<'source> {
     fn print_name(&self, type_db: &TypeInstanceManager) -> String {
         match self {
             TypeUsage::Given(id) => type_db.constructors.find(*id).name.to_string(),
@@ -41,7 +41,7 @@ impl TypeNamePrinter for () {
     }
 }
 
-impl TypeNamePrinter for HIRType {
+impl<'source> TypeNamePrinter for HIRType<'source> {
     fn print_name(&self, type_db: &TypeInstanceManager) -> String {
         fn slice_types_str(types: &[HIRType], type_db: &TypeInstanceManager) -> String {
             types
