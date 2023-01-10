@@ -269,7 +269,7 @@ fn expr_to_hir_expr<'source>(expr: &'source Expr<'source>) -> HIRExpr<'source, (
         Expr::FloatValue(f) => HIRExpr::Literal(LiteralHIRExpr::Float(*f), (), expr),
         Expr::StringValue(s) => HIRExpr::Literal(LiteralHIRExpr::String(s), (), expr),
         Expr::BooleanValue(b) => HIRExpr::Literal(LiteralHIRExpr::Boolean(*b), (), expr),
-        Expr::None => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
+        Expr::NoneExpr => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
         Expr::Variable(name) => HIRExpr::Variable(*name, (), expr),
         Expr::FunctionCall(fun_expr, args) => match &**fun_expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(

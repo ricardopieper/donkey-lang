@@ -702,28 +702,28 @@ mod tests {
     #[test]
     fn string_literal() -> Result<(), String> {
         let result = tokenize("'abc'")?;
-        assert_eq!(result, [Token::LiteralString("abc".to_string().into())]);
+        assert_eq!(result, [Token::LiteralString("abc".to_string())]);
         Ok(())
     }
 
     #[test]
     fn string_literal_doublequotes() -> Result<(), String> {
         let result = tokenize("\"abc\"")?;
-        assert_eq!(result, [Token::LiteralString("abc".to_string().into())]);
+        assert_eq!(result, [Token::LiteralString("abc".to_string())]);
         Ok(())
     }
 
     #[test]
     fn string_literal_escapedouble() -> Result<(), String> {
         let result = tokenize("\"a\\\"b\\\"c\"")?;
-        assert_eq!(result, [Token::LiteralString("a\"b\"c".to_string().into())]);
+        assert_eq!(result, [Token::LiteralString("a\"b\"c".to_string())]);
         Ok(())
     }
 
     #[test]
     fn string_literal_escapesingle() -> Result<(), String> {
         let result = tokenize("\'a\\'b\\'c\'")?;
-        assert_eq!(result, [Token::LiteralString("a'b'c".to_string().into())]);
+        assert_eq!(result, [Token::LiteralString("a'b'c".to_string())]);
         Ok(())
     }
 

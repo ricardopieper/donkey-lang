@@ -9,7 +9,7 @@ pub enum Expr<'source> {
     FloatValue(FloatLiteral),
     StringValue(String), //literal strings are new allocations
     BooleanValue(bool),
-    None,
+    NoneExpr,
     Variable(SourceString<'source>),
     FunctionCall(Box<Expr<'source>>, Vec<Expr<'source>>),
     IndexAccess(Box<Expr<'source>>, Box<Expr<'source>>),
@@ -115,12 +115,12 @@ fn precedence(o: Operator) -> u32 {
 
 fn clean_parens(expr: Expr) -> Expr {
     match expr {
-        Expr::Parenthesized(e) => clean_parens(*e),
-        Expr::UnaryExpression(op, e) => Expr::UnaryExpression(op, Box::new(clean_parens(*e))),
-        Expr::BinaryOperation(left, op, right) => {
+        Parenthesized(e) => clean_parens(*e),
+        UnaryExpression(op, e) => UnaryExpression(op, Box::new(clean_parens(*e))),
+        BinaryOperation(left, op, right) => {
             let left_clean = Box::new(clean_parens(*left));
             let right_clean = Box::new(clean_parens(*right));
-            Expr::BinaryOperation(left_clean, op, right_clean)
+            BinaryOperation(left_clean, op, right_clean)
         }
         _ => expr,
     }
@@ -208,7 +208,7 @@ macro_rules! indented {
         returned
     }};
 }
-
+use Expr::*;
 impl<'source> Parser<'source> {
     pub fn new(tokens: Vec<Token<'source>>) -> Parser<'source> {
         Parser {
@@ -809,7 +809,7 @@ impl<'source> Parser<'source> {
                     "Invalid syntax: must inform only one index"
                 );
 
-                let fcall = Expr::IndexAccess(
+                let fcall = IndexAccess(
                     Box::new(expr_list_or_array),
                     Box::new(resulting_exprs.pop().unwrap()),
                 );
@@ -830,7 +830,7 @@ impl<'source> Parser<'source> {
         expr_callable: Expr<'source>,
     ) -> Result<Expr<'source>, ParsingError> {
         if let Token::CloseParen = self.cur() {
-            return Ok(Expr::FunctionCall(Box::new(expr_callable), vec![]));
+            return Ok(FunctionCall(Box::new(expr_callable), vec![]));
         }
 
         self.new_stack();
@@ -843,7 +843,7 @@ impl<'source> Parser<'source> {
                 let popped = self.pop_stack();
                 let resulting_exprs = expressions.resulting_expr_list;
 
-                let fcall = Expr::FunctionCall(Box::new(expr_callable), resulting_exprs);
+                let fcall = FunctionCall(Box::new(expr_callable), resulting_exprs);
 
                 self.set_cur(&popped);
 
@@ -915,9 +915,9 @@ impl<'source> Parser<'source> {
                                 //The left side stays the same, but the right side needs adjustments
                                 //because the parenthesis invokes a call over the result of the whole right-side expr.
                                 match current_expr {
-                                    Expr::BinaryOperation(left, op, right) => {
+                                    BinaryOperation(left, op, right) => {
                                         let right_side_fcall = self.function_call_helper(*right)?;
-                                        self.push_operand(Expr::BinaryOperation(
+                                        self.push_operand(BinaryOperation(
                                             left,
                                             op,
                                             Box::new(right_side_fcall),
@@ -940,8 +940,7 @@ impl<'source> Parser<'source> {
                                     //worked
                                     //commit the result
                                     let resulting_expr = expr_result.resulting_expr;
-                                    let parenthesized =
-                                        Expr::Parenthesized(Box::new(resulting_expr));
+                                    let parenthesized = Parenthesized(Box::new(resulting_expr));
                                     let popped = self.pop_stack();
                                     self.push_operand(parenthesized);
                                     self.set_cur(&popped);
@@ -985,10 +984,10 @@ impl<'source> Parser<'source> {
                                 //over the result of the whole right-side expr.
 
                                 match current_expr {
-                                    Expr::BinaryOperation(left, op, right) => {
+                                    BinaryOperation(left, op, right) => {
                                         let right_side_index_access =
                                             self.index_access_helper(*right)?;
-                                        self.push_operand(Expr::BinaryOperation(
+                                        self.push_operand(BinaryOperation(
                                             left,
                                             op,
                                             Box::new(right_side_index_access),
@@ -1007,7 +1006,7 @@ impl<'source> Parser<'source> {
                             self.new_stack(); //new parsing stack/state
                             self.next(); //move to the first token, out of the open array
                             if let Token::CloseArrayBracket = self.cur() {
-                                self.push_operand(Expr::Array(vec![]));
+                                self.push_operand(Array(vec![]));
                                 was_operand = true;
                             } else {
                                 let list_of_exprs = self.parse_comma_sep_list_expr();
@@ -1018,7 +1017,7 @@ impl<'source> Parser<'source> {
                                         //commit the result
                                         let popped = self.pop_stack();
                                         let resulting_exprs = expressions.resulting_expr_list;
-                                        self.push_operand(Expr::Array(resulting_exprs));
+                                        self.push_operand(Array(resulting_exprs));
                                         self.set_cur(&popped);
                                     }
                                     Err(e) => {
@@ -1030,7 +1029,7 @@ impl<'source> Parser<'source> {
                         }
                     }
                     Token::Identifier(identifier_str) => {
-                        self.push_operand(Expr::Variable(identifier_str));
+                        self.push_operand(Variable(identifier_str));
                         was_operand = true;
                     }
                     Token::MemberAccessor => {
@@ -1040,7 +1039,7 @@ impl<'source> Parser<'source> {
                         let cur_token = self.cur();
                         if let Token::Identifier(name) = cur_token {
                             let cur_expr = popped.unwrap();
-                            let member_access_expr = Expr::MemberAccess(Box::new(cur_expr), name);
+                            let member_access_expr = MemberAccess(Box::new(cur_expr), name);
                             self.push_operand(member_access_expr);
                             was_operand = true;
                         } else {
@@ -1050,28 +1049,28 @@ impl<'source> Parser<'source> {
                         }
                     }
                     Token::LiteralInteger(i) => {
-                        self.push_operand(Expr::IntegerValue(*i));
+                        self.push_operand(IntegerValue(*i));
                         was_operand = true;
                     }
                     Token::LiteralFloat(f) => {
-                        self.push_operand(Expr::FloatValue(*f));
+                        self.push_operand(FloatValue(*f));
                         was_operand = true;
                     }
                     Token::LiteralString(f) => {
                         //@TODO cloneless: store the literals somewhere it can be fetched by ref?
-                        self.push_operand(Expr::StringValue(f.to_string()));
+                        self.push_operand(StringValue(f.to_string()));
                         was_operand = true;
                     }
                     Token::None => {
-                        self.push_operand(Expr::None);
+                        self.push_operand(NoneExpr);
                         was_operand = true;
                     }
                     Token::True => {
-                        self.push_operand(Expr::BooleanValue(true));
+                        self.push_operand(BooleanValue(true));
                         was_operand = true;
                     }
                     Token::False => {
-                        self.push_operand(Expr::BooleanValue(false));
+                        self.push_operand(BooleanValue(false));
                         was_operand = true;
                     }
                     Token::Operator(o) => self.push_operator(*o),
@@ -1108,7 +1107,7 @@ impl<'source> Parser<'source> {
                 if self.operand_stack().len() == 1 && self.operator_stack().len() == 1 {
                     let last_operand = self.operand_stack_mut().pop().unwrap();
                     let op = self.operator_stack_mut().pop().unwrap();
-                    self.push_operand(Expr::UnaryExpression(op, Box::new(last_operand)));
+                    self.push_operand(UnaryExpression(op, Box::new(last_operand)));
                 }
                 //repeat case: 2 * -----2 or even 2 * -2, consume all the minus signals
                 else if self.operator_stack().len() > 1 && self.operand_stack().len() == 2 {
@@ -1116,7 +1115,7 @@ impl<'source> Parser<'source> {
                         let last_operand = self.operand_stack_mut().pop().unwrap();
                         let op = self.operator_stack_mut().pop().unwrap();
 
-                        self.push_operand(Expr::UnaryExpression(op, Box::new(last_operand)));
+                        self.push_operand(UnaryExpression(op, Box::new(last_operand)));
                     }
                 }
                 //if we enter the previous if, we will have an operand, operator, and an unary exp operand
@@ -1132,8 +1131,8 @@ impl<'source> Parser<'source> {
                     //if both are binary exprs, we will lose some data during this transformation.
                     //however, this shouldn't happen
                     assert!(
-                        !(matches!(lhs_root, Expr::BinaryOperation(..))
-                            && matches!(rhs_root, Expr::BinaryOperation(..)))
+                        !(matches!(lhs_root, BinaryOperation(..))
+                            && matches!(rhs_root, BinaryOperation(..)))
                     );
 
                     let op = self.operator_stack_mut().pop().unwrap();
@@ -1146,26 +1145,26 @@ impl<'source> Parser<'source> {
                     //do only using regular moves
 
                     let mut bin_op = None;
-                    if let Expr::BinaryOperation(lhs_down, op_down, rhs_down) = &lhs_root {
+                    if let BinaryOperation(lhs_down, op_down, rhs_down) = &lhs_root {
                         let precedence_down = precedence(*op_down);
                         if precedence_root > precedence_down {
-                            bin_op = Some(Expr::BinaryOperation(
+                            bin_op = Some(BinaryOperation(
                                 lhs_down.clone(),
                                 *op_down,
-                                Box::new(Expr::BinaryOperation(
+                                Box::new(BinaryOperation(
                                     rhs_down.clone(),
                                     op,
                                     Box::new(rhs_root.clone()),
                                 )),
                             ));
                         }
-                    } else if let Expr::BinaryOperation(lhs_down, op_down, rhs_down) = &rhs_root {
+                    } else if let BinaryOperation(lhs_down, op_down, rhs_down) = &rhs_root {
                         let precedence_down = precedence(*op_down);
                         if precedence_root > precedence_down {
-                            bin_op = Some(Expr::BinaryOperation(
+                            bin_op = Some(BinaryOperation(
                                 lhs_down.clone(),
                                 *op_down,
-                                Box::new(Expr::BinaryOperation(
+                                Box::new(BinaryOperation(
                                     rhs_down.clone(),
                                     op,
                                     Box::new(lhs_root.clone()),
@@ -1175,11 +1174,7 @@ impl<'source> Parser<'source> {
                     }
                     //@TODO cloneless: at least the cases that don't need fixing are cloneless
                     if bin_op.is_none() {
-                        bin_op = Some(Expr::BinaryOperation(
-                            Box::new(lhs_root),
-                            op,
-                            Box::new(rhs_root),
-                        ));
+                        bin_op = Some(BinaryOperation(Box::new(lhs_root), op, Box::new(rhs_root)));
                     }
                     self.push_operand(bin_op.unwrap());
                 }
@@ -1191,7 +1186,7 @@ impl<'source> Parser<'source> {
             while !self.operator_stack().is_empty() {
                 let expr = self.operand_stack_mut().pop().unwrap();
                 let operator = self.operator_stack_mut().pop().unwrap();
-                self.push_operand(Expr::UnaryExpression(operator, Box::new(expr)));
+                self.push_operand(UnaryExpression(operator, Box::new(expr)));
             }
         }
 
@@ -1300,6 +1295,7 @@ mod tests {
     use crate::ast::lexer::tokenize;
 
     use super::*;
+    use AST::*;
 
     //Parses a single expression
     fn parse(tokens: Vec<Token>) -> Expr {
@@ -1317,22 +1313,22 @@ y = x + str(True)",
         .unwrap();
         let result = parse_ast(tokens);
         let expected = vec![
-            AST::Assign {
+            Assign {
                 path: vec!["x"],
-                expression: Expr::BinaryOperation(
-                    Box::new(Expr::StringValue("abc".into())),
+                expression: BinaryOperation(
+                    Box::new(StringValue("abc".into())),
                     Operator::Plus,
-                    Box::new(Expr::StringValue("cde".into())),
+                    Box::new(StringValue("cde".into())),
                 ),
             },
-            AST::Assign {
+            Assign {
                 path: vec!["y"],
-                expression: Expr::BinaryOperation(
-                    Box::new(Expr::Variable("x")),
+                expression: BinaryOperation(
+                    Box::new(Variable("x")),
                     Operator::Plus,
-                    Box::new(Expr::FunctionCall(
-                        Box::new(Expr::Variable("str")),
-                        vec![Expr::BooleanValue(true)],
+                    Box::new(FunctionCall(
+                        Box::new(Variable("str")),
+                        vec![BooleanValue(true)],
                     )),
                 ),
             },
@@ -1353,14 +1349,14 @@ while True:
         .unwrap();
 
         let result = parse_ast(tokens);
-        let expected = vec![AST::WhileStatement {
-            expression: Expr::BooleanValue(true),
+        let expected = vec![WhileStatement {
+            expression: BooleanValue(true),
             body: vec![
-                AST::Assign {
+                Assign {
                     path: vec!["x"],
-                    expression: Expr::IntegerValue(1),
+                    expression: IntegerValue(1),
                 },
-                AST::Break,
+                Break,
             ],
         }];
         assert_eq!(expected, result);
@@ -1378,24 +1374,24 @@ while True:
         .unwrap();
 
         let result = parse_ast(tokens);
-        let expected = vec![AST::WhileStatement {
-            expression: Expr::BinaryOperation(
-                Box::new(Expr::Variable("x")),
+        let expected = vec![WhileStatement {
+            expression: BinaryOperation(
+                Box::new(Variable("x")),
                 Operator::Less,
-                Box::new(Expr::IntegerValue(1_000_000)),
+                Box::new(IntegerValue(1_000_000)),
             ),
-            body: vec![AST::IfStatement {
+            body: vec![IfStatement {
                 true_branch: ASTIfStatement {
-                    expression: Expr::BinaryOperation(
-                        Box::new(Expr::BinaryOperation(
-                            Box::new(Expr::Variable("x")),
+                    expression: BinaryOperation(
+                        Box::new(BinaryOperation(
+                            Box::new(Variable("x")),
                             Operator::Divide,
-                            Box::new(Expr::IntegerValue(5)),
+                            Box::new(IntegerValue(5)),
                         )),
                         Operator::Equals,
-                        Box::new(Expr::IntegerValue(0)),
+                        Box::new(IntegerValue(0)),
                     ),
-                    statements: vec![AST::Break],
+                    statements: vec![Break],
                 },
                 elifs: vec![],
                 final_else: None,
@@ -1421,38 +1417,38 @@ print(x)
 
         let result = parse_ast(tokens);
         let expected = vec![
-            AST::IfStatement {
+            IfStatement {
                 true_branch: ASTIfStatement {
-                    expression: Expr::BinaryOperation(
-                        Box::new(Expr::Variable("x")),
+                    expression: BinaryOperation(
+                        Box::new(Variable("x")),
                         Operator::Equals,
-                        Box::new(Expr::IntegerValue(0)),
+                        IntegerValue(0).into(),
                     ),
-                    statements: vec![AST::Assign {
+                    statements: vec![Assign {
                         path: vec!["x"],
-                        expression: Expr::BinaryOperation(
-                            Box::new(Expr::Variable("x")),
+                        expression: BinaryOperation(
+                            Variable("x").into(),
                             Operator::Plus,
-                            Box::new(Expr::IntegerValue(1)),
+                            IntegerValue(1).into(),
                         ),
                     }],
                 },
                 elifs: vec![],
                 final_else: Some(vec![
-                    AST::Assign {
+                    Assign {
                         path: vec!["x"],
-                        expression: Expr::IntegerValue(999),
+                        expression: IntegerValue(999),
                     },
-                    AST::IfStatement {
+                    IfStatement {
                         true_branch: ASTIfStatement {
-                            expression: Expr::BinaryOperation(
-                                Box::new(Expr::Variable("x")),
+                            expression: BinaryOperation(
+                                Variable("x").into(),
                                 Operator::Equals,
-                                Box::new(Expr::IntegerValue(1)),
+                                IntegerValue(1).into(),
                             ),
-                            statements: vec![AST::StandaloneExpr(Expr::FunctionCall(
-                                Box::new(Expr::Variable("print")),
-                                vec![Expr::IntegerValue(2)],
+                            statements: vec![StandaloneExpr(FunctionCall(
+                                Variable("print").into(),
+                                vec![IntegerValue(2)],
                             ))],
                         },
                         elifs: vec![],
@@ -1460,10 +1456,7 @@ print(x)
                     },
                 ]),
             },
-            AST::StandaloneExpr(Expr::FunctionCall(
-                Box::new(Expr::Variable("print")),
-                vec![Expr::Variable("x")],
-            )),
+            StandaloneExpr(FunctionCall(Variable("print").into(), vec![Variable("x")])),
         ];
         assert_eq!(expected, result);
     }
@@ -1495,32 +1488,32 @@ print(x)
 
         let result = parse_ast(tokens);
         let expected = vec![
-            AST::IfStatement {
+            IfStatement {
                 true_branch: ASTIfStatement {
-                    expression: Expr::BinaryOperation(
-                        Box::new(Expr::Variable("x")),
+                    expression: BinaryOperation(
+                        Variable("x").into(),
                         Operator::Equals,
-                        Box::new(Expr::IntegerValue(0)),
+                        IntegerValue(0).into(),
                     ),
                     statements: vec![
-                        AST::Assign {
+                        Assign {
                             path: vec!["x"],
-                            expression: Expr::BinaryOperation(
-                                Box::new(Expr::Variable("x")),
+                            expression: BinaryOperation(
+                                Variable("x").into(),
                                 Operator::Plus,
-                                Box::new(Expr::IntegerValue(1)),
+                                IntegerValue(1).into(),
                             ),
                         },
-                        AST::IfStatement {
+                        IfStatement {
                             true_branch: ASTIfStatement {
-                                expression: Expr::BinaryOperation(
-                                    Box::new(Expr::Variable("x")),
+                                expression: BinaryOperation(
+                                    Variable("x").into(),
                                     Operator::Equals,
-                                    Box::new(Expr::IntegerValue(1)),
+                                    IntegerValue(1).into(),
                                 ),
-                                statements: vec![AST::StandaloneExpr(Expr::FunctionCall(
-                                    Box::new(Expr::Variable("print")),
-                                    vec![Expr::IntegerValue(2)],
+                                statements: vec![StandaloneExpr(FunctionCall(
+                                    Variable("print").into(),
+                                    vec![IntegerValue(2)],
                                 ))],
                             },
                             elifs: vec![],
@@ -1531,10 +1524,7 @@ print(x)
                 elifs: vec![],
                 final_else: None,
             },
-            AST::StandaloneExpr(Expr::FunctionCall(
-                Box::new(Expr::Variable("print")),
-                vec![Expr::Variable("x")],
-            )),
+            StandaloneExpr(FunctionCall(Variable("print").into(), vec![Variable("x")])),
         ];
         assert_eq!(expected, result);
     }
@@ -1548,19 +1538,19 @@ if x == 0:
         )
         .unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::IfStatement {
+        let expected = vec![IfStatement {
             true_branch: ASTIfStatement {
-                expression: Expr::BinaryOperation(
-                    Box::new(Expr::Variable("x")),
+                expression: BinaryOperation(
+                    Variable("x").into(),
                     Operator::Equals,
-                    Box::new(Expr::IntegerValue(0)),
+                    IntegerValue(0).into(),
                 ),
-                statements: vec![AST::Assign {
+                statements: vec![Assign {
                     path: vec!["x"],
-                    expression: Expr::BinaryOperation(
-                        Box::new(Expr::Variable("x")),
+                    expression: BinaryOperation(
+                        Variable("x").into(),
                         Operator::Plus,
-                        Box::new(Expr::IntegerValue(1)),
+                        IntegerValue(1).into(),
                     ),
                 }],
             },
@@ -1580,29 +1570,26 @@ print(x)",
         .unwrap();
         let result = parse_ast(tokens);
         let expected = vec![
-            AST::IfStatement {
+            IfStatement {
                 true_branch: ASTIfStatement {
-                    expression: Expr::BinaryOperation(
-                        Box::new(Expr::Variable("x")),
+                    expression: BinaryOperation(
+                        Variable("x").into(),
                         Operator::Equals,
-                        Box::new(Expr::IntegerValue(0)),
+                        IntegerValue(0).into(),
                     ),
-                    statements: vec![AST::Assign {
+                    statements: vec![Assign {
                         path: vec!["x"],
-                        expression: Expr::BinaryOperation(
-                            Box::new(Expr::Variable("x")),
+                        expression: BinaryOperation(
+                            Variable("x").into(),
                             Operator::Plus,
-                            Box::new(Expr::IntegerValue(1)),
+                            IntegerValue(1).into(),
                         ),
                     }],
                 },
                 elifs: vec![],
                 final_else: None,
             },
-            AST::StandaloneExpr(Expr::FunctionCall(
-                Box::new(Expr::Variable("print")),
-                vec![Expr::Variable("x")],
-            )),
+            StandaloneExpr(FunctionCall(Variable("print").into(), vec![Variable("x")])),
         ];
         assert_eq!(expected, result);
     }
@@ -1617,29 +1604,26 @@ print(y)",
         .unwrap();
         let result = parse_ast(tokens);
         let expected = vec![
-            AST::Assign {
+            Assign {
                 path: vec!["x"],
-                expression: Expr::BinaryOperation(
-                    Box::new(Expr::StringValue("abc".into())),
+                expression: BinaryOperation(
+                    StringValue("abc".into()).into(),
                     Operator::Plus,
-                    Box::new(Expr::StringValue("cde".into())),
+                    StringValue("cde".into()).into(),
                 ),
             },
-            AST::Assign {
+            Assign {
                 path: vec!["y"],
-                expression: Expr::BinaryOperation(
-                    Box::new(Expr::Variable("x")),
+                expression: BinaryOperation(
+                    Variable("x").into(),
                     Operator::Plus,
-                    Box::new(Expr::FunctionCall(
-                        Box::new(Expr::Variable("str")),
-                        vec![Expr::BooleanValue(true)],
+                    Box::new(FunctionCall(
+                        Variable("str").into(),
+                        vec![BooleanValue(true)],
                     )),
                 ),
             },
-            AST::StandaloneExpr(Expr::FunctionCall(
-                Box::new(Expr::Variable("print")),
-                vec![Expr::Variable("y")],
-            )),
+            StandaloneExpr(FunctionCall(Variable("print").into(), vec![Variable("y")])),
         ];
 
         assert_eq!(expected, result);
@@ -1650,7 +1634,7 @@ print(y)",
         //1 + 1
         let result = parse(vec![Token::LiteralInteger(1)]);
 
-        let expected = Expr::IntegerValue(1);
+        let expected = IntegerValue(1);
         assert_eq!(result, expected);
     }
 
@@ -1659,7 +1643,7 @@ print(y)",
         //1 + 1
         let result = parse(vec![Token::Identifier("x")]);
 
-        let expected = Expr::Variable("x");
+        let expected = Variable("x");
         assert_eq!(result, expected);
     }
 
@@ -1672,7 +1656,7 @@ print(y)",
             Token::LiteralInteger(1),
         ]);
 
-        let expected = Expr::BinaryOperation(1.into(), Operator::Plus, 1.into());
+        let expected = BinaryOperation(1.into(), Operator::Plus, 1.into());
         assert_eq!(result, expected);
     }
 
@@ -1685,7 +1669,7 @@ print(y)",
             Token::LiteralInteger(1),
         ]);
 
-        let expected = Expr::BinaryOperation(10.0.into(), Operator::Plus, 1.into());
+        let expected = BinaryOperation(10.0.into(), Operator::Plus, 1.into());
         assert_eq!(result, expected);
     }
 
@@ -1699,8 +1683,8 @@ print(y)",
             Token::Operator(Operator::Plus),
             Token::LiteralInteger(3),
         ]);
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::BinaryOperation(1.into(), Operator::Plus, 2.into())),
+        let expected = BinaryOperation(
+            BinaryOperation(1.into(), Operator::Plus, 2.into()).into(),
             Operator::Plus,
             3.into(),
         );
@@ -1717,7 +1701,7 @@ print(y)",
             Token::LiteralInteger(2),
         ]);
 
-        let expected = Expr::BinaryOperation(1.into(), Operator::Multiply, 2.into());
+        let expected = BinaryOperation(1.into(), Operator::Multiply, 2.into());
         assert_eq!(result, expected);
     }
 
@@ -1732,12 +1716,8 @@ print(y)",
             Token::LiteralInteger(3),
         ]);
 
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::BinaryOperation(
-                1.into(),
-                Operator::Multiply,
-                2.into(),
-            )),
+        let expected = BinaryOperation(
+            Box::new(BinaryOperation(1.into(), Operator::Multiply, 2.into())),
             Operator::Multiply,
             3.into(),
         );
@@ -1762,14 +1742,10 @@ print(y)",
            / \
           2   3
         */
-        let expected = Expr::BinaryOperation(
+        let expected = BinaryOperation(
             1.into(),
             Operator::Plus,
-            Box::new(Expr::BinaryOperation(
-                2.into(),
-                Operator::Multiply,
-                3.into(),
-            )),
+            Box::new(BinaryOperation(2.into(), Operator::Multiply, 3.into())),
         );
 
         assert_eq!(expected, result);
@@ -1793,10 +1769,10 @@ print(y)",
            / \
           2   3
         */
-        let expected = Expr::BinaryOperation(
+        let expected = BinaryOperation(
             1.into(),
             Operator::Plus,
-            Box::new(Expr::BinaryOperation(2.into(), Operator::Divide, 3.into())),
+            BinaryOperation(2.into(), Operator::Divide, 3.into()).into(),
         );
 
         assert_eq!(expected, result);
@@ -1813,12 +1789,8 @@ print(y)",
             Token::LiteralInteger(3),
         ]);
 
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::BinaryOperation(
-                1.into(),
-                Operator::Multiply,
-                2.into(),
-            )),
+        let expected = BinaryOperation(
+            Box::new(BinaryOperation(1.into(), Operator::Multiply, 2.into())),
             Operator::Plus,
             3.into(),
         );
@@ -1840,16 +1812,12 @@ print(y)",
             Token::LiteralInteger(5),
         ]);
 
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::BinaryOperation(
+        let expected = BinaryOperation(
+            Box::new(BinaryOperation(
                 1.into(),
                 Operator::Plus,
-                Box::new(Expr::BinaryOperation(
-                    Box::new(Expr::BinaryOperation(
-                        2.into(),
-                        Operator::Multiply,
-                        3.into(),
-                    )),
+                Box::new(BinaryOperation(
+                    Box::new(BinaryOperation(2.into(), Operator::Multiply, 3.into())),
                     Operator::Multiply,
                     4.into(),
                 )),
@@ -1882,34 +1850,22 @@ print(y)",
             Token::LiteralInteger(8),
         ]);
 
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::BinaryOperation(
-                Box::new(Expr::BinaryOperation(
+        let expected = BinaryOperation(
+            Box::new(BinaryOperation(
+                Box::new(BinaryOperation(
                     1.into(),
                     Operator::Plus,
-                    Box::new(Expr::BinaryOperation(
-                        2.into(),
-                        Operator::Multiply,
-                        3.into(),
-                    )),
+                    Box::new(BinaryOperation(2.into(), Operator::Multiply, 3.into())),
                 )),
                 Operator::Plus,
-                Box::new(Expr::BinaryOperation(
-                    Box::new(Expr::BinaryOperation(
-                        4.into(),
-                        Operator::Multiply,
-                        5.into(),
-                    )),
+                Box::new(BinaryOperation(
+                    Box::new(BinaryOperation(4.into(), Operator::Multiply, 5.into())),
                     Operator::Divide,
                     6.into(),
                 )),
             )),
             Operator::Plus,
-            Box::new(Expr::BinaryOperation(
-                7.into(),
-                Operator::Multiply,
-                8.into(),
-            )),
+            Box::new(BinaryOperation(7.into(), Operator::Multiply, 8.into())),
         );
 
         assert_eq!(expected, result);
@@ -1924,7 +1880,7 @@ print(y)",
             Token::CloseParen,
         ]);
 
-        let expected = Expr::IntegerValue(1);
+        let expected = IntegerValue(1);
 
         assert_eq!(expected, result);
     }
@@ -1948,8 +1904,8 @@ print(y)",
            / \
           2   3
         */
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::BinaryOperation(1.into(), Operator::Plus, 2.into())),
+        let expected = BinaryOperation(
+            BinaryOperation(1.into(), Operator::Plus, 2.into()).into(),
             Operator::Multiply,
             3.into(),
         );
@@ -1961,8 +1917,8 @@ print(y)",
     fn integration_with_lexer() {
         let tokens = tokenize("(1 + 2) * 3").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::BinaryOperation(1.into(), Operator::Plus, 2.into())),
+        let expected = BinaryOperation(
+            BinaryOperation(1.into(), Operator::Plus, 2.into()).into(),
             Operator::Multiply,
             3.into(),
         );
@@ -1974,14 +1930,15 @@ print(y)",
     fn complex_parenthesized_expr() {
         let tokens = tokenize("(1 + 2) * (3 + 1 + (10 / 5))").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::BinaryOperation(1.into(), Operator::Plus, 2.into())),
+        let expected = BinaryOperation(
+            BinaryOperation(1.into(), Operator::Plus, 2.into()).into(),
             Operator::Multiply,
-            Box::new(Expr::BinaryOperation(
-                Box::new(Expr::BinaryOperation(3.into(), Operator::Plus, 1.into())),
+            BinaryOperation(
+                BinaryOperation(3.into(), Operator::Plus, 1.into()).into(),
                 Operator::Plus,
-                Box::new(Expr::BinaryOperation(10.into(), Operator::Divide, 5.into())),
-            )),
+                BinaryOperation(10.into(), Operator::Divide, 5.into()).into(),
+            )
+            .into(),
         );
 
         assert_eq!(expected, result);
@@ -1992,7 +1949,7 @@ print(y)",
         let tokens = tokenize("(((((((((1)))))))))").unwrap();
         let result = parse(tokens);
 
-        let expected = Expr::IntegerValue(1);
+        let expected = IntegerValue(1);
 
         assert_eq!(expected, result);
     }
@@ -2001,8 +1958,8 @@ print(y)",
     fn identifier_multiplied() {
         let tokens = tokenize("some_identifier * 5").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::Variable("some_identifier")),
+        let expected = BinaryOperation(
+            Variable("some_identifier").into(),
             Operator::Multiply,
             5.into(),
         );
@@ -2014,7 +1971,7 @@ print(y)",
     fn just_an_identifier() {
         let tokens = tokenize("some_identifier").unwrap();
         let result = parse(tokens);
-        let expected = Expr::Variable("some_identifier");
+        let expected = Variable("some_identifier");
 
         assert_eq!(expected, result);
     }
@@ -2023,7 +1980,7 @@ print(y)",
     fn function_call_without_args() {
         let tokens = tokenize("some_identifier()").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(Box::new(Expr::Variable("some_identifier")), vec![]);
+        let expected = FunctionCall(Variable("some_identifier").into(), vec![]);
 
         assert_eq!(expected, result);
     }
@@ -2032,10 +1989,7 @@ print(y)",
     fn function_call_with_one_param() {
         let tokens = tokenize("some_identifier(1)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::IntegerValue(1)],
-        );
+        let expected = FunctionCall(Variable("some_identifier").into(), vec![IntegerValue(1)]);
 
         assert_eq!(expected, result);
     }
@@ -2044,13 +1998,9 @@ print(y)",
     fn function_call_with_many_args() {
         let tokens = tokenize("some_identifier(1, 2, 3)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![
-                Expr::IntegerValue(1),
-                Expr::IntegerValue(2),
-                Expr::IntegerValue(3),
-            ],
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
+            vec![IntegerValue(1), IntegerValue(2), IntegerValue(3)],
         );
 
         assert_eq!(expected, result);
@@ -2060,13 +2010,9 @@ print(y)",
     fn function_call_with_expression() {
         let tokens = tokenize("some_identifier(1 * 2)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::BinaryOperation(
-                1.into(),
-                Operator::Multiply,
-                2.into(),
-            )],
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
+            vec![BinaryOperation(1.into(), Operator::Multiply, 2.into())],
         );
 
         assert_eq!(expected, result);
@@ -2076,12 +2022,12 @@ print(y)",
     fn function_call_with_list_of_expressions() {
         let tokens = tokenize("some_identifier(1 * 2, 3 + 5, 88)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
             vec![
-                Expr::BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                Expr::BinaryOperation(3.into(), Operator::Plus, 5.into()),
-                Expr::IntegerValue(88),
+                BinaryOperation(1.into(), Operator::Multiply, 2.into()),
+                BinaryOperation(3.into(), Operator::Plus, 5.into()),
+                IntegerValue(88),
             ],
         );
         assert_eq!(expected, result);
@@ -2091,12 +2037,9 @@ print(y)",
     fn function_call_with_nested_call_with_no_args() {
         let tokens = tokenize("some_identifier(nested())").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::FunctionCall(
-                Box::new(Expr::Variable("nested")),
-                vec![],
-            )],
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
+            vec![FunctionCall(Variable("nested").into(), vec![])],
         );
         assert_eq!(expected, result);
     }
@@ -2105,11 +2048,11 @@ print(y)",
     fn function_call_with_nested_call_with_single_arg() {
         let tokens = tokenize("some_identifier(nested(1))").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::FunctionCall(
-                Box::new(Expr::Variable("nested")),
-                vec![Expr::IntegerValue(1)],
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
+            vec![FunctionCall(
+                Variable("nested").into(),
+                vec![IntegerValue(1)],
             )],
         );
         assert_eq!(expected, result);
@@ -2119,11 +2062,11 @@ print(y)",
     fn function_call_with_nested_call_with_multiple_args() {
         let tokens = tokenize("some_identifier(nested(1, 2))").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::FunctionCall(
-                Box::new(Expr::Variable("nested")),
-                vec![Expr::IntegerValue(1), Expr::IntegerValue(2)],
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
+            vec![FunctionCall(
+                Variable("nested").into(),
+                vec![IntegerValue(1), IntegerValue(2)],
             )],
         );
         assert_eq!(expected, result);
@@ -2133,13 +2076,13 @@ print(y)",
     fn function_call_with_nested_call_with_multiple_expr() {
         let tokens = tokenize("some_identifier(nested(1 * 2, 2 / 3.4))").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::FunctionCall(
-                Box::new(Expr::Variable("nested")),
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
+            vec![FunctionCall(
+                Variable("nested").into(),
                 vec![
-                    Expr::BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                    Expr::BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
+                    BinaryOperation(1.into(), Operator::Multiply, 2.into()),
+                    BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
                 ],
             )],
         );
@@ -2150,14 +2093,11 @@ print(y)",
     fn function_call_with_nested_call_with_multiple_expr2() {
         let tokens = tokenize("some_identifier(nested(1), 1)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
             vec![
-                Expr::FunctionCall(
-                    Box::new(Expr::Variable("nested")),
-                    vec![Expr::IntegerValue(1)],
-                ),
-                Expr::IntegerValue(1),
+                FunctionCall(Variable("nested").into(), vec![IntegerValue(1)]),
+                IntegerValue(1),
             ],
         );
         assert_eq!(expected, result);
@@ -2167,18 +2107,18 @@ print(y)",
     fn function_call_with_nested_call_with_multiple_expr_also_unnested() {
         let tokens = tokenize("some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
+        let expected = FunctionCall(
+            Variable("some_identifier").into(),
             vec![
-                Expr::FunctionCall(
-                    Box::new(Expr::Variable("nested")),
+                FunctionCall(
+                    Variable("nested").into(),
                     vec![
-                        Expr::BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                        Expr::BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
+                        BinaryOperation(1.into(), Operator::Multiply, 2.into()),
+                        BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
                     ],
                 ),
-                Expr::IntegerValue(3),
-                Expr::FunctionCall(Box::new(Expr::Variable("nested2")), vec![]),
+                IntegerValue(3),
+                FunctionCall(Variable("nested2").into(), vec![]),
             ],
         );
         assert_eq!(expected, result);
@@ -2188,11 +2128,8 @@ print(y)",
     fn multiply_fcall() {
         let tokens = tokenize("some_identifier(1) * 5").unwrap();
         let result = parse(tokens);
-        let call = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::IntegerValue(1)],
-        );
-        let expected = Expr::BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
+        let call = FunctionCall(Variable("some_identifier").into(), vec![IntegerValue(1)]);
+        let expected = BinaryOperation(call.into(), Operator::Multiply, 5.into());
         assert_eq!(expected, result);
     }
 
@@ -2200,11 +2137,11 @@ print(y)",
     fn multiply_fcall_multiple_args() {
         let tokens = tokenize("some_identifier(1, 2) * 5").unwrap();
         let result = parse(tokens);
-        let call = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::IntegerValue(1), Expr::IntegerValue(2)],
+        let call = FunctionCall(
+            Variable("some_identifier").into(),
+            vec![IntegerValue(1), IntegerValue(2)],
         );
-        let expected = Expr::BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
+        let expected = BinaryOperation(call.into(), Operator::Multiply, 5.into());
         assert_eq!(expected, result);
     }
 
@@ -2212,14 +2149,11 @@ print(y)",
     fn multiply_fcall_nested_last() {
         let tokens = tokenize("some_identifier(nested()) * 5").unwrap();
         let result = parse(tokens);
-        let call = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![Expr::FunctionCall(
-                Box::new(Expr::Variable("nested")),
-                vec![],
-            )],
+        let call = FunctionCall(
+            Box::new(Variable("some_identifier")),
+            vec![FunctionCall(Box::new(Variable("nested")), vec![])],
         );
-        let expected = Expr::BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
+        let expected = BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
         assert_eq!(expected, result);
     }
 
@@ -2227,14 +2161,14 @@ print(y)",
     fn multiply_fcall_multiple_args_nested_last() {
         let tokens = tokenize("some_identifier(1, nested()) * 5").unwrap();
         let result = parse(tokens);
-        let call = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
+        let call = FunctionCall(
+            Box::new(Variable("some_identifier")),
             vec![
-                Expr::IntegerValue(1),
-                Expr::FunctionCall(Box::new(Expr::Variable("nested")), vec![]),
+                IntegerValue(1),
+                FunctionCall(Box::new(Variable("nested")), vec![]),
             ],
         );
-        let expected = Expr::BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
+        let expected = BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
         assert_eq!(expected, result);
     }
 
@@ -2242,21 +2176,21 @@ print(y)",
     fn function_call_with_nested_call_with_multiple_expr_also_unnested_used_in_expression_right() {
         let tokens = tokenize("some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2()) * 5").unwrap();
         let result = parse(tokens);
-        let call = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
+        let call = FunctionCall(
+            Box::new(Variable("some_identifier")),
             vec![
-                Expr::FunctionCall(
-                    Box::new(Expr::Variable("nested")),
+                FunctionCall(
+                    Box::new(Variable("nested")),
                     vec![
-                        Expr::BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                        Expr::BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
+                        BinaryOperation(1.into(), Operator::Multiply, 2.into()),
+                        BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
                     ],
                 ),
-                Expr::IntegerValue(3),
-                Expr::FunctionCall(Box::new(Expr::Variable("nested2")), vec![]),
+                IntegerValue(3),
+                FunctionCall(Box::new(Variable("nested2")), vec![]),
             ],
         );
-        let expected = Expr::BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
+        let expected = BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
         assert_eq!(expected, result);
     }
 
@@ -2264,21 +2198,21 @@ print(y)",
     fn function_call_with_nested_call_with_multiple_expr_also_unnested_used_in_expression_left() {
         let tokens = tokenize("5 * some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())").unwrap();
         let result = parse(tokens);
-        let call = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
+        let call = FunctionCall(
+            Box::new(Variable("some_identifier")),
             vec![
-                Expr::FunctionCall(
-                    Box::new(Expr::Variable("nested")),
+                FunctionCall(
+                    Box::new(Variable("nested")),
                     vec![
-                        Expr::BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                        Expr::BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
+                        BinaryOperation(1.into(), Operator::Multiply, 2.into()),
+                        BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
                     ],
                 ),
-                Expr::IntegerValue(3),
-                Expr::FunctionCall(Box::new(Expr::Variable("nested2")), vec![]),
+                IntegerValue(3),
+                FunctionCall(Box::new(Variable("nested2")), vec![]),
             ],
         );
-        let expected = Expr::BinaryOperation(5.into(), Operator::Multiply, Box::new(call));
+        let expected = BinaryOperation(5.into(), Operator::Multiply, Box::new(call));
         assert_eq!(expected, result);
     }
 
@@ -2286,10 +2220,7 @@ print(y)",
     fn function_call_with_a_bunch_of_useless_params() {
         let tokens = tokenize("func((((((1))))))").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("func")),
-            vec![Expr::IntegerValue(1)],
-        );
+        let expected = FunctionCall(Box::new(Variable("func")), vec![IntegerValue(1)]);
         assert_eq!(expected, result);
     }
 
@@ -2297,12 +2228,12 @@ print(y)",
     fn function_call_in_right_binop() {
         let tokens = tokenize("2 * func(1)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
+        let expected = BinaryOperation(
             (2).into(),
             Operator::Multiply,
-            Box::new(Expr::FunctionCall(
-                Box::new(Expr::Variable("func")),
-                vec![Expr::IntegerValue(1)],
+            Box::new(FunctionCall(
+                Box::new(Variable("func")),
+                vec![IntegerValue(1)],
             )),
         );
         assert_eq!(expected, result);
@@ -2312,11 +2243,11 @@ print(y)",
     fn unary_function_call() {
         let tokens = tokenize("-func(1)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::UnaryExpression(
+        let expected = UnaryExpression(
             Operator::Minus,
-            Box::new(Expr::FunctionCall(
-                Box::new(Expr::Variable("func")),
-                vec![Expr::IntegerValue(1)],
+            Box::new(FunctionCall(
+                Box::new(Variable("func")),
+                vec![IntegerValue(1)],
             )),
         );
         assert_eq!(expected, result);
@@ -2326,10 +2257,10 @@ print(y)",
     fn function_call_in_left_binop() {
         let tokens = tokenize("func(1) * 2").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::FunctionCall(
-                Box::new(Expr::Variable("func")),
-                vec![Expr::IntegerValue(1)],
+        let expected = BinaryOperation(
+            Box::new(FunctionCall(
+                Box::new(Variable("func")),
+                vec![IntegerValue(1)],
             )),
             Operator::Multiply,
             (2).into(),
@@ -2341,15 +2272,15 @@ print(y)",
     fn function_call_in_both_sides_binop() {
         let tokens = tokenize("func(1) * func(2)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
-            Box::new(Expr::FunctionCall(
-                Box::new(Expr::Variable("func")),
-                vec![Expr::IntegerValue(1)],
+        let expected = BinaryOperation(
+            Box::new(FunctionCall(
+                Box::new(Variable("func")),
+                vec![IntegerValue(1)],
             )),
             Operator::Multiply,
-            Box::new(Expr::FunctionCall(
-                Box::new(Expr::Variable("func")),
-                vec![Expr::IntegerValue(2)],
+            Box::new(FunctionCall(
+                Box::new(Variable("func")),
+                vec![IntegerValue(2)],
             )),
         );
         assert_eq!(expected, result);
@@ -2359,7 +2290,7 @@ print(y)",
     fn minus_one() {
         let tokens = tokenize("-1").unwrap();
         let result = parse(tokens);
-        let expected = Expr::UnaryExpression(Operator::Minus, Box::new(Expr::IntegerValue(1)));
+        let expected = UnaryExpression(Operator::Minus, Box::new(IntegerValue(1)));
         assert_eq!(expected, result);
     }
 
@@ -2367,9 +2298,9 @@ print(y)",
     fn minus_expr() {
         let tokens = tokenize("-(5.0 / 9.0)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::UnaryExpression(
+        let expected = UnaryExpression(
             Operator::Minus,
-            Box::new(Expr::BinaryOperation(
+            Box::new(BinaryOperation(
                 (5.0).into(),
                 Operator::Divide,
                 (9.0).into(),
@@ -2382,10 +2313,10 @@ print(y)",
     fn two_times_minus_one() {
         let tokens = tokenize("2 * -1").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
+        let expected = BinaryOperation(
             (2).into(),
             Operator::Multiply,
-            Box::new(Expr::UnaryExpression(Operator::Minus, 1.into())),
+            Box::new(UnaryExpression(Operator::Minus, 1.into())),
         );
         assert_eq!(expected, result);
     }
@@ -2394,12 +2325,12 @@ print(y)",
     fn two_times_minus_repeated_one() {
         let tokens = tokenize("2 * --1").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
+        let expected = BinaryOperation(
             (2).into(),
             Operator::Multiply,
-            Box::new(Expr::UnaryExpression(
+            Box::new(UnaryExpression(
                 Operator::Minus,
-                Box::new(Expr::UnaryExpression(Operator::Minus, 1.into())),
+                Box::new(UnaryExpression(Operator::Minus, 1.into())),
             )),
         );
         assert_eq!(expected, result);
@@ -2409,14 +2340,14 @@ print(y)",
     fn two_times_minus_plus_minus_one() {
         let tokens = tokenize("2 * -+-1").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
+        let expected = BinaryOperation(
             (2).into(),
             Operator::Multiply,
-            Box::new(Expr::UnaryExpression(
+            Box::new(UnaryExpression(
                 Operator::Minus,
-                Box::new(Expr::UnaryExpression(
+                Box::new(UnaryExpression(
                     Operator::Plus,
-                    Box::new(Expr::UnaryExpression(Operator::Minus, 1.into())),
+                    Box::new(UnaryExpression(Operator::Minus, 1.into())),
                 )),
             )),
         );
@@ -2427,14 +2358,14 @@ print(y)",
     fn two_times_minus_plus_minus_one_parenthesized() {
         let tokens = tokenize("2 * (-+-1)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
+        let expected = BinaryOperation(
             (2).into(),
             Operator::Multiply,
-            Box::new(Expr::UnaryExpression(
+            Box::new(UnaryExpression(
                 Operator::Minus,
-                Box::new(Expr::UnaryExpression(
+                Box::new(UnaryExpression(
                     Operator::Plus,
-                    Box::new(Expr::UnaryExpression(Operator::Minus, 1.into())),
+                    Box::new(UnaryExpression(Operator::Minus, 1.into())),
                 )),
             )),
         );
@@ -2445,16 +2376,16 @@ print(y)",
     fn two_times_minus_plus_minus_one_in_function_call() {
         let tokens = tokenize("2 * func(-+-1)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::BinaryOperation(
+        let expected = BinaryOperation(
             (2).into(),
             Operator::Multiply,
-            Box::new(Expr::FunctionCall(
-                Box::new(Expr::Variable("func")),
-                vec![Expr::UnaryExpression(
+            Box::new(FunctionCall(
+                Box::new(Variable("func")),
+                vec![UnaryExpression(
                     Operator::Minus,
-                    Box::new(Expr::UnaryExpression(
+                    Box::new(UnaryExpression(
                         Operator::Plus,
-                        Box::new(Expr::UnaryExpression(Operator::Minus, 1.into())),
+                        Box::new(UnaryExpression(Operator::Minus, 1.into())),
                     )),
                 )],
             )),
@@ -2467,10 +2398,10 @@ print(y)",
         let tokens = tokenize("-(5.0 / 9.0) * 32").unwrap();
         let result = parse(tokens);
 
-        let dividend = Expr::BinaryOperation(
-            Box::new(Expr::UnaryExpression(
+        let dividend = BinaryOperation(
+            Box::new(UnaryExpression(
                 Operator::Minus,
-                Box::new(Expr::BinaryOperation(
+                Box::new(BinaryOperation(
                     (5.0).into(),
                     Operator::Divide,
                     (9.0).into(),
@@ -2488,10 +2419,10 @@ print(y)",
         let tokens = tokenize("(-(5.0 / 9.0) * 32) / (1 - (5.0 / 9.0))").unwrap();
         let result = parse(tokens);
 
-        let dividend = Expr::BinaryOperation(
-            Box::new(Expr::UnaryExpression(
+        let dividend = BinaryOperation(
+            Box::new(UnaryExpression(
                 Operator::Minus,
-                Box::new(Expr::BinaryOperation(
+                Box::new(BinaryOperation(
                     (5.0).into(),
                     Operator::Divide,
                     (9.0).into(),
@@ -2501,18 +2432,17 @@ print(y)",
             (32).into(),
         );
 
-        let divisor = Expr::BinaryOperation(
+        let divisor = BinaryOperation(
             1.into(),
             Operator::Minus,
-            Box::new(Expr::BinaryOperation(
+            Box::new(BinaryOperation(
                 (5.0).into(),
                 Operator::Divide,
                 (9.0).into(),
             )),
         );
 
-        let fahrenheit =
-            Expr::BinaryOperation(Box::new(dividend), Operator::Divide, Box::new(divisor));
+        let fahrenheit = BinaryOperation(Box::new(dividend), Operator::Divide, Box::new(divisor));
 
         assert_eq!(fahrenheit, result);
     }
@@ -2521,9 +2451,9 @@ print(y)",
     fn test_assign() {
         let tokens = tokenize("x = 1").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::Assign {
+        let expected = vec![Assign {
             path: vec!["x"],
-            expression: Expr::IntegerValue(1),
+            expression: IntegerValue(1),
         }];
         assert_eq!(expected, result);
     }
@@ -2532,8 +2462,8 @@ print(y)",
     fn test_parse_ast_first_token_is_identifier() {
         let tokens = tokenize("x * 1").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::BinaryOperation(
-            Box::new(Expr::Variable("x")),
+        let expected = vec![StandaloneExpr(BinaryOperation(
+            Box::new(Variable("x")),
             Operator::Multiply,
             1.into(),
         ))];
@@ -2544,13 +2474,9 @@ print(y)",
     fn test_parse_assign_expr() {
         let tokens = tokenize("x = x * 1").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::Assign {
+        let expected = vec![Assign {
             path: vec!["x"],
-            expression: Expr::BinaryOperation(
-                Box::new(Expr::Variable("x")),
-                Operator::Multiply,
-                1.into(),
-            ),
+            expression: BinaryOperation(Box::new(Variable("x")), Operator::Multiply, 1.into()),
         }];
         assert_eq!(expected, result);
     }
@@ -2559,7 +2485,7 @@ print(y)",
     fn test_parse_just_id_ast() {
         let tokens = tokenize("x").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::Variable("x"))];
+        let expected = vec![StandaloneExpr(Variable("x"))];
         assert_eq!(expected, result);
     }
 
@@ -2567,7 +2493,7 @@ print(y)",
     fn not_operator() {
         let tokens = tokenize("not True").unwrap();
         let result = parse(tokens);
-        let expected = Expr::UnaryExpression(Operator::Not, Box::new(Expr::BooleanValue(true)));
+        let expected = UnaryExpression(Operator::Not, Box::new(BooleanValue(true)));
 
         assert_eq!(expected, result);
     }
@@ -2576,7 +2502,7 @@ print(y)",
     fn none() {
         let tokens = tokenize("None").unwrap();
         let result = parse(tokens);
-        let expected = Expr::None;
+        let expected = NoneExpr;
 
         assert_eq!(expected, result);
     }
@@ -2585,12 +2511,12 @@ print(y)",
     fn not_true_and_false() {
         let tokens = tokenize("not (True and False)").unwrap();
         let result = parse(tokens);
-        let expected = Expr::UnaryExpression(
+        let expected = UnaryExpression(
             Operator::Not,
-            Box::new(Expr::BinaryOperation(
-                Box::new(Expr::BooleanValue(true)),
+            Box::new(BinaryOperation(
+                Box::new(BooleanValue(true)),
                 Operator::And,
-                Box::new(Expr::BooleanValue(false)),
+                Box::new(BooleanValue(false)),
             )),
         );
 
@@ -2611,19 +2537,19 @@ print(y)",
     fn assign_boolean_expr() {
         let tokens = tokenize("x = not (True and False) or (False)").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::Assign {
+        let expected = vec![Assign {
             path: vec!["x"],
-            expression: Expr::BinaryOperation(
-                Box::new(Expr::UnaryExpression(
+            expression: BinaryOperation(
+                Box::new(UnaryExpression(
                     Operator::Not,
-                    Box::new(Expr::BinaryOperation(
-                        Box::new(Expr::BooleanValue(true)),
+                    Box::new(BinaryOperation(
+                        Box::new(BooleanValue(true)),
                         Operator::And,
-                        Box::new(Expr::BooleanValue(false)),
+                        Box::new(BooleanValue(false)),
                     )),
                 )),
                 Operator::Or,
-                Box::new(Expr::BooleanValue(false)),
+                Box::new(BooleanValue(false)),
             ),
         }];
 
@@ -2634,9 +2560,9 @@ print(y)",
     fn assign_string_expr() {
         let tokens = tokenize("x = 'abc'").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::Assign {
+        let expected = vec![Assign {
             path: vec!["x"],
-            expression: Expr::StringValue("abc".into()),
+            expression: StringValue("abc".into()),
         }];
 
         assert_eq!(expected, result);
@@ -2646,9 +2572,9 @@ print(y)",
     fn declare_typed() {
         let tokens = tokenize("x: str = 'abc'").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::Declare {
+        let expected = vec![Declare {
             var: TypeBoundName::simple("x", "str"),
-            expression: Expr::StringValue("abc".into()),
+            expression: StringValue("abc".into()),
         }];
 
         assert_eq!(expected, result);
@@ -2658,12 +2584,12 @@ print(y)",
     fn assign_string_concat_expr() {
         let tokens = tokenize("x = 'abc' + 'cde'").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::Assign {
+        let expected = vec![Assign {
             path: vec!["x"],
-            expression: Expr::BinaryOperation(
-                Box::new(Expr::StringValue("abc".into())),
+            expression: BinaryOperation(
+                Box::new(StringValue("abc".into())),
                 Operator::Plus,
-                Box::new(Expr::StringValue("cde".into())),
+                Box::new(StringValue("cde".into())),
             ),
         }];
 
@@ -2674,11 +2600,7 @@ print(y)",
     fn array_of_ints() {
         let tokens = tokenize("[1,2,3]").unwrap();
         let result = parse(tokens);
-        let expected = Expr::Array(vec![
-            Expr::IntegerValue(1),
-            Expr::IntegerValue(2),
-            Expr::IntegerValue(3),
-        ]);
+        let expected = Array(vec![IntegerValue(1), IntegerValue(2), IntegerValue(3)]);
 
         assert_eq!(expected, result);
     }
@@ -2687,10 +2609,10 @@ print(y)",
     fn array_of_strings() {
         let tokens = tokenize("[\"one\",\"two\",\"3\"]").unwrap();
         let result = parse(tokens);
-        let expected = Expr::Array(vec![
-            Expr::StringValue("one".into()),
-            Expr::StringValue("two".into()),
-            Expr::StringValue("3".into()),
+        let expected = Array(vec![
+            StringValue("one".into()),
+            StringValue("two".into()),
+            StringValue("3".into()),
         ]);
 
         assert_eq!(expected, result);
@@ -2700,11 +2622,11 @@ print(y)",
     fn array_of_stuff() {
         let tokens = tokenize("[1, 'two', True, 4.565]").unwrap();
         let result = parse(tokens);
-        let expected = Expr::Array(vec![
-            Expr::IntegerValue(1),
-            Expr::StringValue("two".into()),
-            Expr::BooleanValue(true),
-            Expr::FloatValue(4.565.into()),
+        let expected = Array(vec![
+            IntegerValue(1),
+            StringValue("two".into()),
+            BooleanValue(true),
+            FloatValue(4.565.into()),
         ]);
 
         assert_eq!(expected, result);
@@ -2714,8 +2636,8 @@ print(y)",
     fn assign_array() {
         let tokens = tokenize("x = [1, 2]").unwrap();
         let result = parse_ast(tokens);
-        let expr = Expr::Array(vec![Expr::IntegerValue(1), Expr::IntegerValue(2)]);
-        let expected = vec![AST::Assign {
+        let expr = Array(vec![IntegerValue(1), IntegerValue(2)]);
+        let expected = vec![Assign {
             path: vec!["x"],
             expression: expr,
         }];
@@ -2727,8 +2649,8 @@ print(y)",
         let tokens = tokenize("obj.prop").unwrap();
         println!("{:?}", tokens);
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::MemberAccess(
-            Box::new(Expr::Variable("obj".into())),
+        let expected = vec![StandaloneExpr(MemberAccess(
+            Box::new(Variable("obj".into())),
             "prop".into(),
         ))];
         assert_eq!(expected, result);
@@ -2739,9 +2661,9 @@ print(y)",
         let tokens = tokenize("obj.prop = 1").unwrap();
         println!("{:?}", tokens);
         let result = parse_ast(tokens);
-        let expected = vec![AST::Assign {
+        let expected = vec![Assign {
             path: vec!["obj".into(), "prop".into()],
-            expression: Expr::IntegerValue(1),
+            expression: IntegerValue(1),
         }];
         assert_eq!(expected, result);
     }
@@ -2751,14 +2673,14 @@ print(y)",
         let tokens = tokenize("self.current >= self.max").unwrap();
         println!("{:?}", tokens);
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::BinaryOperation(
-            Box::new(Expr::MemberAccess(
-                Box::new(Expr::Variable("self".into())),
+        let expected = vec![StandaloneExpr(BinaryOperation(
+            Box::new(MemberAccess(
+                Box::new(Variable("self".into())),
                 "current".into(),
             )),
             Operator::GreaterEquals,
-            Box::new(Expr::MemberAccess(
-                Box::new(Expr::Variable("self".into())),
+            Box::new(MemberAccess(
+                Box::new(Variable("self".into())),
                 "max".into(),
             )),
         ))];
@@ -2775,12 +2697,12 @@ for item in list:
         )
         .unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::ForStatement {
+        let expected = vec![ForStatement {
             item_name: "item".into(),
-            list_expression: Expr::Variable("list".into()),
-            body: vec![AST::StandaloneExpr(Expr::FunctionCall(
-                Box::new(Expr::Variable("print".into())),
-                vec![Expr::Variable("item".into())],
+            list_expression: Variable("list".into()),
+            body: vec![StandaloneExpr(FunctionCall(
+                Box::new(Variable("print".into())),
+                vec![Variable("item".into())],
             ))],
         }];
         assert_eq!(expected, result);
@@ -2796,12 +2718,12 @@ def function(x: i32):
         )
         .unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::DeclareFunction {
+        let expected = vec![DeclareFunction {
             function_name: "function".into(),
             parameters: vec![TypeBoundName::simple("x", "i32")],
-            body: vec![AST::StandaloneExpr(Expr::FunctionCall(
-                Box::new(Expr::Variable("print".into())),
-                vec![Expr::Variable("x".into())],
+            body: vec![StandaloneExpr(FunctionCall(
+                Box::new(Variable("print".into())),
+                vec![Variable("x".into())],
             ))],
             return_type: None,
         }];
@@ -2818,12 +2740,12 @@ def function():
         )
         .unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::DeclareFunction {
+        let expected = vec![DeclareFunction {
             function_name: "function".into(),
             parameters: vec![],
-            body: vec![AST::StandaloneExpr(Expr::FunctionCall(
-                Box::new(Expr::Variable("print".into())),
-                vec![Expr::Variable("x".into())],
+            body: vec![StandaloneExpr(FunctionCall(
+                Box::new(Variable("print".into())),
+                vec![Variable("x".into())],
             ))],
             return_type: None,
         }];
@@ -2840,16 +2762,16 @@ def function(x: i32,y: u32,z: MyType):
         )
         .unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::DeclareFunction {
+        let expected = vec![DeclareFunction {
             function_name: "function".into(),
             parameters: vec![
                 TypeBoundName::simple("x", "i32"),
                 TypeBoundName::simple("y", "u32"),
                 TypeBoundName::simple("z", "MyType"),
             ],
-            body: vec![AST::StandaloneExpr(Expr::FunctionCall(
-                Box::new(Expr::Variable("print".into())),
-                vec![Expr::Variable("x".into())],
+            body: vec![StandaloneExpr(FunctionCall(
+                Box::new(Variable("print".into())),
+                vec![Variable("x".into())],
             ))],
             return_type: None,
         }];
@@ -2866,10 +2788,10 @@ def function(x: i32):
         )
         .unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::DeclareFunction {
+        let expected = vec![DeclareFunction {
             function_name: "function".into(),
             parameters: vec![TypeBoundName::simple("x", "i32")],
-            body: vec![AST::Return(None)],
+            body: vec![Return(None)],
             return_type: None,
         }];
         assert_eq!(expected, result);
@@ -2885,13 +2807,13 @@ def function(x: i32) -> i32:
         )
         .unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::DeclareFunction {
+        let expected = vec![DeclareFunction {
             function_name: "function".into(),
             parameters: vec![TypeBoundName::simple("x", "i32")],
-            body: vec![AST::Return(Some(Expr::BinaryOperation(
-                Box::new(Expr::Variable("x".into())),
+            body: vec![Return(Some(BinaryOperation(
+                Box::new(Variable("x".into())),
                 Operator::Plus,
-                Box::new(Expr::IntegerValue(1)),
+                Box::new(IntegerValue(1)),
             )))],
             return_type: Some(ASTType::Simple("i32".into())),
         }];
@@ -2910,9 +2832,9 @@ some_var : List<i32> = [1, 2]
 
         assert_eq!(
             result,
-            vec![AST::Declare {
+            vec![Declare {
                 var: TypeBoundName::generic_1("some_var", "List", "i32"),
-                expression: Expr::Array(vec![Expr::IntegerValue(1), Expr::IntegerValue(2)])
+                expression: Array(vec![IntegerValue(1), IntegerValue(2)])
             }]
         );
     }
@@ -2935,7 +2857,7 @@ def my_function(param1: i32, param2: i32) -> i32:
         assert_eq!(
             result,
             vec![
-                AST::StructDeclaration {
+                StructDeclaration {
                     struct_name: "Struct1".into(),
                     type_parameters: vec![],
                     body: vec![
@@ -2943,23 +2865,23 @@ def my_function(param1: i32, param2: i32) -> i32:
                         TypeBoundName::simple("field2", "i64")
                     ]
                 },
-                AST::DeclareFunction {
+                DeclareFunction {
                     function_name: "my_function".into(),
                     parameters: vec![
                         TypeBoundName::simple("param1", "i32"),
                         TypeBoundName::simple("param2", "i32")
                     ],
-                    body: vec![AST::Return(Some(Expr::BinaryOperation(
-                        Box::new(Expr::BinaryOperation(
-                            Box::new(Expr::Variable("param1".into())),
+                    body: vec![Return(Some(BinaryOperation(
+                        Box::new(BinaryOperation(
+                            Box::new(Variable("param1".into())),
                             Operator::Multiply,
-                            Box::new(Expr::Variable("param2".into()))
+                            Box::new(Variable("param2".into()))
                         )),
                         Operator::Divide,
-                        Box::new(Expr::BinaryOperation(
-                            Box::new(Expr::Variable("param2".into())),
+                        Box::new(BinaryOperation(
+                            Box::new(Variable("param2".into())),
                             Operator::Minus,
-                            Box::new(Expr::Variable("param1".into()))
+                            Box::new(Variable("param1".into()))
                         ))
                     )))],
                     return_type: Some(ASTType::Simple("i32".into()))
@@ -2979,7 +2901,7 @@ struct SomeStruct:
         )
         .unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StructDeclaration {
+        let expected = vec![StructDeclaration {
             struct_name: "SomeStruct".into(),
             type_parameters: vec![],
             body: vec![
@@ -2994,9 +2916,9 @@ struct SomeStruct:
     fn access_at_index() {
         let tokens = tokenize("list[1]").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::IndexAccess(
-            Box::new(Expr::Variable("list".into())),
-            Box::new(Expr::IntegerValue(1)),
+        let expected = vec![StandaloneExpr(IndexAccess(
+            Box::new(Variable("list".into())),
+            Box::new(IntegerValue(1)),
         ))];
         assert_eq!(expected, result);
     }
@@ -3005,9 +2927,9 @@ struct SomeStruct:
     fn access_at_string() {
         let tokens = tokenize("a_map[\"value\"]").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::IndexAccess(
-            Box::new(Expr::Variable("a_map".into())),
-            Box::new(Expr::StringValue("value".into())),
+        let expected = vec![StandaloneExpr(IndexAccess(
+            Box::new(Variable("a_map".into())),
+            Box::new(StringValue("value".into())),
         ))];
         assert_eq!(expected, result);
     }
@@ -3017,9 +2939,9 @@ struct SomeStruct:
         //this is crazy
         let tokens = tokenize("a_map[[]]").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::IndexAccess(
-            Box::new(Expr::Variable("a_map".into())),
-            Box::new(Expr::Array(vec![])),
+        let expected = vec![StandaloneExpr(IndexAccess(
+            Box::new(Variable("a_map".into())),
+            Box::new(Array(vec![])),
         ))];
         assert_eq!(expected, result);
     }
@@ -3028,12 +2950,9 @@ struct SomeStruct:
     fn function_return_indexed() {
         let tokens = tokenize("some_call()[1]").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::IndexAccess(
-            Box::new(Expr::FunctionCall(
-                Box::new(Expr::Variable("some_call".into())),
-                vec![],
-            )),
-            Box::new(Expr::IntegerValue(1)),
+        let expected = vec![StandaloneExpr(IndexAccess(
+            Box::new(FunctionCall(Box::new(Variable("some_call".into())), vec![])),
+            Box::new(IntegerValue(1)),
         ))];
         assert_eq!(expected, result);
     }
@@ -3042,11 +2961,11 @@ struct SomeStruct:
     fn function_argument_is_indexed() {
         let tokens = tokenize("some_call(var[1])").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::FunctionCall(
-            Box::new(Expr::Variable("some_call".into())),
-            vec![Expr::IndexAccess(
-                Box::new(Expr::Variable("var".into())),
-                Box::new(Expr::IntegerValue(1)),
+        let expected = vec![StandaloneExpr(FunctionCall(
+            Box::new(Variable("some_call".into())),
+            vec![IndexAccess(
+                Box::new(Variable("var".into())),
+                Box::new(IntegerValue(1)),
             )],
         ))];
         assert_eq!(expected, result);
@@ -3057,14 +2976,10 @@ struct SomeStruct:
         //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
         let tokens = tokenize("args[1] + 1").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::BinaryOperation(
-            Expr::IndexAccess(
-                Expr::Variable("args".into()).into(),
-                Expr::IntegerValue(1).into(),
-            )
-            .into(),
+        let expected = vec![StandaloneExpr(BinaryOperation(
+            IndexAccess(Variable("args".into()).into(), IntegerValue(1).into()).into(),
             Operator::Plus,
-            Expr::IntegerValue(1).into(),
+            IntegerValue(1).into(),
         ))];
         assert_eq!(expected, result);
     }
@@ -3074,14 +2989,10 @@ struct SomeStruct:
         //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
         let tokens = tokenize("1 + args[1]").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::BinaryOperation(
-            Expr::IntegerValue(1).into(),
+        let expected = vec![StandaloneExpr(BinaryOperation(
+            IntegerValue(1).into(),
             Operator::Plus,
-            Expr::IndexAccess(
-                Expr::Variable("args".into()).into(),
-                Expr::IntegerValue(1).into(),
-            )
-            .into(),
+            IndexAccess(Variable("args".into()).into(), IntegerValue(1).into()).into(),
         ))];
         assert_eq!(expected, result);
     }
@@ -3090,9 +3001,9 @@ struct SomeStruct:
     fn method_call_empty() {
         let tokens = tokenize("method.call()").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::FunctionCall(
-            Box::new(Expr::MemberAccess(
-                Box::new(Expr::Variable("method".into())),
+        let expected = vec![StandaloneExpr(FunctionCall(
+            Box::new(MemberAccess(
+                Box::new(Variable("method".into())),
                 "call".into(),
             )),
             vec![],
@@ -3103,12 +3014,12 @@ struct SomeStruct:
     fn method_call_oneparam() {
         let tokens = tokenize("method.call(1)").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::FunctionCall(
-            Box::new(Expr::MemberAccess(
-                Box::new(Expr::Variable("method".into())),
+        let expected = vec![StandaloneExpr(FunctionCall(
+            Box::new(MemberAccess(
+                Box::new(Variable("method".into())),
                 "call".into(),
             )),
-            vec![Expr::IntegerValue(1)],
+            vec![IntegerValue(1)],
         ))];
         assert_eq!(expected, result);
     }
@@ -3117,12 +3028,12 @@ struct SomeStruct:
     fn method_call_manyargs() {
         let tokens = tokenize("method.call(1, 2)").unwrap();
         let result = parse_ast(tokens);
-        let expected = vec![AST::StandaloneExpr(Expr::FunctionCall(
-            Box::new(Expr::MemberAccess(
-                Box::new(Expr::Variable("method".into())),
+        let expected = vec![StandaloneExpr(FunctionCall(
+            Box::new(MemberAccess(
+                Box::new(Variable("method".into())),
                 "call".into(),
             )),
-            vec![Expr::IntegerValue(1), Expr::IntegerValue(2)],
+            vec![IntegerValue(1), IntegerValue(2)],
         ))];
         assert_eq!(expected, result);
     }
