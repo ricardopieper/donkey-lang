@@ -65,7 +65,7 @@ pub struct CodeGen<'codegen_scope, 'ctx, 'source> {
     module: &'codegen_scope Module<'ctx>,
     type_db: &'codegen_scope TypeInstanceManager<'source>,
     type_cache: HashMap<TypeInstanceId, AnyTypeEnum<'ctx>>,
-    functions: HashMap<String, FunctionValue<'ctx>>,
+    functions: HashMap<SourceString<'source>, FunctionValue<'ctx>>,
     next_temporary: u32,
     //    fpm: PassManager<FunctionValue<'ctx>>
 }
@@ -131,14 +131,14 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
             }
         };
 
-        self.type_cache.insert(instance, llvm_any_type.clone());
+        self.type_cache.insert(instance, llvm_any_type);
 
         return llvm_any_type;
     }
 
     pub fn create_function(
         &mut self,
-        function_name: &str,
+        function_name: SourceString<'source>,
         parameters: &[MIRTypedBoundName],
         return_type: TypeInstanceId,
         is_intrinsic: bool,
@@ -171,7 +171,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
         for (i, param) in function.get_param_iter().enumerate() {
             param.set_name(&parameters[i].name);
         }
-        self.functions.insert(function_name.to_string(), function);
+        self.functions.insert(function_name, function);
 
         return function;
     }
@@ -201,7 +201,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
         alloca
     }
 
-    pub fn generate_for_top_lvl(&mut self, node: &MIRTopLevelNode<Checked>) {
+    pub fn generate_for_top_lvl(&mut self, node: &'source MIRTopLevelNode<'source, Checked>) {
         match node {
             MIRTopLevelNode::DeclareFunction {
                 function_name,
@@ -357,11 +357,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
 
                 function_signature.verify(true);
             }
-            MIRTopLevelNode::StructDeclaration {
-                struct_name: _,
-                fields: _,
-                type_parameters: _,
-            } => {}
+
             MIRTopLevelNode::IntrinsicFunction {
                 function_name,
                 parameters,
@@ -962,9 +958,9 @@ fn optimize_module(target_machine: &TargetMachine, module: &Module) {
         .unwrap();
 }
 
-pub fn generate_llvm<'source, 'parser>(
+pub fn generate_llvm<'source>(
     type_db: &TypeInstanceManager<'source>,
-    mir_top_level_nodes: &[MIRTopLevelNode<'source, 'parser, Checked>],
+    mir_top_level_nodes: &[MIRTopLevelNode<'source, Checked>],
 ) -> Result<(), Box<dyn Error>> {
     let context = Context::create();
     let module = context.create_module("program");

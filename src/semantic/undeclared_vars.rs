@@ -1,25 +1,26 @@
 use crate::{
+    ast::lexer::SourceString,
     semantic::hir::{HIRExpr, HIRTypedBoundName, HIR},
-    types::type_errors::{TypeErrors, VariableNotFound}, ast::lexer::SourceString,
+    types::type_errors::{TypeErrors, VariableNotFound},
 };
 
 use std::collections::HashSet;
 
-use super::{compiler_errors::CompilerError, hir::HIRRoot, name_registry::NameRegistry};
+use super::{compiler_errors::CompilerError, hir::HIRRoot, name_registry::NameRegistry, hir_type_resolution::RootElementType};
 
 //Returns true if everything is valid
-fn check_expr<'source, 'parser, T>(
+fn check_expr<'source, T>(
     declarations_found: &HashSet<SourceString<'source>>,
-    function_name: &str,
-    expr: &HIRExpr<'source, 'parser, T>,
-    errors: &mut TypeErrors<'source, 'parser>,
+    function_name: &'source str,
+    expr: &HIRExpr<'source, T>,
+    errors: &mut TypeErrors<'source>,
 ) -> bool {
     match expr {
         HIRExpr::Variable(v, ..) => {
             if declarations_found.get(v).is_none() {
                 errors.variable_not_found.push(VariableNotFound {
-                    on_function: function_name.to_string(),
-                    variable_name: v.to_string(),
+                    on_element: RootElementType::Function(function_name),
+                    variable_name: v,
                 });
                 false
             } else {
@@ -63,11 +64,11 @@ fn check_expr<'source, 'parser, T>(
 }
 
 //@TODO cloneless: use cow on declarations found
-fn detect_decl_errors_in_body<'source, 'parser, T, T1>(
+fn detect_decl_errors_in_body<'source, T, T1>(
     declarations_found: &mut HashSet<SourceString<'source>>,
-    function_name: &str,
-    body: &[HIR<'source, 'parser, T, HIRExpr<'source, 'parser, T1>>],
-    errors: &mut TypeErrors<'source, 'parser>,
+    function_name: SourceString<'source>,
+    body: &[HIR<'source, T, HIRExpr<'source, T1>>],
+    errors: &mut TypeErrors<'source>,
 ) -> bool {
     for node in body {
         match node {
@@ -135,12 +136,12 @@ fn detect_decl_errors_in_body<'source, 'parser, T, T1>(
     true
 }
 
-fn detect_declaration_errors_in_function<'source, 'parser, T, T1, T2>(
+fn detect_declaration_errors_in_function<'source, T, T1, T2>(
     mut declarations_found: HashSet<SourceString<'source>>,
-    function_name: &str,
+    function_name: SourceString<'source>,
     parameters: &[HIRTypedBoundName<'source, T>],
-    body: &[HIR<'source, 'parser, T1, HIRExpr<'source, 'parser, T2>>],
-    errors: &mut TypeErrors<'source, 'parser>,
+    body: &[HIR<'source, T1, HIRExpr<'source, T2>>],
+    errors: &mut TypeErrors<'source>,
 ) -> bool {
     for p in parameters {
         declarations_found.insert(p.name);
@@ -149,10 +150,10 @@ fn detect_declaration_errors_in_function<'source, 'parser, T, T1, T2>(
     detect_decl_errors_in_body(&mut declarations_found, function_name, body, errors)
 }
 
-pub fn detect_undeclared_vars_and_redeclarations<'source, 'parser, T, T1, T2, T3>(
+pub fn detect_undeclared_vars_and_redeclarations<'source, T, T1, T2, T3>(
     globals: &NameRegistry<'source>,
-    mir: &[HIRRoot<'source, 'parser, T, HIR<'source, 'parser, T1, HIRExpr<'source, 'parser, T2>>, T3>],
-    errors: &mut TypeErrors<'source, 'parser>,
+    mir: &[HIRRoot<'source, T, HIR<'source, T1, HIRExpr<'source, T2>>, T3>],
+    errors: &mut TypeErrors<'source>,
 ) -> Result<(), CompilerError> {
     let mut declarations_found = HashSet::<SourceString<'source>>::new();
 

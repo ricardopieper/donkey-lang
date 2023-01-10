@@ -1,4 +1,7 @@
-use crate::{ast::lexer::{Operator, SourceString}, compiler::layouts::Bytes};
+use crate::{
+    ast::lexer::{Operator, SourceString},
+    compiler::layouts::Bytes,
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct TypeConstructorId(pub usize);
@@ -37,11 +40,12 @@ pub struct TypeConstructorFunctionDeclaration<'source> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeConstructorFieldDeclaration<'source> {
-    pub name: String,
+    pub name: SourceString<'source>,
     pub field_type: TypeUsage<'source>,
 }
 
-//A type usage informs how the user used a type in a given context, Parameter types may not be known in case of generics
+//A type usage informs how the user used a type in a given context, Parameter types may not be known in case of generics.
+//This type may be copied a bunch of times but usually it should be cheap, since it's all references...
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeUsage<'source> {
     Given(TypeConstructorId),
@@ -102,7 +106,7 @@ impl<'source> TypeConstructorDatabase<'source> {
         item
     }
 
-    pub fn add(&mut self, kind: TypeKind, sign: TypeSign, name: &str) -> TypeConstructorId {
+    pub fn add(&mut self, kind: TypeKind, sign: TypeSign, name: &'source str) -> TypeConstructorId {
         let next_id = TypeConstructorId(self.types.len());
         self.types.push(TypeConstructor {
             id: next_id,
@@ -130,7 +134,7 @@ impl<'source> TypeConstructorDatabase<'source> {
     pub fn add_generic(
         &mut self,
         kind: TypeKind,
-        name: &str,
+        name: &'source str,
         type_args: Vec<GenericParameter<'source>>,
         _rep_size: Option<Bytes>,
     ) -> TypeConstructorId {
@@ -156,19 +160,19 @@ impl<'source> TypeConstructorDatabase<'source> {
         record.unary_ops.push((operator, result_type));
     }
 
-    pub fn find(&self, id: TypeConstructorId) -> &TypeConstructor {
+    pub fn find(&self, id: TypeConstructorId) -> &TypeConstructor<'source> {
         self.types
             .get(id.0)
             .unwrap_or_else(|| panic!("Type ID not found: {}", id.0))
     }
 
-    pub fn find_by_name(&self, name: &str) -> Option<&TypeConstructor> {
+    pub fn find_by_name(&self, name: &'source str) -> Option<&TypeConstructor<'source>> {
         self.types.iter().find(|t| t.name == name)
     }
 
     fn register_primitive_number(
         &mut self,
-        name: &str,
+        name: &'source str,
         size: Bytes,
         sign: TypeSign,
     ) -> TypeConstructorId {
@@ -260,21 +264,26 @@ impl<'source> TypeConstructorDatabase<'source> {
     pub fn add_simple_field(
         &mut self,
         type_id: TypeConstructorId,
-        name: &str,
+        name: &'source str,
         field_type: TypeConstructorId,
     ) {
         let record = self.types.get_mut(type_id.0).unwrap();
         record.fields.push(TypeConstructorFieldDeclaration {
-            name: name.to_string(),
+            name,
             field_type: TypeUsage::Given(field_type),
         });
     }
 
-    pub fn add_field(&mut self, type_id: TypeConstructorId, name: &str, type_usage: &TypeUsage<'source>) {
+    pub fn add_field(
+        &mut self,
+        type_id: TypeConstructorId,
+        name: &'source str,
+        type_usage: TypeUsage<'source>,
+    ) {
         let record = self.types.get_mut(type_id.0).unwrap();
         record.fields.push(TypeConstructorFieldDeclaration {
-            name: name.to_string(),
-            field_type: type_usage.clone(),
+            name,
+            field_type: type_usage,
         });
     }
 

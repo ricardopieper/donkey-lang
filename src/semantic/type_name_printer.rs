@@ -52,7 +52,7 @@ impl<'source> TypeNamePrinter for HIRType<'source> {
         }
 
         match self {
-            HIRType::Simple(s) => format!("UNRESOLVED! {}", s.clone()),
+            HIRType::Simple(s) => format!("UNRESOLVED! {}", s),
             HIRType::Generic(s, g) => {
                 format!("UNRESOLVED {}<{}>", s, slice_types_str(g, type_db))
             }

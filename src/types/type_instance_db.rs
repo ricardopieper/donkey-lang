@@ -227,14 +227,14 @@ impl<'source> TypeInstanceManager<'source> {
 
     pub fn construct_usage(
         &mut self,
-        usage: &TypeUsage,
+        usage: &TypeUsage<'source>,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
 
     pub fn construct_usage_generic(
         &mut self,
-        usage: &TypeUsage,
+        usage: &TypeUsage<'source>,
         type_args: &HashMap<String, TypeInstanceId>,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         match usage {
@@ -331,8 +331,7 @@ impl<'source> TypeInstanceManager<'source> {
         let allowed_casts = {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
-            let casts = constructor.allowed_casts.clone();
-            for type_usage in casts {
+            for type_usage in constructor.allowed_casts.clone().iter() {
                 let constructed = self.construct_usage(&type_usage)?;
                 result.push(constructed);
             }
@@ -348,8 +347,9 @@ impl<'source> TypeInstanceManager<'source> {
         let rhs_binary_ops = {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
-            let rhs_bin_ops = constructor.rhs_binary_ops.clone();
-            for (operator, rhs, op_result) in &rhs_bin_ops {
+            //@cloneless: this clone unfortunately seems necessary, otherwise the borrow is held for all operations
+            //because of the borrow on constructor.rhs_binary_ops.
+            for (operator, rhs, op_result) in constructor.rhs_binary_ops.clone().iter() {
                 result.push((
                     *operator,
                     self.construct_usage(rhs)?,
@@ -369,8 +369,7 @@ impl<'source> TypeInstanceManager<'source> {
             let constructor = self.constructors.find(constructor_id);
 
             let mut result = vec![];
-            let unary_ops = constructor.unary_ops.clone();
-            for (operator, rhs) in &unary_ops {
+            for (operator, rhs) in constructor.unary_ops.clone().iter() {
                 result.push((*operator, self.construct_usage(rhs)?));
             }
             result

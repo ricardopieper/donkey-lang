@@ -33,20 +33,23 @@ use std::fs;
 #[macro_use]
 extern crate time_test;
 
-
 use crate::semantic::mir_printer;
 
-
-
-
+use ast::parser::AST;
 //use compiler::donkey_backend::DonkeyEmitter;
 //use donkey_vm::asm::assembler::DonkeyProgram;
 //use donkey_vm::vm::runner::DonkeyVMRunner;
 use llvm::llvm_backend::generate_llvm;
 
-use semantic::context::Context;
+struct LoadedFile {
+    file_name: String,
+    contents: String,
+}
 
-
+struct ParsedFile<'source> {
+    file_name: String,
+    ast: AST<'source>,
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -55,10 +58,21 @@ fn main() {
         return;
     }
 
+    let loaded_files = vec![
+        load_file("./stdlib/llvm_intrinsics.dk"),
+        load_file(&args[1]),
+    ];
+
+    let parsed_files = loaded_files
+        .iter()
+        .map(|x| parse_file(x))
+        .collect::<Vec<_>>();
+
     let mut ctx = crate::semantic::context::Context::new();
 
-    parse_and_add_to_ctx("./stdlib/llvm_intrinsics.dk", &mut ctx);
-    parse_and_add_to_ctx(&args[1], &mut ctx);
+    for f in parsed_files.iter() {
+        ctx.add(f.file_name.as_ref(), &f.ast);
+    }
 
     if args.contains(&"print_mir".to_string()) {
         let printed_mir = mir_printer::print_mir(&ctx.mir, &ctx.type_db);
@@ -85,13 +99,22 @@ fn main() {
     generate_llvm(&ctx.type_db, &ctx.mir).unwrap();
 }
 
-
-fn parse_and_add_to_ctx(file_name: &str, context: &mut Context) {
+fn load_file<'source>(file_name: &'source str) -> LoadedFile {
     let input = fs::read_to_string(file_name)
         .unwrap_or_else(|_| panic!("Could not read file {}", file_name));
-    let tokens = lexer::tokenize(input.as_str());
+
+    LoadedFile {
+        file_name: file_name.to_string(),
+        contents: input,
+    }
+}
+
+fn parse_file<'source>(loaded_file: &'source LoadedFile) -> ParsedFile<'source> {
+    let tokens = lexer::tokenize(loaded_file.contents.as_ref());
     let ast = parser::parse_ast(tokens.unwrap());
     let root = parser::AST::Root(ast);
-
-    context.add(file_name, &root);
+    ParsedFile {
+        file_name: loaded_file.file_name.to_string(),
+        ast: root,
+    }
 }

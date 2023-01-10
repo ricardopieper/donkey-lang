@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::types::{
     type_constructor_db::TypeUsage,
     type_errors::{TypeErrors, TypeNotFound},
@@ -12,6 +14,15 @@ pub enum RootElementType<'s> {
     Function(&'s str),
 }
 
+impl<'s> Display for RootElementType<'s> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RootElementType::Struct(s) => write!(f, "In struct {s}"),
+            RootElementType::Function(s) => write!(f, "In function {s}"),
+        }
+    }
+}
+
 impl<'s> RootElementType<'s> {
     pub fn get_name(&self) -> &'s str {
         match self {
@@ -20,11 +31,11 @@ impl<'s> RootElementType<'s> {
     }
 }
 
-pub fn hir_type_to_usage<'s, 'source, 'parser>(
-    on_code_element: RootElementType<'s>,
+pub fn hir_type_to_usage<'source>(
+    on_code_element: RootElementType<'source>,
     typedef: &HIRType<'source>,
     type_db: &TypeInstanceManager<'source>,
-    errors: &mut TypeErrors<'source, 'parser>,
+    errors: &mut TypeErrors<'source>,
 ) -> Result<TypeUsage<'source>, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
@@ -32,8 +43,8 @@ pub fn hir_type_to_usage<'s, 'source, 'parser>(
                 Ok(TypeUsage::Given(type_id.id))
             } else {
                 errors.type_not_found.push(TypeNotFound {
-                    on_function: on_code_element.get_name().to_string(),
-                    type_name: HIRType::Simple(name.clone()),
+                    on_element: on_code_element,
+                    type_name: HIRType::Simple(name),
                 });
                 Err(CompilerError::TypeInferenceError)
             }
@@ -50,8 +61,8 @@ pub fn hir_type_to_usage<'s, 'source, 'parser>(
                 Ok(TypeUsage::Parameterized(base_id, generics))
             } else {
                 errors.type_not_found.push(TypeNotFound {
-                    on_function: on_code_element.get_name().to_string(),
-                    type_name: HIRType::Simple(base.clone()),
+                    on_element: on_code_element,
+                    type_name: HIRType::Simple(base),
                 });
                 Err(CompilerError::TypeInferenceError)
             }

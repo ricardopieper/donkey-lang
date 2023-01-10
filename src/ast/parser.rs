@@ -150,7 +150,7 @@ macro_rules! parse_guard {
         parse_guard!($parser, $pattern, None)
     };
     ($parser:expr, $pattern:pat_param, $result:expr) => {
-        if let $pattern = $parser.cur().clone() {
+        if let $pattern = $parser.cur() {
             $parser.next();
             if (!$parser.can_go()) {
                 return $result;
@@ -184,10 +184,9 @@ macro_rules! expect_token {
 
 macro_rules! expect_identifier {
     ($parser:expr, $role:expr) => {{
-        if let Token::Identifier(id) = $parser.cur() {
-            let return_val = id.clone();
+        if let Token::Identifier(id) = *$parser.cur() {
             $parser.next();
-            return_val
+            id
         } else {
             panic!("Expected {}, got {}", $role, $parser.cur().name());
         }
@@ -332,8 +331,8 @@ impl<'source> Parser<'source> {
 
     pub fn parse_assign(&mut self) -> Option<AST<'source>> {
         let mut path = vec![];
-        while let Token::Identifier(id) = self.cur().clone() {
-            path.push(id.clone());
+        while let Token::Identifier(id) = self.cur() {
+            path.push(*id);
             if self.is_last() {
                 return None;
             }
@@ -521,7 +520,7 @@ impl<'source> Parser<'source> {
     }
 
     pub fn parse_type_name(&mut self) -> Option<ASTType<'source>> {
-        let Token::Identifier(type_name) = self.cur().clone() else {
+        let Token::Identifier(type_name) = *self.cur() else {
             return None;
         };
 
@@ -529,20 +528,21 @@ impl<'source> Parser<'source> {
             return Some(ASTType::Simple(type_name));
         }
 
-        let peek_next = self.cur_offset(1).clone();
+        let peek_next = self.cur_offset(1);
 
         let Token::Operator(Operator::Less) = peek_next else {
             return Some(ASTType::Simple(type_name));
         };
+
         self.next(); //commits the peek_next
         self.next();
 
-        let Token::Identifier(generic_name) = self.cur().clone() else {
+        let Token::Identifier(generic_name) = *self.cur() else {
             panic!("For now we dont have proper error handling for mistakes in generic types, cur = {:?}", self.cur())
          };
         self.next();
 
-        if let Token::Operator(Operator::Greater) = self.cur().clone() {
+        if let Token::Operator(Operator::Greater) = self.cur() {
             Some(ASTType::Generic(
                 type_name,
                 vec![ASTType::Simple(generic_name)],
@@ -557,14 +557,14 @@ impl<'source> Parser<'source> {
     pub fn parse_type_bound_name(
         &mut self,
     ) -> Result<Option<TypeBoundName<'source>>, ParsingError> {
-        let Token::Identifier(name) = self.cur().clone() else { return Ok(None); };
+        let Token::Identifier(name) = *self.cur() else { return Ok(None); };
         self.next();
 
         if !self.can_go() {
             return Ok(None);
         }
 
-        let Token::Colon = self.cur().clone() else {
+        let Token::Colon = self.cur() else {
             return Err(ParsingError::TypeBoundExpectedColonAfterFieldName);
         };
         self.next();
@@ -789,7 +789,7 @@ impl<'source> Parser<'source> {
 
     fn index_access_helper(
         &mut self,
-        expr_list_or_array: &Expr<'source>,
+        expr_list_or_array: Expr<'source>,
     ) -> Result<Expr<'source>, ParsingError> {
         if let Token::CloseParen = self.cur() {
             panic!("Invalid syntax: must inform index value");
@@ -810,7 +810,7 @@ impl<'source> Parser<'source> {
                 );
 
                 let fcall = Expr::IndexAccess(
-                    Box::new(expr_list_or_array.clone()),
+                    Box::new(expr_list_or_array),
                     Box::new(resulting_exprs.pop().unwrap()),
                 );
 
@@ -827,10 +827,10 @@ impl<'source> Parser<'source> {
 
     fn function_call_helper(
         &mut self,
-        expr_callable: &Expr<'source>,
+        expr_callable: Expr<'source>,
     ) -> Result<Expr<'source>, ParsingError> {
         if let Token::CloseParen = self.cur() {
-            return Ok(Expr::FunctionCall(Box::new(expr_callable.clone()), vec![]));
+            return Ok(Expr::FunctionCall(Box::new(expr_callable), vec![]));
         }
 
         self.new_stack();
@@ -843,7 +843,7 @@ impl<'source> Parser<'source> {
                 let popped = self.pop_stack();
                 let resulting_exprs = expressions.resulting_expr_list;
 
-                let fcall = Expr::FunctionCall(Box::new(expr_callable.clone()), resulting_exprs);
+                let fcall = Expr::FunctionCall(Box::new(expr_callable), resulting_exprs);
 
                 self.set_cur(&popped);
 
@@ -867,7 +867,7 @@ impl<'source> Parser<'source> {
             //if there is an open paren, we collect all the tokens for this open paren
             //and parse the sub-expression recursively
             {
-                let tok: Token = self.cur().clone();
+                let tok = self.cur();
                 let prev_token = self.prev_token().cloned();
                 match tok {
                     Token::OpenParen => {
@@ -916,7 +916,7 @@ impl<'source> Parser<'source> {
                                 //because the parenthesis invokes a call over the result of the whole right-side expr.
                                 match current_expr {
                                     Expr::BinaryOperation(left, op, right) => {
-                                        let right_side_fcall = self.function_call_helper(&right)?;
+                                        let right_side_fcall = self.function_call_helper(*right)?;
                                         self.push_operand(Expr::BinaryOperation(
                                             left,
                                             op,
@@ -925,7 +925,7 @@ impl<'source> Parser<'source> {
                                         was_operand = true;
                                     }
                                     expr => {
-                                        let fcall = self.function_call_helper(&expr)?;
+                                        let fcall = self.function_call_helper(expr)?;
                                         self.push_operand(fcall);
                                         was_operand = true;
                                     }
@@ -987,7 +987,7 @@ impl<'source> Parser<'source> {
                                 match current_expr {
                                     Expr::BinaryOperation(left, op, right) => {
                                         let right_side_index_access =
-                                            self.index_access_helper(&right)?;
+                                            self.index_access_helper(*right)?;
                                         self.push_operand(Expr::BinaryOperation(
                                             left,
                                             op,
@@ -996,7 +996,7 @@ impl<'source> Parser<'source> {
                                         was_operand = true;
                                     }
                                     expr => {
-                                        let index_access = self.index_access_helper(&expr)?;
+                                        let index_access = self.index_access_helper(expr)?;
                                         self.push_operand(index_access);
                                         was_operand = true;
                                     }
@@ -1040,8 +1040,7 @@ impl<'source> Parser<'source> {
                         let cur_token = self.cur();
                         if let Token::Identifier(name) = cur_token {
                             let cur_expr = popped.unwrap();
-                            let member_access_expr =
-                                Expr::MemberAccess(Box::new(cur_expr), name.clone());
+                            let member_access_expr = Expr::MemberAccess(Box::new(cur_expr), name);
                             self.push_operand(member_access_expr);
                             was_operand = true;
                         } else {
@@ -1051,15 +1050,16 @@ impl<'source> Parser<'source> {
                         }
                     }
                     Token::LiteralInteger(i) => {
-                        self.push_operand(Expr::IntegerValue(i));
+                        self.push_operand(Expr::IntegerValue(*i));
                         was_operand = true;
                     }
                     Token::LiteralFloat(f) => {
-                        self.push_operand(Expr::FloatValue(f));
+                        self.push_operand(Expr::FloatValue(*f));
                         was_operand = true;
                     }
                     Token::LiteralString(f) => {
-                        self.push_operand(Expr::StringValue(f));
+                        //@TODO cloneless: store the literals somewhere it can be fetched by ref?
+                        self.push_operand(Expr::StringValue(f.to_string()));
                         was_operand = true;
                     }
                     Token::None => {
@@ -1074,7 +1074,7 @@ impl<'source> Parser<'source> {
                         self.push_operand(Expr::BooleanValue(false));
                         was_operand = true;
                     }
-                    Token::Operator(o) => self.push_operator(o),
+                    Token::Operator(o) => self.push_operator(*o),
                     _ => {
                         //close paren, close bracket are not part of expr, as in "they're just syntax"
                         not_part_of_expr = true;
@@ -1086,7 +1086,7 @@ impl<'source> Parser<'source> {
             }
 
             self.next();
-            if self.can_go() && Token::MemberAccessor == self.cur().clone() {
+            if self.can_go() && Token::MemberAccessor == *self.cur() {
                 continue;
             }
 
@@ -1127,18 +1127,29 @@ impl<'source> Parser<'source> {
                 if has_sufficient_operands && has_pending_operators {
                     let rhs_root = self.operand_stack_mut().pop().unwrap();
                     let lhs_root = self.operand_stack_mut().pop().unwrap();
-                    let op = self.operator_stack_mut().pop().unwrap();
 
-                    let mut bin_op = Expr::BinaryOperation(
-                        Box::new(lhs_root.clone()),
-                        op,
-                        Box::new(rhs_root.clone()),
+                    //sanity check: only one of them is a binary operation, or none of them.
+                    //if both are binary exprs, we will lose some data during this transformation.
+                    //however, this shouldn't happen
+                    assert!(
+                        !(matches!(lhs_root, Expr::BinaryOperation(..))
+                            && matches!(rhs_root, Expr::BinaryOperation(..)))
                     );
+
+                    let op = self.operator_stack_mut().pop().unwrap();
+                    let precedence_root = precedence(op);
+
+                    dbg!(&lhs_root);
+                    dbg!(&rhs_root);
+
+                    //@TODO cloneless: In this case we clone because it's kinda hard to
+                    //do only using regular moves
+
+                    let mut bin_op = None;
                     if let Expr::BinaryOperation(lhs_down, op_down, rhs_down) = &lhs_root {
                         let precedence_down = precedence(*op_down);
-                        let precedence_root = precedence(op);
                         if precedence_root > precedence_down {
-                            bin_op = Expr::BinaryOperation(
+                            bin_op = Some(Expr::BinaryOperation(
                                 lhs_down.clone(),
                                 *op_down,
                                 Box::new(Expr::BinaryOperation(
@@ -1146,14 +1157,12 @@ impl<'source> Parser<'source> {
                                     op,
                                     Box::new(rhs_root.clone()),
                                 )),
-                            );
+                            ));
                         }
-                    }
-                    if let Expr::BinaryOperation(lhs_down, op_down, rhs_down) = &rhs_root {
+                    } else if let Expr::BinaryOperation(lhs_down, op_down, rhs_down) = &rhs_root {
                         let precedence_down = precedence(*op_down);
-                        let precedence_root = precedence(op);
                         if precedence_root > precedence_down {
-                            bin_op = Expr::BinaryOperation(
+                            bin_op = Some(Expr::BinaryOperation(
                                 lhs_down.clone(),
                                 *op_down,
                                 Box::new(Expr::BinaryOperation(
@@ -1161,10 +1170,18 @@ impl<'source> Parser<'source> {
                                     op,
                                     Box::new(lhs_root.clone()),
                                 )),
-                            );
+                            ));
                         }
                     }
-                    self.push_operand(bin_op);
+                    //@TODO cloneless: at least the cases that don't need fixing are cloneless
+                    if bin_op.is_none() {
+                        bin_op = Some(Expr::BinaryOperation(
+                            Box::new(lhs_root),
+                            op,
+                            Box::new(rhs_root),
+                        ));
+                    }
+                    self.push_operand(bin_op.unwrap());
                 }
             }
         }
@@ -1262,7 +1279,7 @@ mod tests {
 
     impl<'source> TypeBoundName<'source> {
         //do not delete, used by tests!
-        pub fn simple(name: SourceString<'source>, name_type: &str) -> Self {
+        pub fn simple(name: SourceString<'source>, name_type: &'source str) -> Self {
             Self {
                 name,
                 name_type: ASTType::Simple(name_type),
@@ -2006,10 +2023,7 @@ print(y)",
     fn function_call_without_args() {
         let tokens = tokenize("some_identifier()").unwrap();
         let result = parse(tokens);
-        let expected = Expr::FunctionCall(
-            Box::new(Expr::Variable("some_identifier")),
-            vec![],
-        );
+        let expected = Expr::FunctionCall(Box::new(Expr::Variable("some_identifier")), vec![]);
 
         assert_eq!(expected, result);
     }
@@ -2164,10 +2178,7 @@ print(y)",
                     ],
                 ),
                 Expr::IntegerValue(3),
-                Expr::FunctionCall(
-                    Box::new(Expr::Variable("nested2")),
-                    vec![],
-                ),
+                Expr::FunctionCall(Box::new(Expr::Variable("nested2")), vec![]),
             ],
         );
         assert_eq!(expected, result);
@@ -2220,10 +2231,7 @@ print(y)",
             Box::new(Expr::Variable("some_identifier")),
             vec![
                 Expr::IntegerValue(1),
-                Expr::FunctionCall(
-                    Box::new(Expr::Variable("nested")),
-                    vec![],
-                ),
+                Expr::FunctionCall(Box::new(Expr::Variable("nested")), vec![]),
             ],
         );
         let expected = Expr::BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
@@ -2245,10 +2253,7 @@ print(y)",
                     ],
                 ),
                 Expr::IntegerValue(3),
-                Expr::FunctionCall(
-                    Box::new(Expr::Variable("nested2")),
-                    vec![],
-                ),
+                Expr::FunctionCall(Box::new(Expr::Variable("nested2")), vec![]),
             ],
         );
         let expected = Expr::BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
@@ -2270,10 +2275,7 @@ print(y)",
                     ],
                 ),
                 Expr::IntegerValue(3),
-                Expr::FunctionCall(
-                    Box::new(Expr::Variable("nested2")),
-                    vec![],
-                ),
+                Expr::FunctionCall(Box::new(Expr::Variable("nested2")), vec![]),
             ],
         );
         let expected = Expr::BinaryOperation(5.into(), Operator::Multiply, Box::new(call));
@@ -2593,6 +2595,16 @@ print(y)",
         );
 
         assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn two_expressions_binary_that_needs_inverting_operands_no_information_is_lost() {
+        let tokens = tokenize("(1 + 2 * 3) + (4 + 5 * 6)").unwrap();
+        let result = parse(tokens);
+
+        let expected = "BinaryOperation(BinaryOperation(IntegerValue(1), Plus, BinaryOperation(IntegerValue(2), Multiply, IntegerValue(3))), Plus, BinaryOperation(IntegerValue(4), Plus, BinaryOperation(IntegerValue(5), Multiply, IntegerValue(6))))";
+        println!("{:#?}", result);
+        assert_eq!(expected, format!("{:?}", result));
     }
 
     #[test]

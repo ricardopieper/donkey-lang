@@ -1,13 +1,14 @@
+use std::borrow::Cow;
+
 use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::mir::MIRBlock;
 use super::mir::MIRBlockNode;
 use super::mir::MIRScope;
 use super::mir::MIRTopLevelNode;
-use super::type_name_printer::TypeNamePrinter;
 
 pub trait PrintableExpression {
-    fn print_expr(&self) -> String;
+    fn print_expr<'source>(&'source self) -> Cow<'source, str>;
 }
 
 fn print_mir_block<T>(block: &MIRBlock<T>) -> String {
@@ -131,30 +132,6 @@ fn print_mir_str<T>(node: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) ->
             }
 
             function
-        }
-        MIRTopLevelNode::StructDeclaration {
-            struct_name,
-            fields: body,
-            type_parameters,
-        } => {
-            let fields = body
-                .iter()
-                .map(|x| {
-                    let typename = x.typename.print_name(type_db);
-                    format!("{}: {}", x.name, typename)
-                })
-                .collect::<Vec<_>>()
-                .join("\n\t");
-            if type_parameters.len() > 0 {
-                let types = type_parameters
-                    .iter()
-                    .map(|x| x.0.as_ref())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return format!("struct {struct_name}<{types}>:\n{fields}\n");
-            } else {
-                return format!("struct {struct_name}:\n{fields}\n");
-            }
         }
     }
 }

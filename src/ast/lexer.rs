@@ -1,4 +1,3 @@
-
 use crate::commons::float::FloatLiteral;
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
@@ -99,7 +98,7 @@ impl<'source> Token<'source> {
 }
 
 #[derive(Debug)]
-enum PartialToken<'source> {
+pub enum PartialToken<'source> {
     UndefinedOrWhitespace,
     LiteralFloat(SourceString<'source>),
     Operator(SourceString<'source>),
@@ -138,7 +137,7 @@ impl<'source> PartialToken<'source> {
                 "while" => Token::WhileKeyword,
                 "break" => Token::BreakKeyword,
                 "struct" => Token::StructDef,
-                _ => Token::Identifier(s.clone()),
+                _ => Token::Identifier(s),
             },
             Self::Comma => Token::Comma,
             Self::Colon => Token::Colon,
@@ -191,7 +190,7 @@ pub struct Tokenizer<'source> {
     chars: Vec<char>,
     cur_partial_token: PartialToken<'source>,
     final_result: Vec<Token<'source>>,
-    eater_buf: String
+    eater_buf: String,
 }
 
 impl<'source> Tokenizer<'source> {
@@ -219,7 +218,7 @@ impl<'source> Tokenizer<'source> {
         self.index = self.index + offset;
     }
 
-    fn cur(& self) -> char {
+    fn cur(&self) -> char {
         self.cur_offset(0)
     }
 
@@ -258,7 +257,6 @@ impl<'source> Tokenizer<'source> {
             self.next();
         }
         let end = self.index;
-
 
         Some(&self.source[start..end])
     }
@@ -320,7 +318,7 @@ impl<'source> Tokenizer<'source> {
         if let PartialToken::UndefinedOrWhitespace = self.cur_partial_token {
             return;
         }
-        
+
         let cur_token = std::mem::replace(&mut self.cur_partial_token, WHITESPACE);
 
         let as_token = cur_token.to_token();
@@ -433,7 +431,7 @@ impl<'source> Tokenizer<'source> {
             }
         }
         self.commit_current_token();
-        let final_result = self.final_result.drain(0 .. self.final_result.len());
+        let final_result = self.final_result.drain(0..self.final_result.len());
         Ok(final_result.collect())
     }
 }

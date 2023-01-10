@@ -19,7 +19,8 @@ pub struct PartiallyResolvedFunctionSignature<'source> {
 pub struct NameRegistry<'source> {
     names: HashMap<SourceString<'source>, TypeInstanceId>,
     //This could help still provide some type inference when just enough information is available
-    partially_resolved_function_sigs: HashMap<SourceString<'source>, PartiallyResolvedFunctionSignature<'source>>,
+    partially_resolved_function_sigs:
+        HashMap<SourceString<'source>, PartiallyResolvedFunctionSignature<'source>>,
 }
 
 impl<'source> NameRegistry<'source> {
@@ -34,7 +35,7 @@ impl<'source> NameRegistry<'source> {
     pub fn insert_partially_resolved_signature(
         &mut self,
         name: SourceString<'source>,
-        sig: PartiallyResolvedFunctionSignature,
+        sig: PartiallyResolvedFunctionSignature<'source>,
     ) {
         self.partially_resolved_function_sigs.insert(name, sig);
     }
@@ -47,7 +48,7 @@ impl<'source> NameRegistry<'source> {
         self.partially_resolved_function_sigs.get(name)
     }
 
-    pub fn include(&mut self, outer: &NameRegistry) {
+    pub fn include(&mut self, outer: &NameRegistry<'source>) {
         for (k, v) in &outer.names {
             self.names.insert(*k, *v);
         }
@@ -84,18 +85,18 @@ fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegis
 }*/
 
 /*Builds a name registry and resolves the top level declarations*/
-pub fn build_name_registry_and_resolve_signatures<'source, 'parser>(
-    type_db: &mut TypeInstanceManager,
-    registry: &mut NameRegistry,
-    errors: &mut TypeErrors<'source, 'parser>,
-    mir: Vec<StartingHIRRoot<'source, 'parser>>,
-) -> Result<Vec<GlobalsInferredMIRRoot<'source, 'parser>>, CompilerError> {
+pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
+    type_db: &'a mut TypeInstanceManager<'source>,
+    registry: &'a mut NameRegistry<'source>,
+    errors: &'a mut TypeErrors<'source>,
+    mir: Vec<StartingHIRRoot<'source>>,
+) -> Result<Vec<GlobalsInferredMIRRoot<'source>>, CompilerError> {
     //register_builtins(type_db, registry);
     let mut new_mir = vec![];
 
     //first collect all globals by navigating through all functions and assignments
     for node in mir {
-        let globals_inferred = match node {
+        match node {
             HIRRoot::DeclareFunction {
                 function_name,
                 parameters,
@@ -120,7 +121,7 @@ pub fn build_name_registry_and_resolve_signatures<'source, 'parser>(
                         errors
                             .type_construction_failure
                             .push(TypeConstructionFailure {
-                                on_function: function_name.to_string(),
+                                on_element: RootElementType::Function(&function_name),
                                 error: e,
                             });
                         return Err(CompilerError::TypeInferenceError);
@@ -145,7 +146,7 @@ pub fn build_name_registry_and_resolve_signatures<'source, 'parser>(
                     errors
                         .type_construction_failure
                         .push(TypeConstructionFailure {
-                            on_function: function_name.to_string(),
+                            on_element: RootElementType::Function(&function_name),
                             error: e,
                         });
                     return Err(CompilerError::TypeInferenceError);
@@ -156,26 +157,24 @@ pub fn build_name_registry_and_resolve_signatures<'source, 'parser>(
 
                 registry.insert(&function_name, func_id);
 
-                HIRRoot::DeclareFunction {
+                new_mir.push(HIRRoot::DeclareFunction {
                     function_name,
                     parameters: resolved_params,
                     body,
                     return_type,
                     meta,
                     is_intrinsic,
-                }
+                });
             }
             HIRRoot::StructDeclaration {
                 struct_name,
-                type_parameters,
                 fields,
-                meta,
+                ..
             } => {
                 let type_id =
                     type_db
                         .constructors
                         .add(TypeKind::Struct, TypeSign::Unsigned, &struct_name);
-                let mut resolved_fields = vec![];
                 for field in fields.iter() {
                     let type_usage = hir_type_to_usage(
                         RootElementType::Struct(&struct_name),
@@ -185,34 +184,10 @@ pub fn build_name_registry_and_resolve_signatures<'source, 'parser>(
                     )?;
                     type_db
                         .constructors
-                        .add_field(type_id, &field.name, &type_usage);
-
-                    let constructed = type_db.construct_usage(&type_usage);
-                    if let Err(e) = constructed {
-                        errors
-                            .type_construction_failure
-                            .push(TypeConstructionFailure {
-                                on_function: struct_name.to_string(),
-                                error: e,
-                            });
-                        return Err(CompilerError::TypeInferenceError);
-                    }
-
-                    resolved_fields.push(HIRTypedBoundName {
-                        name: field.name,
-                        typename: type_usage,
-                    })
-                }
-
-                HIRRoot::StructDeclaration {
-                    struct_name,
-                    fields: resolved_fields,
-                    type_parameters,
-                    meta,
+                        .add_field(type_id, &field.name, type_usage); //cloneless: ok to clone
                 }
             }
         };
-        new_mir.push(globals_inferred);
     }
     Ok(new_mir)
 }

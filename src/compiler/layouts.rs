@@ -221,7 +221,7 @@ fn build_write_scope_byte_layout<'source>(
         let scope = &all_scopes[current_index.0];
 
         for var in &scope.boundnames {
-            found_var.push((var.name.clone(), var.type_instance.size(type_db), scope.id));
+            found_var.push((var.name, var.type_instance.size(type_db), scope.id));
         }
 
         if current_index.0 == 0 {
