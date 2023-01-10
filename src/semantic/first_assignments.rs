@@ -1,4 +1,5 @@
 use crate::{
+    ast::lexer::SourceString,
     semantic::hir::{HIRTypedBoundName, HIR},
     types::type_instance_db::TypeInstanceId,
 };
@@ -10,11 +11,11 @@ use super::hir::{
     HIRTypeDef, UninferredHIR,
 };
 
-fn make_first_assignments_in_body(
-    body: Vec<UninferredHIR>,
-    declarations_found: &mut HashSet<String>,
-) -> Vec<FirstAssignmentsDeclaredHIR> {
-    let mut new_mir: Vec<FirstAssignmentsDeclaredHIR> = vec![];
+fn make_first_assignments_in_body<'source>(
+    body: Vec<UninferredHIR<'source>>,
+    declarations_found: &mut HashSet<SourceString<'source>>,
+) -> Vec<FirstAssignmentsDeclaredHIR<'source>> {
+    let mut new_mir: Vec<FirstAssignmentsDeclaredHIR<'source>> = vec![];
     for node in body {
         let mir_node = match node {
             HIR::Declare {
@@ -24,7 +25,7 @@ fn make_first_assignments_in_body(
                 meta_ast,
                 meta_expr,
             } => {
-                declarations_found.insert(var.clone());
+                declarations_found.insert(var);
                 HIR::Declare {
                     var,
                     typedef: HIRTypeDef::Provided(typedef),
@@ -48,9 +49,9 @@ fn make_first_assignments_in_body(
                         meta_expr,
                     }
                 } else {
-                    declarations_found.insert(var.clone());
+                    declarations_found.insert(var);
                     HIR::Declare {
-                        var: var.clone(),
+                        var,
                         typedef: HIRTypeDef::PendingInference,
                         expression,
                         meta_ast,
@@ -61,6 +62,7 @@ fn make_first_assignments_in_body(
             HIR::Assign { .. } => todo!("Unsupported assign to path len > 1"),
             HIR::If(condition, true_branch, false_branch, meta) => {
                 //create 2 copies of the decls found, so that 2 copies of the scope are created
+                //cloneless: these clones are intentional
                 let mut true_branch_scope = declarations_found.clone();
                 let mut false_branch_scope = declarations_found.clone();
 
@@ -97,10 +99,10 @@ fn make_first_assignments_in_body(
     new_mir
 }
 
-fn make_assignments_into_declarations_in_function(
-    parameters: &[HIRTypedBoundName<TypeInstanceId>],
-    body: Vec<UninferredHIR>,
-) -> Vec<FirstAssignmentsDeclaredHIR> {
+fn make_assignments_into_declarations_in_function<'source>(
+    parameters: &[HIRTypedBoundName<'source, TypeInstanceId>],
+    body: Vec<UninferredHIR<'source>>,
+) -> Vec<FirstAssignmentsDeclaredHIR<'source>> {
     //find all assignments, check if they were declared already.
     //if not declared, make them into a declaration with unknown type
 
@@ -111,16 +113,18 @@ fn make_assignments_into_declarations_in_function(
     //therefore we need to navigate node by node, collect the declarations
     //and check assignments, as we go
 
-    let mut declarations_found = HashSet::<String>::new();
+    //@TODO there is some trouble here with lifetimes, because the body is consumed, the strings
+    //move to the new body and cannot be stored as refs in the declarations_found set.
+    let mut declarations_found = HashSet::<SourceString<'source>>::new();
     for p in parameters {
-        declarations_found.insert(p.name.to_string());
+        declarations_found.insert(p.name);
     }
     make_first_assignments_in_body(body, &mut declarations_found)
 }
 
-pub fn transform_first_assignment_into_declaration(
-    mir: Vec<GlobalsInferredMIRRoot>,
-) -> Vec<FirstAssignmentsDeclaredHIRRoot> {
+pub fn transform_first_assignment_into_declaration<'source>(
+    mir: Vec<GlobalsInferredMIRRoot<'source>>,
+) -> Vec<FirstAssignmentsDeclaredHIRRoot<'source>> {
     let mut new_mir = vec![];
 
     for node in mir {

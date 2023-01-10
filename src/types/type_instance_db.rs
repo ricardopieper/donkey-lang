@@ -96,8 +96,8 @@ pub struct CommonTypeInstances {
     pub bool: TypeInstanceId,
 }
 
-pub struct TypeInstanceManager {
-    pub constructors: TypeConstructorDatabase,
+pub struct TypeInstanceManager<'source> {
+    pub constructors: TypeConstructorDatabase<'source>,
     pub types: Vec<TypeInstance>,
     pub common_types: CommonTypeInstances,
 }
@@ -108,8 +108,8 @@ pub enum StructMember<'type_db> {
     NotFound,
 }
 
-impl TypeInstanceManager {
-    pub fn new() -> TypeInstanceManager {
+impl<'source> TypeInstanceManager<'source> {
+    pub fn new() -> TypeInstanceManager<'source> {
         let mut item = TypeInstanceManager {
             types: vec![],
             constructors: TypeConstructorDatabase::new(),
@@ -227,20 +227,20 @@ impl TypeInstanceManager {
 
     pub fn construct_usage(
         &mut self,
-        usage: &TypeUsage,
+        usage: &TypeUsage<'source>,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
 
     pub fn construct_usage_generic(
         &mut self,
-        usage: &TypeUsage,
+        usage: &TypeUsage<'source>,
         type_args: &HashMap<String, TypeInstanceId>,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         match usage {
             TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
             TypeUsage::Generic(param) => type_args
-                .get(&param.0)
+                .get(param.0)
                 .ok_or_else(|| TypeConstructionError::TypeNotFound {
                     name: param.0.to_string(),
                 })
@@ -331,8 +331,7 @@ impl TypeInstanceManager {
         let allowed_casts = {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
-            let casts = constructor.allowed_casts.clone();
-            for type_usage in casts {
+            for type_usage in constructor.allowed_casts.clone().iter() {
                 let constructed = self.construct_usage(&type_usage)?;
                 result.push(constructed);
             }
@@ -348,8 +347,9 @@ impl TypeInstanceManager {
         let rhs_binary_ops = {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
-            let rhs_bin_ops = constructor.rhs_binary_ops.clone();
-            for (operator, rhs, op_result) in &rhs_bin_ops {
+            //@cloneless: this clone unfortunately seems necessary, otherwise the borrow is held for all operations
+            //because of the borrow on constructor.rhs_binary_ops.
+            for (operator, rhs, op_result) in constructor.rhs_binary_ops.clone().iter() {
                 result.push((
                     *operator,
                     self.construct_usage(rhs)?,
@@ -369,8 +369,7 @@ impl TypeInstanceManager {
             let constructor = self.constructors.find(constructor_id);
 
             let mut result = vec![];
-            let unary_ops = constructor.unary_ops.clone();
-            for (operator, rhs) in &unary_ops {
+            for (operator, rhs) in constructor.unary_ops.clone().iter() {
                 result.push((*operator, self.construct_usage(rhs)?));
             }
             result
@@ -491,7 +490,7 @@ fn make_base_instance(
     }
 }
 
-impl Default for TypeInstanceManager {
+impl Default for TypeInstanceManager<'_> {
     fn default() -> Self {
         Self::new()
     }

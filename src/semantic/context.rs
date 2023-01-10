@@ -7,15 +7,15 @@ use crate::types::type_errors::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 
-pub struct Context {
-    pub mir: Vec<MIRTopLevelNode<Checked>>,
-    pub type_db: TypeInstanceManager,
-    pub globals: NameRegistry,
-    pub type_errors: TypeErrors,
+pub struct Context<'source> {
+    pub mir: Vec<MIRTopLevelNode<'source, Checked>>,
+    pub type_db: TypeInstanceManager<'source>,
+    pub globals: NameRegistry<'source>,
+    pub type_errors: TypeErrors<'source>,
 }
 
-impl Context {
-    pub fn new() -> Context {
+impl<'source> Context<'source> {
+    pub fn new() -> Context<'source> {
         Context {
             type_db: TypeInstanceManager::new(),
             globals: NameRegistry::new(),
@@ -24,9 +24,8 @@ impl Context {
         }
     }
 
-    pub fn add(&mut self, _name: &str, ast: &AST) {
-        let mut ast_hir = vec![];
-        ast_globals_to_hir(ast, &mut ast_hir);
+    pub fn add(&mut self, _name: &'source str, ast: &'source AST<'_>) {
+        let ast_hir = ast_globals_to_hir(ast);
 
         let inferred_globals_hir = match name_registry::build_name_registry_and_resolve_signatures(
             &mut self.type_db,
@@ -66,7 +65,7 @@ impl Context {
                 panic!("{}", printer);
             }
             Ok(final_hir) => {
-                let mir = hir_to_mir(&final_hir);
+                let mir = hir_to_mir(final_hir);
                 let typechecked =
                     typecheck(mir, &self.type_db, &self.globals, &mut self.type_errors);
                 if self.type_errors.count() > 0 {

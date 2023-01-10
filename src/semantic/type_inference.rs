@@ -1,4 +1,5 @@
-use crate::ast::parser::{Expr, AST};
+use crate::ast::lexer::SourceString;
+use crate::ast::parser::Expr;
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
 use crate::semantic::name_registry::NameRegistry;
@@ -12,23 +13,26 @@ use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::compiler_errors::CompilerError;
 use super::hir::{
-    FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, HIRRoot, HIRTypeDef,
-    InferredTypeHIR, InferredTypeHIRRoot,
+    FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, HIRAstMetadata, HIRExprMetadata,
+    HIRRoot, HIRTypeDef, InferredTypeHIR, InferredTypeHIRRoot,
 };
 use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 
-pub type TypeInferenceInputHIRRoot = FirstAssignmentsDeclaredHIRRoot;
-pub type TypeInferenceInputHIR = FirstAssignmentsDeclaredHIR;
+pub type TypeInferenceInputHIRRoot<'source> = FirstAssignmentsDeclaredHIRRoot<'source>;
+pub type TypeInferenceInputHIR<'source> = FirstAssignmentsDeclaredHIR<'source>;
 
-pub struct FunctionTypeInferenceContext<'function_hir, 'compiler_state> {
-    pub on_function: &'function_hir str,
-    pub type_db: &'compiler_state mut TypeInstanceManager,
-    pub errors: &'compiler_state mut TypeErrors,
-    pub decls_in_scope: &'compiler_state mut NameRegistry,
+pub struct FunctionTypeInferenceContext<'compiler_state, 'source> {
+    pub on_function: &'source str,
+    pub type_db: &'compiler_state mut TypeInstanceManager<'source>,
+    pub errors: &'compiler_state mut TypeErrors<'source>,
+    pub decls_in_scope: &'compiler_state mut NameRegistry<'source>,
 }
 
-impl FunctionTypeInferenceContext<'_, '_> {
-    pub fn instantiate_type(&mut self, typedef: &HIRType) -> Result<TypeInstanceId, CompilerError> {
+impl<'source> FunctionTypeInferenceContext<'_, 'source> {
+    pub fn instantiate_type(
+        &mut self,
+        typedef: &HIRType<'source>,
+    ) -> Result<TypeInstanceId, CompilerError> {
         let usage = hir_type_to_usage(
             RootElementType::Function(self.on_function),
             typedef,
@@ -41,7 +45,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
                 self.errors
                     .type_construction_failure
                     .push(TypeConstructionFailure {
-                        on_function: self.on_function.to_string(),
+                        on_element: RootElementType::Function(&self.on_function),
                         error: e,
                     });
                 Err(CompilerError::TypeInferenceError)
@@ -51,20 +55,20 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     pub fn compute_and_infer_expr_type(
         &mut self,
-        expression: HIRExpr<()>,
+        expression: HIRExpr<'source, ()>,
         type_hint: Option<TypeInstanceId>,
-    ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         match expression {
             HIRExpr::Variable(var, _, meta) => {
                 let decl_type = self.decls_in_scope.get(&var);
                 let Some(found_type) = decl_type else {
                     self.errors.variable_not_found.push(VariableNotFound {
-                    on_function: self.on_function.to_string(),
-                    variable_name: var.to_string()
+                    on_element: RootElementType::Function(self.on_function),
+                    variable_name: var
                     });
                     return Err(CompilerError::TypeInferenceError);
                 };
-                Ok(HIRExpr::Variable(var.to_string(), *found_type, meta))
+                Ok(HIRExpr::Variable(var, *found_type, meta))
             }
             HIRExpr::Literal(literal_expr, _, meta) => {
                 //@TODO maybe use a type hint here to resolve to u32, u64, etc whenever needed, as in index accessors
@@ -108,11 +112,11 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn compute_infer_method_call(
         &mut self,
-        obj: HIRExpr<()>,
-        method_name: String,
-        params: Vec<HIRExpr<()>>,
-        meta: Expr,
-    ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
+        obj: HIRExpr<'source, ()>,
+        method_name: SourceString<'source>,
+        params: Vec<HIRExpr<'source, ()>>,
+        meta: &'source Expr<'source>,
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         //compute type of obj
         //find method_name in type of obj
         let objexpr = self.compute_and_infer_expr_type(obj, None)?;
@@ -140,9 +144,9 @@ impl FunctionTypeInferenceContext<'_, '_> {
             self.errors
                 .field_or_method_not_found
                 .push(FieldOrMethodNotFound {
-                    on_function: self.on_function.to_string(),
+                    on_element: RootElementType::Function(self.on_function),
                     object_type: typeof_obj,
-                    field_or_method: method_name.to_string(),
+                    field_or_method: method_name,
                 });
             Err(CompilerError::TypeInferenceError)
         }
@@ -150,17 +154,17 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn compute_infer_array(
         &mut self,
-        array_items: Vec<HIRExpr<()>>,
+        array_items: Vec<HIRExpr<'source, ()>>,
         type_hint: Option<TypeInstanceId>,
-        meta: Expr,
-    ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
+        meta: &'source Expr<'source>,
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         if array_items.is_empty() {
             if let Some(_hint) = type_hint {
                 Ok(HIRExpr::Array(vec![], type_hint.unwrap(), meta))
             } else {
                 self.errors.insufficient_array_type_info.push(
                     InsufficientTypeInformationForArray {
-                        on_function: self.on_function.to_string(),
+                        on_element: RootElementType::Function(self.on_function),
                     },
                 );
                 Err(CompilerError::TypeInferenceError)
@@ -185,7 +189,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
                 //hint does not matter much
                 self.errors.insufficient_array_type_info.push(
                     InsufficientTypeInformationForArray {
-                        on_function: self.on_function.to_string(),
+                        on_element: RootElementType::Function(self.on_function),
                     },
                 );
 
@@ -196,10 +200,10 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn compute_infer_member_access(
         &mut self,
-        obj: HIRExpr<()>,
-        meta: Expr,
-        name: String,
-    ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
+        obj: HIRExpr<'source, ()>,
+        meta: &'source Expr<'source>,
+        name: SourceString<'source>,
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let obj_expr = self.compute_and_infer_expr_type(obj, None)?;
 
         let typeof_obj = obj_expr.get_type();
@@ -221,7 +225,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
             self.errors
                 .field_or_method_not_found
                 .push(FieldOrMethodNotFound {
-                    on_function: self.on_function.to_string(),
+                    on_element: RootElementType::Function(self.on_function),
                     object_type: typeof_obj,
                     field_or_method: name,
                 });
@@ -231,10 +235,10 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn compute_infer_unary_expr(
         &mut self,
-        rhs: HIRExpr<()>,
-        meta: Expr,
+        rhs: HIRExpr<'source, ()>,
+        meta: &'source Expr<'source>,
         op: crate::ast::lexer::Operator,
-    ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let rhs_expr = self.compute_and_infer_expr_type(rhs, None)?;
         let rhs_type = rhs_expr.get_type();
 
@@ -250,7 +254,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
         }
 
         self.errors.unary_op_not_found.push(UnaryOperatorNotFound {
-            on_function: self.on_function.to_string(),
+            on_element: RootElementType::Function(self.on_function),
             rhs: rhs_type,
             operator: op,
         });
@@ -260,8 +264,8 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn infer_expr_array(
         &mut self,
-        exprs: Vec<HIRExpr<()>>,
-    ) -> Result<Vec<HIRExpr<TypeInstanceId>>, CompilerError> {
+        exprs: Vec<HIRExpr<'source, ()>>,
+    ) -> Result<Vec<HIRExpr<'source, TypeInstanceId>>, CompilerError> {
         let mut result = vec![];
         for expr in exprs {
             let res = self.compute_and_infer_expr_type(expr, None)?;
@@ -272,10 +276,10 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn compute_infer_function_call(
         &mut self,
-        fun_expr: HIRExpr<()>,
-        fun_params: Vec<HIRExpr<()>>,
-        meta: Expr,
-    ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
+        fun_expr: HIRExpr<'source, ()>,
+        fun_params: Vec<HIRExpr<'source, ()>>,
+        meta: &'source Expr<'source>,
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let HIRExpr::Variable(var, .., fcall_meta) = fun_expr else {
             panic!("Functions should be bound to a name! This is a bug in the type inference phase or HIR expression reduction phase.");
         };
@@ -284,7 +288,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
         let Some(decl_type) = self.decls_in_scope.get(&var) else {
             self.errors.variable_not_found.push(VariableNotFound {
-                on_function: self.on_function.to_string(),
+                on_element: RootElementType::Function(self.on_function),
                 variable_name: var
             });
             return Err(CompilerError::TypeInferenceError);
@@ -294,7 +298,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
         let type_instance = self.type_db.get_instance(*decl_type);
 
-        let function_inferred = HIRExpr::Variable(var.clone(), type_instance.id, fcall_meta).into();
+        let function_inferred = HIRExpr::Variable(var, type_instance.id, fcall_meta).into();
 
         if type_instance.is_function {
             Ok(HIRExpr::FunctionCall(
@@ -308,7 +312,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
         } else {
             //type is fully resolved but all wrong
             self.errors.call_non_callable.push(CallToNonCallableType {
-                on_function: self.on_function.to_string(),
+                on_element: RootElementType::Function(self.on_function),
                 actual_type: type_instance.id,
             });
             Err(CompilerError::TypeInferenceError)
@@ -317,11 +321,11 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn compute_infer_binop(
         &mut self,
-        lhs: HIRExpr<()>,
-        meta: Expr,
-        rhs: HIRExpr<()>,
+        lhs: HIRExpr<'source, ()>,
+        meta: &'source Expr<'source>,
+        rhs: HIRExpr<'source, ()>,
         op: crate::ast::lexer::Operator,
-    ) -> Result<HIRExpr<TypeInstanceId>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let lhs_expr = self.compute_and_infer_expr_type(lhs, None)?;
         let rhs_expr = self.compute_and_infer_expr_type(rhs, None)?;
 
@@ -346,7 +350,7 @@ impl FunctionTypeInferenceContext<'_, '_> {
         self.errors
             .binary_op_not_found
             .push(BinaryOperatorNotFound {
-                on_function: self.on_function.to_string(),
+                on_element: RootElementType::Function(self.on_function),
                 lhs: lhs_type,
                 rhs: rhs_type,
                 operator: op,
@@ -357,8 +361,8 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn infer_types_in_body(
         &mut self,
-        body: Vec<TypeInferenceInputHIR>,
-    ) -> Result<Vec<InferredTypeHIR>, CompilerError> {
+        body: Vec<TypeInferenceInputHIR<'source>>,
+    ) -> Result<Vec<InferredTypeHIR<'source>>, CompilerError> {
         let mut new_mir = vec![];
         for node in body {
             let hir_node: InferredTypeHIR = match node {
@@ -404,31 +408,31 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn infer_types_in_return(
         &mut self,
-        expr: HIRExpr<()>,
-        meta: AST,
-    ) -> Result<InferredTypeHIR, CompilerError> {
+        expr: HIRExpr<'source, ()>,
+        meta_ast: HIRAstMetadata<'source>,
+    ) -> Result<InferredTypeHIR<'source>, CompilerError> {
         let typed_expr = self.compute_and_infer_expr_type(expr, None)?;
-        Ok(HIR::Return(typed_expr, meta))
+        Ok(HIR::Return(typed_expr, meta_ast))
     }
 
     fn infer_types_in_while_statement_and_blocks(
         &mut self,
-        condition: HIRExpr<()>,
-        body: Vec<TypeInferenceInputHIR>,
-        meta: AST,
-    ) -> Result<InferredTypeHIR, CompilerError> {
+        condition: HIRExpr<'source, ()>,
+        body: Vec<TypeInferenceInputHIR<'source>>,
+        meta_ast: HIRAstMetadata<'source>,
+    ) -> Result<InferredTypeHIR<'source>, CompilerError> {
         let body_inferred = self.infer_types_in_body(body)?;
         let condition_expr = self.compute_and_infer_expr_type(condition, None)?;
-        Ok(HIR::While(condition_expr, body_inferred, meta))
+        Ok(HIR::While(condition_expr, body_inferred, meta_ast))
     }
 
     fn infer_types_in_if_statement_and_blocks(
         &mut self,
-        true_branch: Vec<TypeInferenceInputHIR>,
-        false_branch: Vec<TypeInferenceInputHIR>,
-        condition: HIRExpr<()>,
-        meta: AST,
-    ) -> Result<InferredTypeHIR, CompilerError> {
+        true_branch: Vec<TypeInferenceInputHIR<'source>>,
+        false_branch: Vec<TypeInferenceInputHIR<'source>>,
+        condition: HIRExpr<'source, ()>,
+        meta_ast: HIRAstMetadata<'source>,
+    ) -> Result<InferredTypeHIR<'source>, CompilerError> {
         let true_branch_inferred = self.infer_types_in_body(true_branch)?;
         let false_branch_inferred = self.infer_types_in_body(false_branch)?;
         let condition_expr = self.compute_and_infer_expr_type(condition, None)?;
@@ -436,17 +440,17 @@ impl FunctionTypeInferenceContext<'_, '_> {
             condition_expr,
             true_branch_inferred,
             false_branch_inferred,
-            meta,
+            meta_ast,
         ))
     }
 
     fn infer_types_in_fcall(
         &mut self,
-        function: HIRExpr<()>,
-        args: Vec<HIRExpr<()>>,
-        meta_ast: AST,
-        meta_expr: Expr,
-    ) -> Result<InferredTypeHIR, CompilerError> {
+        function: HIRExpr<'source, ()>,
+        args: Vec<HIRExpr<'source, ()>>,
+        meta_ast: HIRAstMetadata<'source>,
+        meta_expr: HIRExprMetadata<'source>,
+    ) -> Result<InferredTypeHIR<'source>, CompilerError> {
         let function_arg = self.compute_and_infer_expr_type(function, None)?;
         let inferred_args = self.infer_expr_array(args)?;
 
@@ -460,11 +464,11 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn infer_types_in_assignment(
         &mut self,
-        expression: HIRExpr<()>,
-        path: Vec<String>,
-        meta_ast: AST,
-        meta_expr: Expr,
-    ) -> Result<InferredTypeHIR, CompilerError> {
+        expression: HIRExpr<'source, ()>,
+        path: Vec<SourceString<'source>>,
+        meta_ast: HIRAstMetadata<'source>,
+        meta_expr: HIRExprMetadata<'source>,
+    ) -> Result<InferredTypeHIR<'source>, CompilerError> {
         let typed_expr = self.compute_and_infer_expr_type(expression, None)?;
         Ok(HIR::Assign {
             path,
@@ -476,12 +480,12 @@ impl FunctionTypeInferenceContext<'_, '_> {
 
     fn infer_types_in_variable_declaration(
         &mut self,
-        variable_typedecl: HIRTypeDef,
-        assigned_value: HIRExpr<()>,
-        variable_name: String,
-        meta_ast: AST,
-        meta_expr: Expr,
-    ) -> Result<InferredTypeHIR, CompilerError> {
+        variable_typedecl: HIRTypeDef<'source>,
+        assigned_value: HIRExpr<'source, ()>,
+        variable_name: SourceString<'source>,
+        meta_ast: HIRAstMetadata<'source>,
+        meta_expr: HIRExprMetadata<'source>,
+    ) -> Result<InferredTypeHIR<'source>, CompilerError> {
         //Type hint takes precedence over expr type
         let variable_chosen = match variable_typedecl {
             HIRTypeDef::PendingInference => None,
@@ -508,11 +512,11 @@ impl FunctionTypeInferenceContext<'_, '_> {
         })
     }
 
-    fn infer_variable_types_in_functions(
+    fn infer_variable_types_in_functions<'params>(
         &mut self,
-        parameters: &[HIRTypedBoundName<TypeInstanceId>],
-        body: Vec<TypeInferenceInputHIR>,
-    ) -> Result<Vec<InferredTypeHIR>, CompilerError> {
+        parameters: &[HIRTypedBoundName<'source, TypeInstanceId>],
+        body: Vec<TypeInferenceInputHIR<'source>>,
+    ) -> Result<Vec<InferredTypeHIR<'source>>, CompilerError> {
         let mut decls_in_scope = NameRegistry::new();
         for p in parameters {
             let typedef = p.typename;
@@ -533,12 +537,12 @@ impl FunctionTypeInferenceContext<'_, '_> {
     }
 }
 
-pub fn infer_types(
-    globals: &mut NameRegistry,
-    type_db: &mut TypeInstanceManager,
-    mir: Vec<TypeInferenceInputHIRRoot>,
-    errors: &mut TypeErrors,
-) -> Result<Vec<InferredTypeHIRRoot>, CompilerError> {
+pub fn infer_types<'source>(
+    globals: &mut NameRegistry<'source>,
+    type_db: &mut TypeInstanceManager<'source>,
+    mir: Vec<TypeInferenceInputHIRRoot<'source>>,
+    errors: &mut TypeErrors<'source>,
+) -> Result<Vec<InferredTypeHIRRoot<'source>>, CompilerError> {
     let mut new_mir = vec![];
 
     for node in mir {
@@ -565,7 +569,7 @@ pub fn infer_types(
                     parameters,
                     body: new_body,
                     return_type,
-                    meta: meta.clone(),
+                    meta,
                     is_intrinsic,
                 }
             }

@@ -10,6 +10,8 @@ use crate::{
     types::type_instance_db::TypeInstanceManager,
 };
 
+use crate::lexer::SourceString;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
 pub struct Bytes(pub u32);
 
@@ -208,18 +210,18 @@ impl ByteRange {
     }
 }
 
-fn build_write_scope_byte_layout(
-    scope: &MIRScope,
-    all_scopes: &[MIRScope],
-    type_db: &TypeInstanceManager,
-) -> HashMap<String, (ByteRange, ScopeId)> {
+fn build_write_scope_byte_layout<'source>(
+    scope: &MIRScope<'source>,
+    all_scopes: &[MIRScope<'source>],
+    type_db: &TypeInstanceManager<'source>,
+) -> HashMap<SourceString<'source>, (ByteRange, ScopeId)> {
     let mut current_index = scope.id;
     let mut found_var = vec![];
     loop {
         let scope = &all_scopes[current_index.0];
 
         for var in &scope.boundnames {
-            found_var.push((var.name.clone(), var.type_instance.size(type_db), scope.id));
+            found_var.push((var.name, var.type_instance.size(type_db), scope.id));
         }
 
         if current_index.0 == 0 {
@@ -228,7 +230,7 @@ fn build_write_scope_byte_layout(
         current_index = scope.inherit;
     }
 
-    let mut map: HashMap<String, (ByteRange, ScopeId)> = HashMap::new();
+    let mut map: HashMap<SourceString<'source>, (ByteRange, ScopeId)> = HashMap::new();
     let mut used_bytes = Bytes(0);
     for (name, size, scope) in found_var.into_iter().rev() {
         map.insert(
@@ -247,21 +249,21 @@ fn build_write_scope_byte_layout(
     map
 }
 
-pub type ScopeVariables = HashMap<String, (ByteRange, ScopeId)>;
-pub type ScopesVariables = Vec<ScopeVariables>;
+pub type ScopeVariables<'source> = HashMap<SourceString<'source>, (ByteRange, ScopeId)>;
+pub type ScopesVariables<'source> = Vec<ScopeVariables<'source>>;
 
 #[derive(Debug)]
-pub struct FunctionLayout {
+pub struct FunctionLayout<'source> {
     //Tells all variables accessible on a given scope, and on which scope it was declared
-    pub variables_for_each_scope: ScopesVariables,
+    pub variables_for_each_scope: ScopesVariables<'source>,
 
     pub largest_scope_size: Bytes,
 }
 
-pub fn generate_function_layout(
-    scopes: &[MIRScope],
-    type_db: &TypeInstanceManager,
-) -> FunctionLayout {
+pub fn generate_function_layout<'source>(
+    scopes: &[MIRScope<'source>],
+    type_db: &TypeInstanceManager<'source>,
+) -> FunctionLayout<'source> {
     let scope_byte_layout = scopes
         .iter()
         .map(|scope| build_write_scope_byte_layout(scope, scopes, type_db))

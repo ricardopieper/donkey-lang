@@ -6,24 +6,23 @@ use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 use super::hir::{ast_globals_to_hir, InferredTypeHIRRoot};
 use super::name_registry::NameRegistry;
 
-pub struct AnalysisResult {
-    pub hir: Vec<InferredTypeHIRRoot>,
-    pub type_db: TypeInstanceManager,
-    pub globals: NameRegistry,
-    pub type_errors: TypeErrors,
+pub struct AnalysisResult<'source> {
+    pub hir: Vec<InferredTypeHIRRoot<'source>>,
+    pub type_db: TypeInstanceManager<'source>,
+    pub globals: NameRegistry<'source>,
+    pub type_errors: TypeErrors<'source>,
 }
 
 //@TODO migrate to Context and replace tests
-pub fn do_analysis(ast: &AST) -> AnalysisResult {
+pub fn do_analysis<'source>(ast: &'source AST<'source>) -> AnalysisResult<'source> {
+    let ast_hir = ast_globals_to_hir(ast);
+
     let mut analysis_result = AnalysisResult {
         hir: vec![],
         type_db: TypeInstanceManager::new(),
         globals: NameRegistry::new(),
         type_errors: TypeErrors::new(),
     };
-
-    let mut ast_hir = vec![];
-    ast_globals_to_hir(ast, &mut ast_hir);
 
     let inferred_globals_hir = match name_registry::build_name_registry_and_resolve_signatures(
         &mut analysis_result.type_db,
@@ -81,22 +80,24 @@ mod tests {
 
     use super::*;
 
-    //Parses a single expression
-    fn hir(source: &str) -> AnalysisResult {
-        let tokenized = crate::ast::lexer::Tokenizer::new(source)
+    fn parse<'a>(s: &'a str) -> AST<'a> {
+        let tokenized = crate::ast::lexer::Tokenizer::new(s)
             .tokenize()
             .ok()
             .unwrap();
         let mut parser = Parser::new(tokenized);
         let ast = AST::Root(parser.parse_ast());
-        do_analysis(&ast)
+        ast
     }
 
     #[test]
     fn simple_assign_decl() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
-    x = 1");
+    x = 1",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
@@ -110,11 +111,14 @@ def my_function() -> Void:
 
     #[test]
     fn standalone_call_to_builtin_function() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function() -> i32:
     x: f64 = 1.0
-    pow(x)");
+    pow(x)",
+        );
 
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
@@ -129,10 +133,13 @@ def my_function() -> i32:
 
     #[test]
     fn expr_call_to_builtin_function() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function() -> i32:
     x: f64 = sqrt(16.0)
-");
+",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
@@ -146,9 +153,12 @@ def my_function() -> i32:
 
     #[test]
     fn alternative_test() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function(arg1: i32, arg2: i32) -> i32:
-    return arg1 * arg2 / (arg2 - arg1)");
+    return arg1 * arg2 / (arg2 - arg1)",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
@@ -163,9 +173,12 @@ def my_function(arg1: i32, arg2: i32) -> i32:
 
     #[test]
     fn default_void_return() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main(args: array<str>):
-    print(10)");
+    print(10)",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
 
@@ -178,10 +191,13 @@ def main(args: array<str>) -> Void:
 
     #[test]
     fn infer_variable_type_as_int() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main(args: array<str>):
     my_var = 10
-    print(my_var)");
+    print(my_var)",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
 
@@ -195,10 +211,13 @@ def main(args: array<str>) -> Void:
 
     #[test]
     fn infer_generic_type_as_str() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main(args: array<str>):
     my_var = args[0]
-    print(my_var)");
+    print(my_var)",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -212,10 +231,13 @@ def main(args: array<str>) -> Void:
 
     #[test]
     fn infer_builtin_function_return_type() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function() -> i32:
     x =  1.3 + ((sqrt_f32(16.0 / 4.0 + 2.0 * 2.1) / 2.0) * 4.0) + (3.0 * pow_f32(2.0, 2.0))
-");
+",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
@@ -230,13 +252,16 @@ def my_function() -> i32:
 
     #[test]
     fn infer_defined_function_return_type() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def sum(x: i32, y: i32) -> i32:
     return x + y
 
 def main():
     my_var = sum(1, 2)
-    print(my_var)");
+    print(my_var)",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -252,14 +277,17 @@ def main() -> Void:
 
     #[test]
     fn infer_defined_function_generic_param() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def id(x: array<str>) -> str:
     first_item = x[0]
     return first_item
 
 def main():
     my_var = id(1)
-    print(my_var)");
+    print(my_var)",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -276,14 +304,17 @@ def main() -> Void:
 
     #[test]
     fn semi_first_class_functions() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def id(x: array<str>) -> str:
     return x[0]
 
 def main():
     my_func = id
     my_var = my_func(1)
-    print(my_var)");
+    print(my_var)",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -300,11 +331,14 @@ def main() -> Void:
 
     #[test]
     fn access_property_of_struct_and_infer_type() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main():
     my_array = [1, 2, 3]
     my_array_length = my_array.length
-    print(my_array_length)");
+    print(my_array_length)",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -319,11 +353,14 @@ def main() -> Void:
 
     #[test]
     fn return_expr() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main(x: i32) -> i32:
     y = 0
     return x + y
-");
+",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -337,35 +374,44 @@ def main(x: i32) -> i32:
 
     #[test]
     fn self_decl_read() {
-        let result = hir("
+        let parsed = parse(
+            "
 def main(x: i32) -> i32:
     y = y + 1
-");
-        let err = &result.type_errors.variable_not_found[0];
+",
+        );
+        let analyzed = do_analysis(&parsed);
+        let err = &analyzed.type_errors.variable_not_found[0];
         assert_eq!(err.variable_name, "y");
     }
 
     #[test]
     fn self_decl_read_expr() {
-        let result = hir("
+        let parsed = parse(
+            "
 def main(x: i32) -> i32:
     a = 1
     b = 2
     y = (a + b * (x / y)) / 2
-");
-        let err = &result.type_errors.variable_not_found[0];
+",
+        );
+        let analyzed = do_analysis(&parsed);
+        let err = &analyzed.type_errors.variable_not_found[0];
         assert_eq!(err.variable_name, "y");
     }
 
     #[test]
     fn if_return_both_branches() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main(x: i32) -> i32:
     if x == 0:
         return 1
     else:
         return 2
-");
+",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -381,7 +427,8 @@ def main(x: i32) -> i32:
 
     #[test]
     fn if_more_branches() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main(x: i32) -> i32:
     if x == 0:
         return 1
@@ -390,7 +437,9 @@ def main(x: i32) -> i32:
             return 2
         else:
             return x
-");
+",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -409,7 +458,8 @@ def main(x: i32) -> i32:
 
     #[test]
     fn if_no_return_in_one_branch() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main(x: i32) -> i32:
     if x == 0:
         print(x)
@@ -418,7 +468,9 @@ def main(x: i32) -> i32:
             return 2
         else:
             return x
-");
+",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -437,7 +489,8 @@ def main(x: i32) -> i32:
 
     #[test]
     fn if_statements_decls_inside_branches() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main() -> i32:
     x = 0
     if True:
@@ -447,7 +500,9 @@ def main() -> i32:
         x = 1
         y = 2 + x
         return x + y
-");
+",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -467,7 +522,8 @@ def main() -> i32:
 
     #[test]
     fn if_nested_branch_but_some_do_not_return() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def main() -> i32:
     if True:
         x = 1
@@ -485,7 +541,9 @@ def main() -> i32:
             print(y)
         else:
             return 4 * y
-");
+",
+        );
+        let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", final_result);
@@ -513,10 +571,12 @@ def main() -> i32:
 
     #[test]
     fn type_error_operator_not_found() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
-    x = 1 + \"abc\"");
-
+    x = 1 + \"abc\"",
+        );
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
@@ -544,14 +604,18 @@ def my_function():
 
     #[test]
     fn field_ddoes_not_exist() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
     x = [1,2,3]
-    y = x.sizee");
-
+    y = x.sizee",
+        );
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
+        
         assert_eq!(analyzed.type_errors.count(), 1);
+        
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
         assert_eq!(
@@ -565,18 +629,20 @@ def my_function():
             "array<i32>"
         );
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].on_function,
+            analyzed.type_errors.field_or_method_not_found[0].on_element.get_name(),
             "my_function"
         );
     }
 
     #[test]
     fn method_does_not_exist() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
     x = [1,2,3]
-    y = x.reevert()");
-
+    y = x.reevert()",
+        );
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
@@ -593,17 +659,20 @@ def my_function():
             "array<i32>"
         );
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].on_function,
+            analyzed.type_errors.field_or_method_not_found[0].on_element.get_name(),
             "my_function"
         );
     }
 
     #[test]
     fn type_not_found() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
-    x: i65 = 1");
+    x: i65 = 1",
+        );
 
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
@@ -614,18 +683,22 @@ def my_function():
             "i65"
         );
         assert_eq!(
-            analyzed.type_errors.type_not_found[0].on_function,
+            analyzed.type_errors.type_not_found[0].on_element.get_name(),
             "my_function"
         );
     }
 
     #[test]
     fn unexpected_type_found_in_binary_expression_lhs() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
     x: array<str> = [\"1\",\"2\",\"3\"]
-    y: i32 = x[0].as_i32 + 1");
+    y: i32 = x[0].as_i32 + 1",
+        );
 
+
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
@@ -637,13 +710,16 @@ def my_function():
 
     #[test]
     fn unexpected_type_found_in_binary_expression_rhs() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
     x: array<str> = [\"1\",\"2\",\"3\"]
-    y: i32 = 1 + x[0].as_i32");
-
+    y: i32 = 1 + x[0].as_i32",
+        );
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
+        
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0].field_or_method,
@@ -653,13 +729,16 @@ def my_function():
 
     #[test]
     fn unary_operator_not_found() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
     x = \"1\"
-    y = +x");
-
+    y = +x",
+        );
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
+
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.unary_op_not_found.len(), 1);
 
@@ -674,34 +753,39 @@ def my_function():
             Operator::Plus
         );
         assert_eq!(
-            analyzed.type_errors.unary_op_not_found[0].on_function,
+            analyzed.type_errors.unary_op_not_found[0].on_element.get_name(),
             "my_function"
         );
     }
 
     #[test]
     fn insufficient_array_type_info() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
-    x = []");
+    x = []",
+        );
 
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.insufficient_array_type_info.len(), 1);
         assert_eq!(
-            analyzed.type_errors.insufficient_array_type_info[0].on_function,
+            analyzed.type_errors.insufficient_array_type_info[0].on_element.get_name(),
             "my_function"
         );
     }
 
     #[test]
     fn call_to_non_callable() {
-        let analyzed = hir("
+        let parsed = parse(
+            "
 def my_function():
     x: array<i32> = []
-    y = x()");
-
+    y = x()",
+        );
+        let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir, &analyzed.type_db);
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);

@@ -113,7 +113,7 @@ pub fn encode_u64(raw: i128) -> [[u8; 2]; 4] {
 }
 
 fn generate_literal_expr(
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     expression: &LiteralHIRExpr,
     literal_type: TypeInstanceId,
     bytecode: &mut DonkeyEmitter,
@@ -259,7 +259,7 @@ fn generate_function_jump_lbl(expr: &TypecheckedExpression) -> String {
 }
 
 fn generate_expr(
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     expression: &TypecheckedExpression,
     bytecode: &mut DonkeyEmitter,
     scope: &ScopeVariables,
@@ -329,7 +329,7 @@ fn generate_var_load_addr(
 }
 
 fn generate_function_call(
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     return_type: TypeInstanceId,
     offset_from_bp: Bytes,
     bytecode: &mut DonkeyEmitter,
@@ -383,7 +383,7 @@ fn generate_function_call(
 }
 
 fn generate_compare_binexpr_code(
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     rhs: &TypecheckedExpression,
     bytecode: &mut DonkeyEmitter,
     scope: &ScopeVariables,
@@ -478,7 +478,7 @@ fn is_float(lhs_type: TypeInstanceId, type_db: &TypeInstanceManager) -> bool {
 }
 
 fn generate_bitwise_binexpr_code(
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     rhs: &TypecheckedExpression,
     bytecode: &mut DonkeyEmitter,
     scope: &ScopeVariables,
@@ -535,7 +535,7 @@ fn raw_16_bits(i: i128) -> [u8; 2] {
     }
 }
 fn generate_arith_binexpr_code(
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     rhs: &TypecheckedExpression,
     bytecode: &mut DonkeyEmitter,
     scope: &ScopeVariables,
@@ -622,7 +622,7 @@ fn generate_decl_function(
     body: &[MIRBlock<Checked>],
     scopes: &[MIRScope],
     bytecode: &mut DonkeyEmitter,
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
 ) {
     let function_label = format!("FUNC_{name}");
     bytecode.push(AssemblyInstruction::Label {
@@ -700,7 +700,7 @@ fn generate_function_decl_block(
     block: &MIRBlock<Checked>,
     target_blocks: &HashSet<BlockId>,
     bytecode: &mut DonkeyEmitter,
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     offset_from_bp: &mut Bytes,
 ) {
     // println!("block: {block:?} {scope_byte_layout:#?}");
@@ -760,7 +760,7 @@ fn generate_function_decl_block(
 fn generate_func_block_finish(
     parameters: &[MIRTypedBoundName],
     block: &MIRBlock<Checked>,
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     bytecode: &mut DonkeyEmitter,
     scope: &ScopeVariables,
     offset_from_bp: &mut Bytes,
@@ -834,7 +834,7 @@ fn generate_func_block_finish(
 }
 
 fn generate_for_top_lvl(
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     node: &MIRTopLevelNode<Checked>,
     emitter: &mut DonkeyEmitter,
 ) {
@@ -854,7 +854,7 @@ fn generate_for_top_lvl(
 }
 
 pub fn generate_donkey_vm(
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
     mir_top_level_nodes: &[MIRTopLevelNode<Checked>],
 ) -> DonkeyEmitter {
     let mut emitter = DonkeyEmitter::new();

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::ast::lexer;
 
 use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR};
@@ -25,34 +27,32 @@ pub fn operator_str(op: lexer::Operator) -> String {
     }
 }
 
-pub fn expr_str<T, T1>(expr: &HIRExpr<T, T1>) -> String {
+pub fn expr_str<'source, T, T1>(expr: &HIRExpr<'source, T, T1>) -> Cow<'source, str> {
     match expr {
-        HIRExpr::Variable(s, ..) => s.clone(),
-        HIRExpr::Literal(literal, ..) => literal_expr_str(literal),
+        HIRExpr::Variable(s, ..) => Cow::Borrowed(*s),
+        HIRExpr::Literal(literal, ..) => Cow::Owned(literal_expr_str(literal)),
         HIRExpr::FunctionCall(f, args, ..) => {
             let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
-            format!("{}({})", expr_str(f), args_str)
+            format!("{}({})", expr_str(f), args_str).into()
         }
         HIRExpr::MethodCall(obj, name, args, ..) => {
             let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
-            format!("{}.{}({})", expr_str(obj), name, args_str)
+            format!("{}.{}({})", expr_str(obj), name, args_str).into()
         }
 
         HIRExpr::BinaryOperation(var, op, var2, ..) => {
-            format!("{} {} {}", expr_str(var), operator_str(*op), expr_str(var2))
+            format!("{} {} {}", expr_str(var), operator_str(*op), expr_str(var2)).into()
         }
 
         HIRExpr::Array(items, ..) => {
             let array_items_str = items.iter().map(expr_str).collect::<Vec<_>>().join(", ");
-            format!("[{}]", array_items_str)
+            format!("[{}]", array_items_str).into()
         }
         HIRExpr::UnaryExpression(op, expr, ..) => {
-            format!("{}{}", operator_str(*op), expr_str(expr))
+            format!("{}{}", operator_str(*op), expr_str(expr)).into()
         }
-        HIRExpr::MemberAccess(obj, elem, ..) => {
-            format!("{}.{}", expr_str(obj), elem)
-        }
-        HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".to_string(),
+        HIRExpr::MemberAccess(obj, elem, ..) => format!("{}.{}", expr_str(obj), elem).into(),
+        HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".into(),
         HIRExpr::TypecheckTag(_) => unreachable!(),
     }
 }
@@ -69,10 +69,10 @@ fn literal_expr_str(expr: &LiteralHIRExpr) -> String {
 }
 
 #[allow(dead_code)]
-fn print_hir_body_str(
+fn print_hir_body_str<'source>(
     node: &HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
     indent: &str,
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
 ) -> String {
     match node {
         HIR::Assign {
@@ -138,14 +138,14 @@ fn print_hir_body_str(
     }
 }
 
-fn print_hir_str(
+fn print_hir_str<'source>(
     node: &HIRRoot<
         impl TypeNamePrinter,
         HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
         impl TypeNamePrinter,
     >,
     indent: &str,
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
 ) -> String {
     match node {
         HIRRoot::DeclareFunction {
@@ -203,13 +203,13 @@ fn print_hir_str(
 }
 
 #[allow(dead_code)]
-pub fn print_hir(
+pub fn print_hir<'source>(
     mir: &[HIRRoot<
         impl TypeNamePrinter,
         HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
         impl TypeNamePrinter,
     >],
-    type_db: &TypeInstanceManager,
+    type_db: &TypeInstanceManager<'source>,
 ) -> String {
     let mut buffer = String::new();
     for node in mir {
