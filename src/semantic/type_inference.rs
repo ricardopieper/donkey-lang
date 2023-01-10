@@ -1,5 +1,4 @@
-use crate::ast::lexer::SourceString;
-use crate::ast::parser::Expr;
+use crate::ast::lexer::{SourceString, Operator};
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
 use crate::semantic::name_registry::NameRegistry;
@@ -115,7 +114,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         obj: HIRExpr<'source, ()>,
         method_name: SourceString<'source>,
         params: Vec<HIRExpr<'source, ()>>,
-        meta: &'source Expr<'source>,
+        meta: HIRExprMetadata<'source>,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         //compute type of obj
         //find method_name in type of obj
@@ -156,7 +155,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         &mut self,
         array_items: Vec<HIRExpr<'source, ()>>,
         type_hint: Option<TypeInstanceId>,
-        meta: &'source Expr<'source>,
+        meta: HIRExprMetadata<'source>,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         if array_items.is_empty() {
             if let Some(_hint) = type_hint {
@@ -201,7 +200,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
     fn compute_infer_member_access(
         &mut self,
         obj: HIRExpr<'source, ()>,
-        meta: &'source Expr<'source>,
+        meta: HIRExprMetadata<'source>,
         name: SourceString<'source>,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let obj_expr = self.compute_and_infer_expr_type(obj, None)?;
@@ -236,8 +235,8 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
     fn compute_infer_unary_expr(
         &mut self,
         rhs: HIRExpr<'source, ()>,
-        meta: &'source Expr<'source>,
-        op: crate::ast::lexer::Operator,
+        meta: HIRExprMetadata<'source>,
+        op: Operator,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let rhs_expr = self.compute_and_infer_expr_type(rhs, None)?;
         let rhs_type = rhs_expr.get_type();
@@ -278,7 +277,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         &mut self,
         fun_expr: HIRExpr<'source, ()>,
         fun_params: Vec<HIRExpr<'source, ()>>,
-        meta: &'source Expr<'source>,
+        meta: HIRExprMetadata<'source>,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let HIRExpr::Variable(var, .., fcall_meta) = fun_expr else {
             panic!("Functions should be bound to a name! This is a bug in the type inference phase or HIR expression reduction phase.");
@@ -322,9 +321,9 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
     fn compute_infer_binop(
         &mut self,
         lhs: HIRExpr<'source, ()>,
-        meta: &'source Expr<'source>,
+        meta: HIRExprMetadata<'source>,
         rhs: HIRExpr<'source, ()>,
-        op: crate::ast::lexer::Operator,
+        op: Operator,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let lhs_expr = self.compute_and_infer_expr_type(lhs, None)?;
         let rhs_expr = self.compute_and_infer_expr_type(rhs, None)?;

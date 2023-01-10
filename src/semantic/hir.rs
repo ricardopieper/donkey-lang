@@ -53,9 +53,11 @@ pub type InferredTypeHIR<'source> = HIR<'source, TypeInstanceId, HIRExpr<'source
 //HIR roots right after AST transformation
 pub type StartingHIRRoot<'source> =
     HIRRoot<'source, HIRType<'source>, UninferredHIR<'source>, HIRType<'source>>;
+
 //HIR roots after inferring and registering globals, bodies have not changed
 pub type GlobalsInferredMIRRoot<'source> =
     HIRRoot<'source, TypeInstanceId, UninferredHIR<'source>, TypeUsage<'source>>;
+    
 //HIR roots now with body changed, first assignments became declarations
 pub type FirstAssignmentsDeclaredHIRRoot<'source> =
     HIRRoot<'source, TypeInstanceId, FirstAssignmentsDeclaredHIR<'source>, TypeUsage<'source>>;
