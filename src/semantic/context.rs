@@ -360,7 +360,7 @@ def my_function() -> f32:
 ",
         );
         let analyzed = do_analysis(&parsed);
-        println!("{}", TypeErrorPrinter::new(&analyzed.type_errors, &analyzed.type_db));
+        analyzed.print_errors();
        
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.hir[1], &analyzed.type_db);
@@ -673,8 +673,8 @@ def main() -> i32:
 ",
         );
         let analyzed = do_analysis(&parsed);
-        println!("{}", TypeErrorPrinter::new(&analyzed.type_errors, &analyzed.type_db));
-       
+        analyzed.print_errors();
+
         assert_eq!(analyzed.type_errors.count(), 1);
         let final_result = hir_printer::print_hir(&analyzed.hir[1], &analyzed.type_db);
         println!("{}", final_result);
