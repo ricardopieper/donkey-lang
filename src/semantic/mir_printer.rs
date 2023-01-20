@@ -2,10 +2,8 @@ use std::borrow::Cow;
 
 use crate::types::type_instance_db::TypeInstanceManager;
 
-use super::mir::MIRBlock;
-use super::mir::MIRBlockNode;
-use super::mir::MIRScope;
-use super::mir::MIRTopLevelNode;
+use super::mir::{MIRBlock, MIRBlockNode, MIRBlockFinal, MIRScope, MIRTopLevelNode};
+
 
 pub trait PrintableExpression {
     fn print_expr<'source>(&'source self) -> Cow<'source, str>;
@@ -40,7 +38,7 @@ fn print_mir_block<T>(block: &MIRBlock<T>) -> String {
     }
 
     match &block.finish {
-        super::mir::MIRBlockFinal::If(condition, true_branch, false_branch, ..) => {
+        MIRBlockFinal::If(condition, true_branch, false_branch, ..) => {
             buffer.push_str(&format!(
                 "        if {}:
             gotoblock {}
@@ -52,13 +50,13 @@ fn print_mir_block<T>(block: &MIRBlock<T>) -> String {
                 false_branch.0
             )); //gotoblock 1
         }
-        super::mir::MIRBlockFinal::GotoBlock(block) => {
+        MIRBlockFinal::GotoBlock(block) => {
             buffer.push_str(&format!("        gotoblock {}\n", block.0));
         }
-        super::mir::MIRBlockFinal::Return(expr, ..) => {
+        MIRBlockFinal::Return(expr, ..) => {
             buffer.push_str(&format!("        return {}\n", expr.print_expr()));
         }
-        super::mir::MIRBlockFinal::EmptyReturn => {
+        MIRBlockFinal::EmptyReturn => {
             buffer.push_str("        return\n");
         }
     }
@@ -141,5 +139,11 @@ pub fn print_mir<T>(mir: &[MIRTopLevelNode<T>], type_db: &TypeInstanceManager) -
     for node in mir {
         buffer.push_str(&print_mir_str(node, type_db));
     }
+    buffer
+}
+
+pub fn print_mir_node<T>(mir: &MIRTopLevelNode<T>, type_db: &TypeInstanceManager) -> String {
+    let mut buffer = String::new();
+    buffer.push_str(&print_mir_str(mir, type_db));
     buffer
 }

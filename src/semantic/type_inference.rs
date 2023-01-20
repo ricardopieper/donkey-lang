@@ -1,4 +1,4 @@
-use crate::ast::lexer::{SourceString, Operator};
+use crate::ast::lexer::{Operator, SourceString};
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
 use crate::semantic::name_registry::NameRegistry;
@@ -75,7 +75,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                     LiteralHIRExpr::Integer(_) => self.type_db.common_types.i32,
                     LiteralHIRExpr::Float(_) => self.type_db.common_types.f32,
                     LiteralHIRExpr::String(_) => {
-                        let str_type = self.type_db.constructors.find_by_name("str").unwrap();
+                        let str_type = self.type_db.constructors.find_by_name("str").expect("str intrinsic not loaded");
                         self.type_db.construct_type(str_type.id, &[]).unwrap()
                     }
                     LiteralHIRExpr::Boolean(_) => self.type_db.common_types.bool,

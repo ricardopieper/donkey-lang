@@ -8,10 +8,28 @@ def atoi(buf: ptr<u8>) -> i32:
 def puts(null_terminated_char_ptr: ptr<u8>) -> u64:
     intrinsic
 
+def pow(base: f64, exponent: f64) -> f64:
+    intrinsic
+
+def powf(base: f32, exponent: f32) -> f32:
+    intrinsic
+
+def sqrt(val: f64) -> f64:
+    intrinsic
+
+def sqrtf(val: f32) -> f32:
+    intrinsic
+
 def exit(code: i32):
     intrinsic
 
 def malloc(size: i32) -> ptr<u8>:
+    intrinsic
+
+def print_uint(x: u32):
+    intrinsic
+
+def print_int(x: i32):
     intrinsic
 
 def str_to_int(s: str) -> i32:

@@ -637,50 +637,25 @@ pub fn hir_to_mir<'source>(
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
-    use crate::{
-        ast::parser::Parser, semantic::mir_printer, types::type_instance_db::TypeInstanceManager,
-    };
+    use crate::semantic::context::test_utils::{do_analysis, parse, parse_no_std, do_analysis_no_typecheck};
+    use crate::semantic::mir_printer;
+
     #[cfg(test)]
     use pretty_assertions::assert_eq;
 
-    use super::*;
-
-    fn prepare(source: &str) -> AST {
-        let tokenized = crate::ast::lexer::Tokenizer::new(source)
-            .tokenize()
-            .ok()
-            .unwrap();
-        let mut parser = Parser::new(tokenized);
-        let ast = AST::Root(parser.parse_ast());
-        println!("AST: {:?}", &ast);
-        ast
-    }
-
-    //Parses a single expression
-    fn mir<'source>(
-        ast: &'source AST<'source>,
-    ) -> (
-        Vec<MIRTopLevelNode<'source, NotChecked>>,
-        TypeInstanceManager<'source>,
-    ) {
-        let analysis_result = crate::semantic::analysis::do_analysis(ast);
-        println!("HIR: {:?}", &analysis_result.hir);
-        (hir_to_mir(analysis_result.hir), analysis_result.type_db)
-    }
-
     #[test]
     fn simplest_case() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
-def main():
+def main() -> i32:
     return 1",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
-def main() -> Void:
+def main() -> i32:
     defscope 0:
         inheritscope 0
     defblock 0:
@@ -690,16 +665,17 @@ def main() -> Void:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
+    /* */
     #[test]
     fn set_variable() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main():
     x = 1",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> Void:
@@ -726,14 +702,14 @@ def main() -> Void:
 
     #[test]
     fn just_return_parameter() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main(x: i32) -> i32:
     return x",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
@@ -749,14 +725,14 @@ def main(x: i32) -> i32:
 
     #[test]
     fn many_parameters_are_added_to_scope() {
-        let ast = prepare(
+        let src = parse(
             "
 def main(x: i32, y: i64, z: f64, name: str) -> i32:
     return x",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main(x: i32, y: i64, z: f64, name: str) -> i32:
@@ -775,14 +751,14 @@ def main(x: i32, y: i64, z: f64, name: str) -> i32:
 
     #[test]
     fn simple_expression() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main(x: i32) -> i32:
     return x + 1",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
@@ -798,7 +774,7 @@ def main(x: i32) -> i32:
 
     #[test]
     fn create_variable() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main(x: i32) -> i32:
     y = 0
@@ -806,8 +782,8 @@ def main(x: i32) -> i32:
 ",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
@@ -835,7 +811,7 @@ def main(x: i32) -> i32:
 
     #[test]
     fn multiple_variables_and_expressions() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main(x: i32) -> i32:
     y = 1
@@ -843,8 +819,8 @@ def main(x: i32) -> i32:
     return x / (y + z)",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
@@ -885,7 +861,7 @@ def main(x: i32) -> i32:
 
     #[test]
     fn set_same_variable_multiple_times() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main() -> i32:
     y = 1
@@ -894,8 +870,8 @@ def main() -> i32:
     y = 4",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -926,15 +902,15 @@ def main() -> i32:
 
     #[test]
     fn set_and_use() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main():
     y = 1
     x = y + 1",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> Void:
@@ -974,16 +950,16 @@ def main() -> Void:
 
     #[test]
     fn if_statement() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main():
     y = 1
     if y == 1:
-        print(y)",
+        y = y + 1",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> Void:
@@ -1013,7 +989,7 @@ def main() -> Void:
             gotoblock 4
     defblock 3:
         usescope 3
-        print(y)
+        y = y + 1
         gotoblock 4
     defblock 4:
         usescope 4
@@ -1025,8 +1001,11 @@ def main() -> Void:
 
     #[test]
     fn if_code_in_both_branches() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
+def print(x: i32):
+    intrinsic
+
 def main():
     if True:
         print(1)
@@ -1034,10 +1013,11 @@ def main():
         print(2)",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
+def print(x: i32) -> Void
 def main() -> Void:
     defscope 0:
         inheritscope 0
@@ -1071,7 +1051,7 @@ def main() -> Void:
 
     #[test]
     fn if_return_in_both_branches() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main() -> i32:
     if True:
@@ -1080,8 +1060,8 @@ def main() -> i32:
         return 2",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -1110,7 +1090,7 @@ def main() -> i32:
 
     #[test]
     fn if_statements_decls_inside_branches() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main() -> i32:
     x = 0
@@ -1124,8 +1104,8 @@ def main() -> i32:
     ",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -1190,8 +1170,11 @@ def main() -> i32:
 
     #[test]
     fn code_after_if_is_correctly_placed_true_branch_only() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
+def print(x: i32): 
+    intrinsic
+
 def main() -> i32:
     x = 0
     if x == 0:
@@ -1199,10 +1182,11 @@ def main() -> i32:
     print(x)
     ",
         );
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
+def print(x: i32) -> Void
 def main() -> i32:
     defscope 0:
         inheritscope 0
@@ -1242,21 +1226,25 @@ def main() -> i32:
 
     #[test]
     fn code_after_if_is_correctly_placed_return_on_false_branch() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
+def print(x: i32): 
+    intrinsic
+
 def main() -> i32:
     x = 0
     if x == 0:
         print(1)
     else:
         return x
-    print(x)
+    return x
     ",
         );
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
+def print(x: i32) -> Void
 def main() -> i32:
     defscope 0:
         inheritscope 0
@@ -1290,8 +1278,7 @@ def main() -> i32:
         gotoblock 4
     defblock 4:
         usescope 4
-        print(x)
-        return
+        return x
     defblock 5:
         usescope 5
         return x";
@@ -1301,8 +1288,11 @@ def main() -> i32:
 
     #[test]
     fn code_after_if_is_correctly_placed_true_and_false_branches() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
+def print(x: i32):
+    intrinsic
+
 def main() -> i32:
     x = 0
     if x == 0:
@@ -1312,10 +1302,11 @@ def main() -> i32:
     print(x)",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
+def print(x: i32) -> Void
 def main() -> i32:
     defscope 0:
         inheritscope 0
@@ -1362,8 +1353,11 @@ def main() -> i32:
 
     #[test]
     fn if_one_branch_does_not_return() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
+def print(x: i32):
+    intrinsic
+
 def main() -> i32:
     x = 0
     if True:
@@ -1376,10 +1370,11 @@ def main() -> i32:
     ",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
+def print(x: i32) -> Void
 def main() -> i32:
     defscope 0:
         inheritscope 0
@@ -1443,7 +1438,7 @@ def main() -> i32:
 
     #[test]
     fn if_nested_branch_all_returns() {
-        let ast = prepare(
+        let src = parse_no_std(
             "
 def main() -> i32:
     if True:
@@ -1463,8 +1458,8 @@ def main() -> i32:
     ",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -1544,8 +1539,11 @@ def main() -> i32:
 
     #[test]
     fn if_nested_branch_but_one_does_not_return() {
-        let ast = prepare(
+        let src = parse(
             "
+def print(x: i32):
+    intrinsic
+
 def main() -> i32:
     if True:
         x = 1
@@ -1566,8 +1564,8 @@ def main() -> i32:
     ",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir_node(&result.mir.last().unwrap(), &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -1660,8 +1658,8 @@ def main() -> i32:
     }
 
     #[test]
-    fn set_some_vars_exprssimplest_case() {
-        let ast = prepare(
+    fn set_some_vars_exprs() {
+        let src = parse_no_std(
             "
 def main():
     x : i32 = 15
@@ -1671,8 +1669,8 @@ def main():
     result = result + y",
         );
 
-        let (mir, type_db) = mir(&ast);
-        let final_result = mir_printer::print_mir(&mir, &type_db);
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> Void:

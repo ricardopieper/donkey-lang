@@ -57,7 +57,7 @@ pub type StartingHIRRoot<'source> =
 //HIR roots after inferring and registering globals, bodies have not changed
 pub type GlobalsInferredMIRRoot<'source> =
     HIRRoot<'source, TypeInstanceId, UninferredHIR<'source>, TypeUsage<'source>>;
-    
+
 //HIR roots now with body changed, first assignments became declarations
 pub type FirstAssignmentsDeclaredHIRRoot<'source> =
     HIRRoot<'source, TypeInstanceId, FirstAssignmentsDeclaredHIR<'source>, TypeUsage<'source>>;
@@ -643,7 +643,6 @@ mod tests {
     //Parses a single expression
     fn parse<'source>(source: &str) -> AST<'_> {
         let tokens = crate::ast::lexer::tokenize(source);
-        //println!("Tokens: {:?}", tokens);
         let ast = parse_ast(tokens.unwrap());
         return AST::Root(ast);
     }

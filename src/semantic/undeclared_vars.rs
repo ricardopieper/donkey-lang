@@ -6,7 +6,10 @@ use crate::{
 
 use std::collections::HashSet;
 
-use super::{compiler_errors::CompilerError, hir::HIRRoot, name_registry::NameRegistry, hir_type_resolution::RootElementType};
+use super::{
+    compiler_errors::CompilerError, hir::HIRRoot, hir_type_resolution::RootElementType,
+    name_registry::NameRegistry,
+};
 
 //Returns true if everything is valid
 fn check_expr<'source, T>(

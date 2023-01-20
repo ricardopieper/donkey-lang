@@ -49,9 +49,7 @@ pub struct TypeCheckContext<'compiler_context, 'source> {
     on_element: &'source str,
 }
 
-impl<'compiler_context, 'source>
-    TypeCheckContext<'compiler_context, 'source>
-{
+impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
     //We will check that function arguments and index operators are receiving the correct types.
     //Binary operators are actually certainly correct, since type inference will report errors if it can't find an appropriate operator.
     //We might implement sanity checks here, to prevent bugs in the type inference propagating to the backend code.
@@ -513,7 +511,7 @@ impl<'compiler_context, 'source>
                         MIRBlockFinal::Return(checked_return_expr, ast_meta)
                     } else {
                         self.errors.return_type_mismatches.push(TypeMismatch {
-                            context: ReturnTypeContext(),
+                            context: ReturnTypeContext(Some(ast_meta)),
                             on_element: RootElementType::Function(self.on_element),
                             expected: return_type,
                             actual: expr_type,
@@ -526,7 +524,7 @@ impl<'compiler_context, 'source>
                         MIRBlockFinal::EmptyReturn
                     } else {
                         self.errors.return_type_mismatches.push(TypeMismatch {
-                            context: ReturnTypeContext(),
+                            context: ReturnTypeContext(None),
                             on_element: RootElementType::Function(self.on_element),
                             expected: return_type,
                             actual: self.type_db.common_types.void,
@@ -740,45 +738,29 @@ mod tests {
 
     use super::*;
     use crate::{
-        ast::parser::{Parser, AST},
-        semantic::{mir::hir_to_mir, mir_printer},
+        semantic::{
+            context::{
+                test_utils::{do_analysis, parse, parse_no_std},
+                Source,
+            },
+            mir_printer,
+        },
         types::type_errors::TypeErrorPrinter,
     };
     use pretty_assertions::assert_eq;
 
-    pub struct TestContext<'source> {
-        ast: AST<'source>,
-    }
-
-    fn prepare(source: &str) -> TestContext {
-        let tokenized = crate::ast::lexer::Tokenizer::new(source)
-            .tokenize()
-            .ok()
-            .unwrap();
-        let mut parser = Parser::new(tokenized);
-        let ast = AST::Root(parser.parse_ast());
-
-        TestContext { ast }
-    }
-
     //Parses a single expression
+        
     fn run_test<'source>(
-        ctx: &'source mut TestContext<'source>,
+        src: &'source Source<'source>,
     ) -> (TypeErrors<'source>, TypeInstanceManager<'source>) {
-        let mut analysis_result = crate::semantic::analysis::do_analysis(&ctx.ast);
-        let mir = hir_to_mir(analysis_result.hir);
+        let analysis_result = do_analysis(src);
 
-        println!("{}", mir_printer::print_mir(&mir, &analysis_result.type_db));
-        if typecheck(
-            mir,
-            &analysis_result.type_db,
-            &analysis_result.globals,
-            &mut analysis_result.type_errors,
-        )
-        .is_err()
-        {
-            println!("Type errors:");
-        }
+        println!(
+            "{}",
+            mir_printer::print_mir(&analysis_result.mir, &analysis_result.type_db)
+        );
+
         if analysis_result.type_errors.count() > 0 {
             println!(
                 "{}",
@@ -792,27 +774,26 @@ mod tests {
 
     #[test]
     fn return_from_void_func_is_correct() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def main():
     return
 ",
         );
 
-        let (err, _) = run_test(&mut ctx);
+        let (err, _) = run_test(&ast);
         assert_eq!(0, err.count());
     }
 
+
     #[test]
     fn return_int_from_void_is_not_correct() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def main():
     return 1
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
@@ -822,25 +803,23 @@ def main():
 
     #[test]
     fn return_int_from_int_func_is_correct() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def main() -> i32:
     return 1
 ",
         );
-        let (err, _) = run_test(&mut ctx);
+        let (err, _) = run_test(&ast);
         assert_eq!(0, err.count());
     }
 
     #[test]
     fn return_void_from_int_func_is_not_correct() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def main() -> i32:
     return
     ",
         );
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
         assert_eq!(err.return_type_mismatches[0].actual, db.common_types.void);
@@ -848,26 +827,23 @@ def main() -> i32:
     }
 
     #[test]
-    #[ignore = "str is in intrinsic, must load stdlib in prepare"]
     fn assign_incorrect_type_literal() {
-        let mut ctx = prepare(
-            "
+        let ast = parse("
 def main():
     x: i32 = \"some str\"
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
-        assert_eq!(err.assign_mismatches[0].actual, db.common_types.i32);
+        assert_eq!(err.assign_mismatches[0].actual, db.find_by_name("str").unwrap().id);
         assert_eq!(err.assign_mismatches[0].expected, db.common_types.i32);
     }
 
     #[test]
     fn type_check_function_call_no_args_correct_types() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def test() -> i32:
     return 1
 
@@ -875,14 +851,13 @@ def main():
     x: i32 = test()
 ",
         );
-        let (err, _) = run_test(&mut ctx);
+        let (err, _) = run_test(&ast);
         assert_eq!(0, err.count());
     }
 
     #[test]
     fn type_check_wrong_type_function_call_return_incompatible() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def test() -> i32:
     return 1
 
@@ -891,7 +866,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
@@ -901,8 +876,7 @@ def main():
 
     #[test]
     fn type_check_binary_expr_result_wrong_type() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def test() -> i32:
     return 1
 
@@ -911,7 +885,7 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
@@ -921,8 +895,7 @@ def main():
 
     #[test]
     fn pass_correct_type_to_function_single_args() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def test(i: i32) -> i32:
     return i + 1
 
@@ -931,15 +904,14 @@ def main():
 ",
         );
 
-        let (err, _db) = run_test(&mut ctx);
+        let (err, _db) = run_test(&ast);
 
         assert_eq!(0, err.count());
     }
 
     #[test]
     fn pass_correct_type_to_function_two_args() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def test(i: i32, f: f32) -> i32:
     return i + 1
 
@@ -947,14 +919,13 @@ def main():
     test(1, 1.0)
 ",
         );
-        let (err, _db) = run_test(&mut ctx);
+        let (err, _db) = run_test(&ast);
         assert_eq!(0, err.count());
     }
 
     #[test]
     fn pass_correct_type_to_function_two_args_from_vars() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def test(i: i32, f: f32) -> i32:
     return i + 1
 
@@ -965,15 +936,14 @@ def main():
 ",
         );
 
-        let (err, _db) = run_test(&mut ctx);
+        let (err, _db) = run_test(&ast);
 
         assert_eq!(0, err.count());
     }
 
     #[test]
     fn pass_wrong_type_to_function_single_arg() {
-        let mut ctx = prepare(
-            "
+        let ast = parse("
 def test(i: i32) -> i32:
     return i
 
@@ -983,11 +953,11 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.function_call_mismatches.len());
-        assert_eq!(err.function_call_mismatches[0].actual, db.common_types.i32);
+        assert_eq!(err.function_call_mismatches[0].actual, db.find_by_name("str").unwrap().id);
         assert_eq!(
             err.function_call_mismatches[0].expected,
             db.common_types.i32
@@ -996,8 +966,7 @@ def main():
 
     #[test]
     fn pass_wrong_type_to_function_two_args_both_wrong() {
-        let mut ctx = prepare(
-            "
+        let ast = parse("
 def test(i: i32, f: f32) -> f32:
     return f
 
@@ -1008,11 +977,11 @@ def main():
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
 
         assert_eq!(2, err.count());
         assert_eq!(2, err.function_call_mismatches.len());
-        assert_eq!(err.function_call_mismatches[0].actual, db.common_types.i32);
+        assert_eq!(err.function_call_mismatches[0].actual, db.find_by_name("str").unwrap().id);
         assert_eq!(
             err.function_call_mismatches[0].expected,
             db.common_types.i32
@@ -1027,13 +996,12 @@ def main():
 
     #[test]
     fn assign_incorrect_type_literal_errormsg() {
-        let mut ctx = prepare(
-            "
+        let ast = parse("
 def main():
     x: i32 = \"some str\"
 ",
         );
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
         let error_msg = print_error(&err, &db);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
@@ -1041,14 +1009,13 @@ def main():
 
     #[test]
     fn assign_to_variable_wrong_type_after_declaration() {
-        let mut ctx = prepare(
-            "
+        let ast = parse("
 def main():
     x: i32 = 1
     x = \"abc\"
 ",
         );
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
         let error_msg = print_error(&err, &db);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
@@ -1056,14 +1023,13 @@ def main():
 
     #[test]
     fn args_array_string_error_on_index_operator_refers_to_index_accessor() {
-        let mut ctx = prepare(
-            "
+        let ast = parse("
 def main(args: array<str>):
     i : str = args[\"lol\"]
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
         let error_msg = print_error(&err, &db);
         let expected = "Function argument type mismatch: In function main, on index operator, parameter on position 0 has incorrect type: Expected u32 but passed str\n";
         assert_eq!(error_msg, expected);
@@ -1077,14 +1043,13 @@ def main(args: array<str>):
 
     #[test]
     fn sum_different_numeric_types_not_allowed() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def main():
     x = 1 + 1.0
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
 
         let error_msg = print_error(&err, &db);
@@ -1094,14 +1059,13 @@ def main():
 
     #[test]
     fn multiply_different_numeric_types_not_allowed() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def main():
     x = 1 * 1.0
 ",
         );
 
-        let (err, db) = run_test(&mut ctx);
+        let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
 
         let error_msg = print_error(&err, &db);
@@ -1111,43 +1075,41 @@ def main():
 
     #[test]
     fn binary_operation_type_err_in_subexpression() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def main():
     x = 1.0 * (1.0 + 1)
 ",
         );
 
-        let (err, _) = run_test(&mut ctx);
+        let (err, _) = run_test(&ast);
         assert_eq!(1, err.count());
         assert_eq!(1, err.binary_op_not_found.len());
     }
 
     #[test]
     fn binary_operation_type_err_in_subexpression_complex() {
-        let mut ctx = prepare(
-            "
+        let ast = parse("
 def main():
     x = 1.0 * (1.0 + (2.3 * \"lmao\") / 87.1)
 ",
         );
 
-        let (err, _) = run_test(&mut ctx);
+        let (err, _) = run_test(&ast);
         assert_eq!(1, err.count());
         assert_eq!(1, err.binary_op_not_found.len());
     }
 
     #[test]
     fn binary_operation_type_err_in_subexpression_index_wrong_type() {
-        let mut ctx = prepare(
-            "
+        let ast = parse_no_std("
 def main(args: array<f32>):
     x = 1.0 * (1.0 + (2.3 * args[1.0]) / 87.1)
 ",
         );
 
-        let (err, _) = run_test(&mut ctx);
+        let (err, _) = run_test(&ast);
         assert_eq!(1, err.count());
         assert_eq!(1, err.function_call_mismatches.len());
     }
+    
 }

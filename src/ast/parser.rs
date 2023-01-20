@@ -1138,9 +1138,6 @@ impl<'source> Parser<'source> {
                     let op = self.operator_stack_mut().pop().unwrap();
                     let precedence_root = precedence(op);
 
-                    dbg!(&lhs_root);
-                    dbg!(&rhs_root);
-
                     //@TODO cloneless: In this case we clone because it's kinda hard to
                     //do only using regular moves
 

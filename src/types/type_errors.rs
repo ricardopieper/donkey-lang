@@ -3,7 +3,7 @@ use std::fmt::Display;
 use crate::{
     ast::lexer::{Operator, SourceString},
     semantic::{
-        hir::{Checked, HIRExpr, HIRExprMetadata, HIRType},
+        hir::{Checked, HIRExpr, HIRExprMetadata, HIRType, HIRAstMetadata},
         hir_printer::{expr_str, operator_str},
         hir_type_resolution::RootElementType,
         type_checker::FunctionName,
@@ -47,9 +47,9 @@ impl TypeErrorDisplay for TypeMismatch<'_, AssignContext<'_>> {
     }
 }
 
-pub struct ReturnTypeContext();
+pub struct ReturnTypeContext<'source>(pub Option<HIRAstMetadata<'source>>);
 
-impl TypeErrorDisplay for TypeMismatch<'_, ReturnTypeContext> {
+impl TypeErrorDisplay for TypeMismatch<'_, ReturnTypeContext<'_>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -57,9 +57,10 @@ impl TypeErrorDisplay for TypeMismatch<'_, ReturnTypeContext> {
     ) -> std::fmt::Result {
         let passed_name = self.actual.as_string(type_db);
         let expected_name = self.expected.as_string(type_db);
-        write!(f,  "Return type mismatch: {on_element} returns {return_type_name} but expression returns {expr_return_type_name}",
+        write!(f,  "Return type mismatch: {on_element} returns {return_type_name} but expression {expr_str:?} returns {expr_return_type_name}",
             on_element = self.on_element.get_name(),
             return_type_name = expected_name,
+            expr_str = self.context.0,
             expr_return_type_name = passed_name,
         )
     }
@@ -246,7 +247,7 @@ impl TypeErrorDisplay for InvalidCast<'_> {
     }
 }
 
-pub struct BinaryOperatorNotFound<'source>{
+pub struct BinaryOperatorNotFound<'source> {
     pub on_element: RootElementType<'source>,
     pub lhs: TypeInstanceId,
     pub rhs: TypeInstanceId,
@@ -377,7 +378,7 @@ pub struct TypeInferenceFailure<'source> {
     pub variable: String,
 }
 
-impl TypeErrorDisplay for TypeInferenceFailure<'_>{ 
+impl TypeErrorDisplay for TypeInferenceFailure<'_> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -436,7 +437,7 @@ impl<'source> TypeErrorDisplay for TypeConstructionFailure<'source> {
     }
 }
 
-pub struct VariableNotFound<'source>{
+pub struct VariableNotFound<'source> {
     pub on_element: RootElementType<'source>,
     pub variable_name: SourceString<'source>,
 }
@@ -518,7 +519,7 @@ macro_rules! make_type_errors {
 
 make_type_errors!(
     assign_mismatches: Vec<TypeMismatch<'source, AssignContext<'source>>>,
-    return_type_mismatches: Vec<TypeMismatch<'source, ReturnTypeContext>>,
+    return_type_mismatches: Vec<TypeMismatch<'source, ReturnTypeContext<'source>>>,
     function_call_mismatches: Vec<TypeMismatch<'source, FunctionCallContext<'source>>>,
     function_call_argument_count: Vec<FunctionCallArgumentCountMismatch<'source>>,
     call_non_callable: Vec<CallToNonCallableType<'source>>,
