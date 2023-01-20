@@ -3,7 +3,7 @@ use std::fmt::Display;
 use crate::{
     ast::lexer::{Operator, SourceString},
     semantic::{
-        hir::{Checked, HIRExpr, HIRExprMetadata, HIRType, HIRAstMetadata},
+        hir::{Checked, HIRAstMetadata, HIRExpr, HIRExprMetadata, HIRType},
         hir_printer::{expr_str, operator_str},
         hir_type_resolution::RootElementType,
         type_checker::FunctionName,

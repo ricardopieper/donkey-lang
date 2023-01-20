@@ -1,8 +1,7 @@
 use std::fs;
-use std::rc::Rc;
 
 use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotChecked};
-use super::mir::{MIRTopLevelNode, hir_to_mir};
+use super::mir::{hir_to_mir, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 use super::type_checker::typecheck;
 use crate::ast::{lexer, parser};
@@ -10,7 +9,6 @@ use crate::semantic::{first_assignments, name_registry, type_inference, undeclar
 use crate::types::type_errors::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
-
 
 pub struct LoadedFile<'source> {
     pub file_name: String,
@@ -25,19 +23,18 @@ pub struct Source<'source> {
 impl Source<'_> {
     pub fn new<'source>() -> Source<'source> {
         Source {
-            loaded_files: vec![]
+            loaded_files: vec![],
         }
     }
 }
 impl<'source> Source<'source> {
-
-    pub fn load_str_ref(self: &mut Source<'source>, source: &str) {
-        self.load_string(source.to_string())
+    pub fn load_str_ref(self: &mut Source<'source>, file_name: &str, source: &str) {
+        self.load(file_name.to_string(), source.to_string())
     }
 
-    pub fn load_string(self: &mut Source<'source>, source: String) {
+    pub fn load(self: &mut Source<'source>, file_name: String, source: String) {
         self.loaded_files.push(LoadedFile {
-            file_name: "_unknown".to_string(),
+            file_name,
             ast: AST::Break,
             contents: source.leak(),
         });
@@ -50,7 +47,7 @@ impl<'source> Source<'source> {
     pub fn load_file(&mut self, file_location: &str) {
         let input = fs::read_to_string(file_location)
             .unwrap_or_else(|_| panic!("Could not read file {}", file_location));
-        self.load_string(input);
+        self.load(file_location.to_string(), input);
     }
 
     pub fn load_stdlib(&mut self) {
@@ -64,7 +61,7 @@ pub struct Analyzer<'source> {
     pub type_db: TypeInstanceManager<'source>,
     pub globals: NameRegistry<'source>,
     pub type_errors: TypeErrors<'source>,
-    pub hir: Vec<Vec<InferredTypeHIRRoot<'source>>>
+    pub hir: Vec<Vec<InferredTypeHIRRoot<'source>>>,
 }
 
 impl<'source> Analyzer<'source> {
@@ -75,12 +72,15 @@ impl<'source> Analyzer<'source> {
             type_errors: TypeErrors::new(),
             mir: vec![],
             hir: vec![],
-            unchecked_mir: vec![]
+            unchecked_mir: vec![],
         }
     }
 
     pub fn print_errors(&self) {
-        println!("{}", TypeErrorPrinter::new(&self.type_errors, &self.type_db))
+        println!(
+            "{}",
+            TypeErrorPrinter::new(&self.type_errors, &self.type_db)
+        )
     }
 
     pub fn generate_mir(&mut self, source: &'source Source) {
@@ -92,25 +92,28 @@ impl<'source> Analyzer<'source> {
     pub fn generate_mir_and_typecheck(&mut self, source: &'source Source, do_typecheck: bool) {
         for file in source.loaded_files.iter() {
             let ast_hir = ast_globals_to_hir(&file.ast);
-            let inferred_globals_hir = match name_registry::build_name_registry_and_resolve_signatures(
-                &mut self.type_db,
-                &mut self.globals,
-                &mut self.type_errors,
-                ast_hir,
-            ) {
-                Ok(hir) => hir,
-                Err(_e) => {
-                    let printer = TypeErrorPrinter::new(&self.type_errors, &self.type_db);
-                    panic!(
-                        "build_name_registry_and_resolve_signatures Err\n{}",
-                        printer
-                    );
-                }
-            };
-    
+            let inferred_globals_hir =
+                match name_registry::build_name_registry_and_resolve_signatures(
+                    &mut self.type_db,
+                    &mut self.globals,
+                    &mut self.type_errors,
+                    ast_hir,
+                ) {
+                    Ok(hir) => hir,
+                    Err(_e) => {
+                        let printer = TypeErrorPrinter::new(&self.type_errors, &self.type_db);
+                        panic!(
+                            "build_name_registry_and_resolve_signatures Err\n{}",
+                            printer
+                        );
+                    }
+                };
+
             let first_assignment_hir =
-                first_assignments::transform_first_assignment_into_declaration(inferred_globals_hir);
-    
+                first_assignments::transform_first_assignment_into_declaration(
+                    inferred_globals_hir,
+                );
+
             if let Err(e) = undeclared_vars::detect_undeclared_vars_and_redeclarations(
                 &self.globals,
                 &first_assignment_hir,
@@ -118,7 +121,7 @@ impl<'source> Analyzer<'source> {
             ) {
                 panic!("detect_undeclared_vars_and_redeclarations Err: {e:#?}");
             }
-    
+
             match type_inference::infer_types(
                 &mut self.globals,
                 &mut self.type_db,
@@ -142,50 +145,53 @@ impl<'source> Analyzer<'source> {
                         self.unchecked_mir.extend(mir);
                     }
                 }
-                Err(_) => { }
+                Err(_) => {}
             }
         }
-
-        
     }
 }
 
 #[cfg(test)]
 pub mod test_utils {
-    use crate::{semantic::{mir::MIRTopLevelNode, hir::NotChecked}, types::type_instance_db::TypeInstanceManager};
+    use crate::{
+        semantic::{hir::NotChecked, mir::MIRTopLevelNode},
+        types::type_instance_db::TypeInstanceManager,
+    };
 
-    use super::{Source};
+    use super::Source;
 
     pub struct AnalysisWithoutTypecheckResult<'source> {
         pub mir: Vec<MIRTopLevelNode<'source, NotChecked>>,
-        pub type_db: TypeInstanceManager<'source>
+        pub type_db: TypeInstanceManager<'source>,
     }
 
-    pub fn parse< 'a, 'f: 'a>(s: &'a str) -> Source<'a> {
+    pub fn parse<'a, 'f: 'a>(s: &'a str) -> Source<'a> {
         let mut source = Source::new();
         source.load_stdlib();
-        source.load_str_ref(s);
+        source.load_str_ref("test", s);
         return source;
     }
 
-    pub fn parse_no_std< 'a, 'f: 'a>(s: &'a str) -> Source<'a> {
+    pub fn parse_no_std<'a, 'f: 'a>(s: &'a str) -> Source<'a> {
         let mut source = Source::new();
-        source.load_str_ref(s);
+        source.load_str_ref("test", s);
         return source;
     }
 
-    pub fn do_analysis<'s>(source: &'s Source<'s>) ->  crate::semantic::context::Analyzer<'s> {
+    pub fn do_analysis<'s>(source: &'s Source<'s>) -> crate::semantic::context::Analyzer<'s> {
         let mut ctx = crate::semantic::context::Analyzer::new();
         ctx.analyze(source);
         return ctx;
     }
 
-    pub fn do_analysis_no_typecheck<'s>(source: &'s Source<'s>) -> AnalysisWithoutTypecheckResult<'s> {
+    pub fn do_analysis_no_typecheck<'s>(
+        source: &'s Source<'s>,
+    ) -> AnalysisWithoutTypecheckResult<'s> {
         let mut ctx = crate::semantic::context::Analyzer::new();
         ctx.generate_mir(source);
         return AnalysisWithoutTypecheckResult {
             mir: ctx.unchecked_mir,
-            type_db: ctx.type_db
+            type_db: ctx.type_db,
         };
     }
 }
@@ -197,14 +203,15 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::{
-        ast::{lexer::Operator, parser::Parser},
-        semantic::{hir_printer, context::test_utils::{parse, do_analysis, parse_no_std, do_analysis_no_typecheck}},
+        ast::lexer::Operator,
+        semantic::{
+            context::test_utils::{do_analysis, parse},
+            hir_printer,
+        },
     };
 
-    
     use super::*;
 
-   
     #[test]
     fn simple_assign_decl() {
         let parsed = parse(
@@ -223,7 +230,7 @@ def my_function() -> Void:
 
         assert_eq!(expected.trim(), result.trim());
     }
-    
+
     #[test]
     fn standalone_call_to_builtin_function() {
         let parsed = parse(
@@ -237,7 +244,7 @@ def my_function():
         analyzed.print_errors();
 
         assert_eq!(analyzed.type_errors.count(), 0);
-      
+
         let result = hir_printer::print_hir(&analyzed.hir[1], &analyzed.type_db);
         println!("{}", result);
 
@@ -361,7 +368,7 @@ def my_function() -> f32:
         );
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
-       
+
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = hir_printer::print_hir(&analyzed.hir[1], &analyzed.type_db);
         println!("{}", result);
@@ -414,8 +421,11 @@ def main():
     print(my_var)",
         );
         let analyzed = do_analysis(&parsed);
-        println!("{}", TypeErrorPrinter::new(&analyzed.type_errors, &analyzed.type_db));
-       
+        println!(
+            "{}",
+            TypeErrorPrinter::new(&analyzed.type_errors, &analyzed.type_db)
+        );
+
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = hir_printer::print_hir(&analyzed.hir[1], &analyzed.type_db);
         println!("{}", final_result);
@@ -708,7 +718,7 @@ def my_function():
     x = 1 + \"abc\"",
         );
         let analyzed = do_analysis(&parsed);
-       
+
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.binary_op_not_found.len(), 1);
 
@@ -743,9 +753,9 @@ def my_function():
         let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir[0], &analyzed.type_db);
         println!("{}", result);
-        
+
         assert_eq!(analyzed.type_errors.count(), 1);
-        
+
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
         assert_eq!(
@@ -759,7 +769,9 @@ def my_function():
             "array<i32>"
         );
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].on_element.get_name(),
+            analyzed.type_errors.field_or_method_not_found[0]
+                .on_element
+                .get_name(),
             "my_function"
         );
     }
@@ -773,7 +785,7 @@ def my_function():
     y = x.reevert()",
         );
         let analyzed = do_analysis(&parsed);
-       
+
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
@@ -788,7 +800,9 @@ def my_function():
             "array<i32>"
         );
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].on_element.get_name(),
+            analyzed.type_errors.field_or_method_not_found[0]
+                .on_element
+                .get_name(),
             "my_function"
         );
     }
@@ -802,7 +816,7 @@ def my_function():
         );
 
         let analyzed = do_analysis(&parsed);
-       
+
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.type_not_found.len(), 1);
 
@@ -825,7 +839,6 @@ def my_function():
     y: i32 = x[0].as_i32 + 1",
         );
 
-
         let analyzed = do_analysis(&parsed);
         let result = hir_printer::print_hir(&analyzed.hir[0], &analyzed.type_db);
         println!("{}", result);
@@ -845,7 +858,7 @@ def my_function():
     y: i32 = 1 + x[0].as_i32",
         );
         let analyzed = do_analysis(&parsed);
-        
+
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0].field_or_method,
@@ -862,7 +875,6 @@ def my_function():
     y = +x",
         );
         let analyzed = do_analysis(&parsed);
-       
 
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.unary_op_not_found.len(), 1);
@@ -878,7 +890,9 @@ def my_function():
             Operator::Plus
         );
         assert_eq!(
-            analyzed.type_errors.unary_op_not_found[0].on_element.get_name(),
+            analyzed.type_errors.unary_op_not_found[0]
+                .on_element
+                .get_name(),
             "my_function"
         );
     }
@@ -892,11 +906,13 @@ def my_function():
         );
 
         let analyzed = do_analysis(&parsed);
-      
+
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.insufficient_array_type_info.len(), 1);
         assert_eq!(
-            analyzed.type_errors.insufficient_array_type_info[0].on_element.get_name(),
+            analyzed.type_errors.insufficient_array_type_info[0]
+                .on_element
+                .get_name(),
             "my_function"
         );
     }
@@ -926,6 +942,4 @@ def my_function():
             "array<i32>"
         );
     }
-    
 }
-

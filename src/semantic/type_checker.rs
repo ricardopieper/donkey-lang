@@ -750,7 +750,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     //Parses a single expression
-        
+
     fn run_test<'source>(
         src: &'source Source<'source>,
     ) -> (TypeErrors<'source>, TypeInstanceManager<'source>) {
@@ -774,7 +774,8 @@ mod tests {
 
     #[test]
     fn return_from_void_func_is_correct() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def main():
     return
 ",
@@ -784,10 +785,10 @@ def main():
         assert_eq!(0, err.count());
     }
 
-
     #[test]
     fn return_int_from_void_is_not_correct() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def main():
     return 1
 ",
@@ -803,7 +804,8 @@ def main():
 
     #[test]
     fn return_int_from_int_func_is_correct() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def main() -> i32:
     return 1
 ",
@@ -814,7 +816,8 @@ def main() -> i32:
 
     #[test]
     fn return_void_from_int_func_is_not_correct() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def main() -> i32:
     return
     ",
@@ -828,7 +831,8 @@ def main() -> i32:
 
     #[test]
     fn assign_incorrect_type_literal() {
-        let ast = parse("
+        let ast = parse(
+            "
 def main():
     x: i32 = \"some str\"
 ",
@@ -837,13 +841,17 @@ def main():
         let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
-        assert_eq!(err.assign_mismatches[0].actual, db.find_by_name("str").unwrap().id);
+        assert_eq!(
+            err.assign_mismatches[0].actual,
+            db.find_by_name("str").unwrap().id
+        );
         assert_eq!(err.assign_mismatches[0].expected, db.common_types.i32);
     }
 
     #[test]
     fn type_check_function_call_no_args_correct_types() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def test() -> i32:
     return 1
 
@@ -857,7 +865,8 @@ def main():
 
     #[test]
     fn type_check_wrong_type_function_call_return_incompatible() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def test() -> i32:
     return 1
 
@@ -876,7 +885,8 @@ def main():
 
     #[test]
     fn type_check_binary_expr_result_wrong_type() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def test() -> i32:
     return 1
 
@@ -895,7 +905,8 @@ def main():
 
     #[test]
     fn pass_correct_type_to_function_single_args() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def test(i: i32) -> i32:
     return i + 1
 
@@ -911,7 +922,8 @@ def main():
 
     #[test]
     fn pass_correct_type_to_function_two_args() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def test(i: i32, f: f32) -> i32:
     return i + 1
 
@@ -925,7 +937,8 @@ def main():
 
     #[test]
     fn pass_correct_type_to_function_two_args_from_vars() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def test(i: i32, f: f32) -> i32:
     return i + 1
 
@@ -943,7 +956,8 @@ def main():
 
     #[test]
     fn pass_wrong_type_to_function_single_arg() {
-        let ast = parse("
+        let ast = parse(
+            "
 def test(i: i32) -> i32:
     return i
 
@@ -957,7 +971,10 @@ def main():
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.function_call_mismatches.len());
-        assert_eq!(err.function_call_mismatches[0].actual, db.find_by_name("str").unwrap().id);
+        assert_eq!(
+            err.function_call_mismatches[0].actual,
+            db.find_by_name("str").unwrap().id
+        );
         assert_eq!(
             err.function_call_mismatches[0].expected,
             db.common_types.i32
@@ -966,7 +983,8 @@ def main():
 
     #[test]
     fn pass_wrong_type_to_function_two_args_both_wrong() {
-        let ast = parse("
+        let ast = parse(
+            "
 def test(i: i32, f: f32) -> f32:
     return f
 
@@ -981,7 +999,10 @@ def main():
 
         assert_eq!(2, err.count());
         assert_eq!(2, err.function_call_mismatches.len());
-        assert_eq!(err.function_call_mismatches[0].actual, db.find_by_name("str").unwrap().id);
+        assert_eq!(
+            err.function_call_mismatches[0].actual,
+            db.find_by_name("str").unwrap().id
+        );
         assert_eq!(
             err.function_call_mismatches[0].expected,
             db.common_types.i32
@@ -996,7 +1017,8 @@ def main():
 
     #[test]
     fn assign_incorrect_type_literal_errormsg() {
-        let ast = parse("
+        let ast = parse(
+            "
 def main():
     x: i32 = \"some str\"
 ",
@@ -1009,7 +1031,8 @@ def main():
 
     #[test]
     fn assign_to_variable_wrong_type_after_declaration() {
-        let ast = parse("
+        let ast = parse(
+            "
 def main():
     x: i32 = 1
     x = \"abc\"
@@ -1023,7 +1046,8 @@ def main():
 
     #[test]
     fn args_array_string_error_on_index_operator_refers_to_index_accessor() {
-        let ast = parse("
+        let ast = parse(
+            "
 def main(args: array<str>):
     i : str = args[\"lol\"]
 ",
@@ -1043,7 +1067,8 @@ def main(args: array<str>):
 
     #[test]
     fn sum_different_numeric_types_not_allowed() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def main():
     x = 1 + 1.0
 ",
@@ -1059,7 +1084,8 @@ def main():
 
     #[test]
     fn multiply_different_numeric_types_not_allowed() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def main():
     x = 1 * 1.0
 ",
@@ -1075,7 +1101,8 @@ def main():
 
     #[test]
     fn binary_operation_type_err_in_subexpression() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def main():
     x = 1.0 * (1.0 + 1)
 ",
@@ -1088,7 +1115,8 @@ def main():
 
     #[test]
     fn binary_operation_type_err_in_subexpression_complex() {
-        let ast = parse("
+        let ast = parse(
+            "
 def main():
     x = 1.0 * (1.0 + (2.3 * \"lmao\") / 87.1)
 ",
@@ -1101,7 +1129,8 @@ def main():
 
     #[test]
     fn binary_operation_type_err_in_subexpression_index_wrong_type() {
-        let ast = parse_no_std("
+        let ast = parse_no_std(
+            "
 def main(args: array<f32>):
     x = 1.0 * (1.0 + (2.3 * args[1.0]) / 87.1)
 ",
@@ -1111,5 +1140,4 @@ def main(args: array<f32>):
         assert_eq!(1, err.count());
         assert_eq!(1, err.function_call_mismatches.len());
     }
-    
 }

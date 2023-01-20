@@ -637,7 +637,7 @@ pub fn hir_to_mir<'source>(
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
-    use crate::semantic::context::test_utils::{do_analysis, parse, parse_no_std, do_analysis_no_typecheck};
+    use crate::semantic::context::test_utils::{do_analysis_no_typecheck, parse, parse_no_std};
     use crate::semantic::mir_printer;
 
     #[cfg(test)]
@@ -1565,7 +1565,8 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(&result.mir.last().unwrap(), &result.type_db);
+        let final_result =
+            mir_printer::print_mir_node(&result.mir.last().unwrap(), &result.type_db);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:

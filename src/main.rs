@@ -39,7 +39,7 @@ use crate::semantic::mir_printer;
 //use donkey_vm::asm::assembler::DonkeyProgram;
 //use donkey_vm::vm::runner::DonkeyVMRunner;
 use llvm::llvm_backend::generate_llvm;
-use semantic::context::{Source};
+use semantic::context::Source;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

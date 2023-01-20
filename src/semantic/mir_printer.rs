@@ -2,8 +2,7 @@ use std::borrow::Cow;
 
 use crate::types::type_instance_db::TypeInstanceManager;
 
-use super::mir::{MIRBlock, MIRBlockNode, MIRBlockFinal, MIRScope, MIRTopLevelNode};
-
+use super::mir::{MIRBlock, MIRBlockFinal, MIRBlockNode, MIRScope, MIRTopLevelNode};
 
 pub trait PrintableExpression {
     fn print_expr<'source>(&'source self) -> Cow<'source, str>;
