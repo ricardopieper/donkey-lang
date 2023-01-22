@@ -1,9 +1,8 @@
+use crate::interner::{InternedString, StringInterner};
 use crate::{
-    ast::lexer::{InternedString, StringInterner},
     semantic::hir::{HIRExpr, HIRTypedBoundName, HIR},
     types::type_errors::{TypeErrors, VariableNotFound},
 };
-
 use std::collections::HashSet;
 
 use super::{
@@ -72,7 +71,7 @@ fn detect_decl_errors_in_body<'source, T, T1>(
     function_name: InternedString,
     body: &[HIR<'source, T, HIRExpr<'source, T1>>],
     errors: &mut TypeErrors<'source>,
-    interner: &StringInterner
+    interner: &StringInterner,
 ) -> bool {
     for node in body {
         match node {
@@ -121,7 +120,7 @@ fn detect_decl_errors_in_body<'source, T, T1>(
                     function_name,
                     true_branch,
                     errors,
-                    interner
+                    interner,
                 ) {
                     return false;
                 }
@@ -130,7 +129,7 @@ fn detect_decl_errors_in_body<'source, T, T1>(
                     function_name,
                     false_branch,
                     errors,
-                    interner
+                    interner,
                 ) {
                     return false;
                 }
@@ -148,20 +147,26 @@ fn detect_declaration_errors_in_function<'source, T, T1, T2>(
     parameters: &[HIRTypedBoundName<T>],
     body: &[HIR<'source, T1, HIRExpr<'source, T2>>],
     errors: &mut TypeErrors<'source>,
-    interner: &StringInterner
+    interner: &StringInterner,
 ) -> bool {
     for p in parameters {
         declarations_found.insert(p.name);
     }
 
-    detect_decl_errors_in_body(&mut declarations_found, function_name, body, errors, interner)
+    detect_decl_errors_in_body(
+        &mut declarations_found,
+        function_name,
+        body,
+        errors,
+        interner,
+    )
 }
 
 pub fn detect_undeclared_vars_and_redeclarations<'source, T, T1, T2, T3>(
     globals: &NameRegistry,
     mir: &[HIRRoot<'source, T, HIR<'source, T1, HIRExpr<'source, T2>>, T3>],
     errors: &mut TypeErrors<'source>,
-    interner: &StringInterner
+    interner: &StringInterner,
 ) -> Result<(), CompilerError> {
     let mut declarations_found = HashSet::<InternedString>::new();
 
@@ -191,7 +196,7 @@ pub fn detect_undeclared_vars_and_redeclarations<'source, T, T1, T2, T3>(
                 parameters,
                 body,
                 errors,
-                interner
+                interner,
             ) {
                 return Err(CompilerError::TypeInferenceError);
             }

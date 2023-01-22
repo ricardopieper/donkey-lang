@@ -1,7 +1,6 @@
 use crate::ast::lexer::{Operator, Token};
 use crate::commons::float::FloatLiteral;
-
-use super::lexer::{InternedString};
+use crate::interner::InternedString;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -554,9 +553,7 @@ impl Parser {
 
     //Tries to parse a bound name with its type, for instance var: i32
     //leaves cursor in the next token after the type
-    pub fn parse_type_bound_name(
-        &mut self,
-    ) -> Result<Option<TypeBoundName>, ParsingError> {
+    pub fn parse_type_bound_name(&mut self) -> Result<Option<TypeBoundName>, ParsingError> {
         let Token::Identifier(name) = *self.cur() else { return Ok(None); };
         self.next();
 
@@ -787,10 +784,7 @@ impl Parser {
         results
     }
 
-    fn index_access_helper(
-        &mut self,
-        expr_list_or_array: Expr,
-    ) -> Result<Expr, ParsingError> {
+    fn index_access_helper(&mut self, expr_list_or_array: Expr) -> Result<Expr, ParsingError> {
         if let Token::CloseParen = self.cur() {
             panic!("Invalid syntax: must inform index value");
         }
@@ -825,10 +819,7 @@ impl Parser {
         }
     }
 
-    fn function_call_helper(
-        &mut self,
-        expr_callable: Expr,
-    ) -> Result<Expr, ParsingError> {
+    fn function_call_helper(&mut self, expr_callable: Expr) -> Result<Expr, ParsingError> {
         if let Token::CloseParen = self.cur() {
             return Ok(FunctionCall(Box::new(expr_callable), vec![]));
         }
@@ -1214,9 +1205,7 @@ impl Parser {
     }
 
     //expr, expr, ..., expr
-    fn parse_comma_sep_list_expr(
-        &mut self,
-    ) -> Result<ParseListExpressionResult, ParsingError> {
+    fn parse_comma_sep_list_expr(&mut self) -> Result<ParseListExpressionResult, ParsingError> {
         let mut expressions = vec![];
         loop {
             let parse_result = self.parse_expr();
@@ -1269,14 +1258,12 @@ pub fn parse_ast(tokens: Vec<Token>) -> Vec<AST> {
 #[cfg(test)]
 mod tests {
 
-    use crate::{ast::lexer::{StringInterner}, semantic::context::test_utils::tls_interner};
-
     thread_local! {
         static INTERNER: StringInterner = StringInterner::new();
     }
 
     tls_interner!(INTERNER);
-    
+
     fn tokenize(str: &str) -> Result<Vec<Token>, String> {
         INTERNER.with(|interner| crate::ast::lexer::tokenize(str, interner))
     }
@@ -1301,6 +1288,7 @@ mod tests {
         }
     }
 
+    use crate::{interner::StringInterner, semantic::context::test_utils::tls_interner};
 
     use super::*;
     use AST::*;
@@ -1310,8 +1298,6 @@ mod tests {
         let mut parser = Parser::new(tokens);
         parser.parse_expr().unwrap().resulting_expr
     }
-   
- 
 
     #[test]
     fn multiline_code() {
@@ -1466,7 +1452,10 @@ print(x)
                     },
                 ]),
             },
-            StandaloneExpr(FunctionCall(Variable(istr!("print")).into(), vec![Variable(istr!("x"))])),
+            StandaloneExpr(FunctionCall(
+                Variable(istr!("print")).into(),
+                vec![Variable(istr!("x"))],
+            )),
         ];
         assert_eq!(expected, result);
     }
@@ -1534,7 +1523,10 @@ print(x)
                 elifs: vec![],
                 final_else: None,
             },
-            StandaloneExpr(FunctionCall(Variable(istr!("print")).into(), vec![Variable(istr!("x"))])),
+            StandaloneExpr(FunctionCall(
+                Variable(istr!("print")).into(),
+                vec![Variable(istr!("x"))],
+            )),
         ];
         assert_eq!(expected, result);
     }
@@ -1599,7 +1591,10 @@ print(x)",
                 elifs: vec![],
                 final_else: None,
             },
-            StandaloneExpr(FunctionCall(Variable(istr!("print")).into(), vec![Variable(istr!("x"))])),
+            StandaloneExpr(FunctionCall(
+                Variable(istr!("print")).into(),
+                vec![Variable(istr!("x"))],
+            )),
         ];
         assert_eq!(expected, result);
     }
@@ -1633,7 +1628,10 @@ print(y)",
                     )),
                 ),
             },
-            StandaloneExpr(FunctionCall(Variable(istr!("print")).into(), vec![Variable(istr!("y"))])),
+            StandaloneExpr(FunctionCall(
+                Variable(istr!("print")).into(),
+                vec![Variable(istr!("y"))],
+            )),
         ];
 
         assert_eq!(expected, result);
@@ -1999,7 +1997,10 @@ print(y)",
     fn function_call_with_one_param() {
         let tokens = tokenize("some_identifier(1)").unwrap();
         let result = parse(tokens);
-        let expected = FunctionCall(Variable(istr!("some_identifier")).into(), vec![IntegerValue(1)]);
+        let expected = FunctionCall(
+            Variable(istr!("some_identifier")).into(),
+            vec![IntegerValue(1)],
+        );
 
         assert_eq!(expected, result);
     }
@@ -2138,7 +2139,10 @@ print(y)",
     fn multiply_fcall() {
         let tokens = tokenize("some_identifier(1) * 5").unwrap();
         let result = parse(tokens);
-        let call = FunctionCall(Variable(istr!("some_identifier")).into(), vec![IntegerValue(1)]);
+        let call = FunctionCall(
+            Variable(istr!("some_identifier")).into(),
+            vec![IntegerValue(1)],
+        );
         let expected = BinaryOperation(call.into(), Operator::Multiply, 5.into());
         assert_eq!(expected, result);
     }
@@ -2486,7 +2490,11 @@ print(y)",
         let result = parse_ast(tokens);
         let expected = vec![Assign {
             path: vec![istr!("x")],
-            expression: BinaryOperation(Box::new(Variable(istr!("x"))), Operator::Multiply, 1.into()),
+            expression: BinaryOperation(
+                Box::new(Variable(istr!("x"))),
+                Operator::Multiply,
+                1.into(),
+            ),
         }];
         assert_eq!(expected, result);
     }
@@ -2961,7 +2969,10 @@ struct SomeStruct:
         let tokens = tokenize("some_call()[1]").unwrap();
         let result = parse_ast(tokens);
         let expected = vec![StandaloneExpr(IndexAccess(
-            Box::new(FunctionCall(Box::new(Variable(istr!("some_call").into())), vec![])),
+            Box::new(FunctionCall(
+                Box::new(Variable(istr!("some_call").into())),
+                vec![],
+            )),
             Box::new(IntegerValue(1)),
         ))];
         assert_eq!(expected, result);
@@ -2987,7 +2998,11 @@ struct SomeStruct:
         let tokens = tokenize("args[1] + 1").unwrap();
         let result = parse_ast(tokens);
         let expected = vec![StandaloneExpr(BinaryOperation(
-            IndexAccess(Variable(istr!("args").into()).into(), IntegerValue(1).into()).into(),
+            IndexAccess(
+                Variable(istr!("args").into()).into(),
+                IntegerValue(1).into(),
+            )
+            .into(),
             Operator::Plus,
             IntegerValue(1).into(),
         ))];
@@ -3002,7 +3017,11 @@ struct SomeStruct:
         let expected = vec![StandaloneExpr(BinaryOperation(
             IntegerValue(1).into(),
             Operator::Plus,
-            IndexAccess(Variable(istr!("args").into()).into(), IntegerValue(1).into()).into(),
+            IndexAccess(
+                Variable(istr!("args").into()).into(),
+                IntegerValue(1).into(),
+            )
+            .into(),
         ))];
         assert_eq!(expected, result);
     }

@@ -1,8 +1,6 @@
-use crate::{
-    ast::lexer::{Operator, InternedString, StringInterner, interner},
-    compiler::layouts::Bytes,
-};
+use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
+use crate::interner::{InternedString, StringInterner};
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct TypeConstructorId(pub usize);
 
@@ -92,24 +90,28 @@ pub struct CommonTypeConstructors {
 pub struct TypeConstructorDatabase<'interner> {
     pub types: Vec<TypeConstructor>,
     pub common_types: CommonTypeConstructors,
-    pub interner: &'interner StringInterner
+    pub interner: &'interner StringInterner,
 }
 
 impl<'interner> TypeConstructorDatabase<'interner> {
-
     pub fn new(interner: &'interner StringInterner) -> Self {
         let mut item = Self {
             types: vec![],
             common_types: CommonTypeConstructors {
                 ..Default::default()
             },
-            interner
+            interner,
         };
         item.init_builtin();
         item
     }
 
-    pub fn add(&mut self, kind: TypeKind, sign: TypeSign, name: InternedString) -> TypeConstructorId {
+    pub fn add(
+        &mut self,
+        kind: TypeKind,
+        sign: TypeSign,
+        name: InternedString,
+    ) -> TypeConstructorId {
         let next_id = TypeConstructorId(self.types.len());
         self.types.push(TypeConstructor {
             id: next_id,
@@ -121,7 +123,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             methods: vec![],
             rhs_binary_ops: vec![],
             type_args: vec![],
-            unary_ops: vec![]
+            unary_ops: vec![],
         });
         next_id
     }
@@ -158,7 +160,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             methods: vec![],
             rhs_binary_ops: vec![],
             unary_ops: vec![],
-            sign: TypeSign::Unsigned
+            sign: TypeSign::Unsigned,
         });
         next_id
     }
@@ -183,7 +185,8 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.types
             .get(id.0)
             .unwrap_or_else(|| panic!("Type ID not found: {}", id.0))
-            .name.to_string(self.interner)
+            .name
+            .to_string(self.interner)
     }
 
     pub fn find_by_name(&self, name: InternedString) -> Option<&TypeConstructor> {
@@ -339,15 +342,21 @@ impl<'interner> TypeConstructorDatabase<'interner> {
 
         let i32_type =
             self.register_primitive_number(istr!("i32"), Bytes::size_of::<i32>(), TypeSign::Signed);
-        let u32_type =
-            self.register_primitive_number(istr!("u32"), Bytes::size_of::<u32>(), TypeSign::Unsigned);
+        let u32_type = self.register_primitive_number(
+            istr!("u32"),
+            Bytes::size_of::<u32>(),
+            TypeSign::Unsigned,
+        );
         self.common_types.i32 = i32_type;
         self.common_types.u32 = u32_type;
 
         self.common_types.i64 =
             self.register_primitive_number(istr!("i64"), Bytes::size_of::<i64>(), TypeSign::Signed);
-        self.common_types.u64 =
-            self.register_primitive_number(istr!("u64"), Bytes::size_of::<u64>(), TypeSign::Unsigned);
+        self.common_types.u64 = self.register_primitive_number(
+            istr!("u64"),
+            Bytes::size_of::<u64>(),
+            TypeSign::Unsigned,
+        );
         self.common_types.f32 =
             self.register_primitive_number(istr!("f32"), Bytes::size_of::<f32>(), TypeSign::Signed);
         self.common_types.f64 =

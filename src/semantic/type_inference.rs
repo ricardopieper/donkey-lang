@@ -1,4 +1,5 @@
-use crate::ast::lexer::{Operator, InternedString, StringInterner};
+use crate::ast::lexer::Operator;
+use crate::interner::{InternedString, StringInterner};
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
 use crate::semantic::name_registry::NameRegistry;
@@ -25,20 +26,12 @@ pub struct FunctionTypeInferenceContext<'compiler_state, 'source, 'interner> {
     pub type_db: &'compiler_state mut TypeInstanceManager<'interner>,
     pub errors: &'compiler_state mut TypeErrors<'source>,
     pub decls_in_scope: &'compiler_state mut NameRegistry,
-    pub interner: &'interner StringInterner
+    pub interner: &'interner StringInterner,
 }
 
 impl<'source, 'interner> FunctionTypeInferenceContext<'_, 'source, 'interner> {
-    pub fn instantiate_type(
-        &mut self,
-        typedef: &HIRType,
-    ) -> Result<TypeInstanceId, CompilerError> {
-        let usage = hir_type_to_usage(
-            self.on_function,
-            typedef,
-            self.type_db,
-            self.errors,
-        )?;
+    pub fn instantiate_type(&mut self, typedef: &HIRType) -> Result<TypeInstanceId, CompilerError> {
+        let usage = hir_type_to_usage(self.on_function, typedef, self.type_db, self.errors)?;
         match self.type_db.construct_usage(&usage) {
             Ok(instance_id) => Ok(instance_id),
             Err(e) => {
@@ -535,7 +528,7 @@ impl<'source, 'interner> FunctionTypeInferenceContext<'_, 'source, 'interner> {
             type_db: self.type_db,
             errors: self.errors,
             decls_in_scope: &mut decls_in_scope,
-            interner: self.interner
+            interner: self.interner,
         };
 
         new_ctx.infer_types_in_body(body)
@@ -547,7 +540,7 @@ pub fn infer_types<'source, 'interner>(
     type_db: &mut TypeInstanceManager<'interner>,
     mir: Vec<TypeInferenceInputHIRRoot<'source>>,
     errors: &mut TypeErrors<'source>,
-    interner: &'interner StringInterner
+    interner: &'interner StringInterner,
 ) -> Result<Vec<InferredTypeHIRRoot<'source>>, CompilerError> {
     let mut new_mir = vec![];
 
@@ -566,7 +559,7 @@ pub fn infer_types<'source, 'interner>(
                     type_db,
                     errors,
                     decls_in_scope: globals,
-                    interner
+                    interner,
                 };
 
                 let new_body =

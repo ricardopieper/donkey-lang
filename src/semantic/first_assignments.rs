@@ -1,5 +1,5 @@
 use crate::{
-    ast::lexer::{InternedString},
+    interner::InternedString,
     semantic::hir::{HIRTypedBoundName, HIR},
     types::type_instance_db::TypeInstanceId,
 };

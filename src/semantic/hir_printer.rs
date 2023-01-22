@@ -1,16 +1,14 @@
-use crate::ast::lexer::{
-    self, JoinableInternedStringSlice, PrintableInternedString, StringInterner,
-};
+use crate::ast::lexer::Operator;
+use crate::interner::{JoinableInternedStringSlice, StringInterner};
 
 use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR};
 
 use crate::types::type_instance_db::TypeInstanceManager;
-use lexer::Operator;
 
 use super::hir::HIRRoot;
 use super::type_name_printer::TypeNamePrinter;
 
-pub fn operator_str(op: lexer::Operator) -> String {
+pub fn operator_str(op: Operator) -> String {
     match op {
         Operator::Plus => "+".into(),
         Operator::Minus => "-".into(),
@@ -107,6 +105,7 @@ pub struct HIRPrinter<'type_db, 'interner> {
 }
 
 impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
+    #[allow(dead_code)]
     pub fn new(
         type_db: &'type_db TypeInstanceManager<'interner>,
         interner: &'interner StringInterner,
@@ -118,7 +117,6 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
         }
     }
 
-    #[allow(dead_code)]
     fn print_hir_body_str(
         &self,
         node: &HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,

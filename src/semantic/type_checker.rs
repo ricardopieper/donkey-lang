@@ -1,12 +1,12 @@
-
 use std::collections::HashSet;
 
 use super::compiler_errors::CompilerError;
 use super::hir::{Checked, HIRAstMetadata, HIRExpr, HIRExprMetadata, LiteralHIRExpr, NotChecked};
 use super::hir_printer::HIRExprPrinter;
 use super::hir_type_resolution::RootElementType;
-use crate::ast::lexer::{InternedString, Operator, StringInterner};
-use crate::ast::parser::{Expr};
+use crate::ast::lexer::Operator;
+use crate::ast::parser::Expr;
+use crate::interner::{InternedString, StringInterner};
 use crate::types::type_errors::{
     ArrayExpressionsNotAllTheSameType, AssignContext, FunctionCallArgumentCountMismatch,
     FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
@@ -409,7 +409,12 @@ impl<'compiler_context, 'source, 'interner>
                 .function_call_argument_count
                 .push(FunctionCallArgumentCountMismatch {
                     on_element: self.on_element,
-                    called_function_name: make_method_name_or_index(name, &obj_type.name, meta, self.interner),
+                    called_function_name: make_method_name_or_index(
+                        name,
+                        &obj_type.name,
+                        meta,
+                        self.interner,
+                    ),
                     expected_count: function_type.function_args.len(),
                     passed_count: checked_args.len(),
                 });
@@ -430,7 +435,12 @@ impl<'compiler_context, 'source, 'interner>
             self.errors.function_call_mismatches.push(TypeMismatch {
                 on_element: self.on_element,
                 context: FunctionCallContext {
-                    called_function_name: make_method_name_or_index(name, &obj_type.name, meta, self.interner),
+                    called_function_name: make_method_name_or_index(
+                        name,
+                        &obj_type.name,
+                        meta,
+                        self.interner,
+                    ),
                     argument_position: arg_pos,
                 },
                 expected: *types.0,
@@ -679,7 +689,7 @@ fn make_method_name_or_index<'source>(
     name: InternedString,
     obj_type_name: &str,
     expr: HIRExprMetadata<'source>,
-    interner: &StringInterner
+    interner: &StringInterner,
 ) -> FunctionName {
     dbg!(expr);
     match expr {

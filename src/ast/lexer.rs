@@ -1,7 +1,7 @@
-use std::{collections::HashMap, cell::{RefCell, Ref}};
-
-use crate::commons::float::FloatLiteral;
-
+use crate::{
+    commons::float::FloatLiteral,
+    interner::{InternedString, StringInterner},
+};
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
 pub enum Operator {
@@ -23,122 +23,6 @@ pub enum Operator {
     Less,
     LessEquals,
 }
-
-pub type SourceString<'source> = &'source str;
-
-pub const WHITESPACE: PartialToken<'static> = PartialToken::UndefinedOrWhitespace;
-
-
-#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
-pub struct InternedString(usize);
-
-//The string interner uses RefCell so that we can share it freely 
-pub struct StringInterner {
-    strings: RefCell<Vec<String>>,
-    //The key is actually a string inside the strings vec.
-    //However, we never return this reference. Instead we return a reference to strings
-    //which will have a lifetime bounded to Self.  
-    table: RefCell<HashMap<&'static str, InternedString>>
-}
-
-impl StringInterner {
-    pub fn new() -> Self {
-        return StringInterner {
-            strings: RefCell::new(vec![]),
-            table: RefCell::new(HashMap::new())
-        }
-    }
-
-    pub fn get(&self, string: &str) -> InternedString { 
-        {
-            if let Some(v) = self.table.borrow().get(string) {
-                return *v;
-            }
-        }
-        return self.insert_new_string(string.to_string())
-    }
-
-    fn insert_new_string(&self, string: String) -> InternedString {
-        let index = InternedString(self.strings.borrow().len());
-        {
-            self.strings.borrow_mut().push(string);
-        }
-        //get a 'static str from the last pushed string, which now lives in the 
-        //vec and will be dropped when Self is dropped
-        let last_pushed_str: &'static str = unsafe {
-            let strings_ref = self.strings.borrow();
-            let ptr = strings_ref.last().unwrap();
-            let const_str = ptr.as_ref() as *const str;
-            &*const_str
-        };
-
-        {
-            self.table.borrow_mut().insert(last_pushed_str, index);
-        }
-        return index;
-    }
-
-    pub fn get_string<'intern>(&'intern self, string: InternedString) -> String {
-        return self.strings.borrow()[string.0].to_string()
-    }
-
-    pub fn borrow<'intern>(&'intern self, string: InternedString) -> Ref<'intern, String> {
-        let borrow = self.strings.borrow();
-        Ref::map(borrow, |x| &x[string.0])
-    }
-    
-}
-
-pub trait PrintableInternedString {
-    fn to_string(self, interner: &StringInterner) -> String;
-    fn write_str(self, interner: &StringInterner, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
-} 
-pub trait JoinableInternedStringSlice {
-    fn join_interned(self, interner: &StringInterner, sep: &str) -> String;
-} 
-
-impl PrintableInternedString for InternedString {
-    fn to_string(self, interner: &StringInterner) -> String {
-        interner.get_string(self).to_string()
-    }
-    fn write_str(self, interner: &StringInterner, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&interner.borrow(self))
-    }
-}
-
-impl JoinableInternedStringSlice for &[InternedString] {
-    fn join_interned(self, interner: &StringInterner, sep: &str) -> String {
-        let strings = self.iter().map(|x| x.to_string(interner)).collect::<Vec<_>>();
-        strings.join(sep)
-    }
-}
-
-impl JoinableInternedStringSlice for &Vec<InternedString> {
-    fn join_interned(self, interner: &StringInterner, sep: &str) -> String {
-       self.as_slice().join_interned(interner, sep)
-    }
-}
-
-impl InternedString {
-    pub fn to_string(self, interner: &StringInterner) -> String {
-        interner.get_string(self)
-    }
-
-    pub fn borrow<'intern>(self, interner: &'intern StringInterner) -> Ref<'intern, String> {
-        interner.borrow(self)
-    }
-}
-
-macro_rules! interner {
-    ($interner:expr) => {
-        macro_rules! istr {
-            ($str:expr) => {
-                $interner.get($str)
-            };
-        }
-    };
-}
-pub(crate) use interner;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Token {
@@ -213,12 +97,12 @@ impl Token {
 }
 
 #[derive(Debug)]
-pub enum PartialToken<'source> {
+pub enum PartialToken {
     UndefinedOrWhitespace,
-    LiteralFloat(SourceString<'source>),
-    Operator(SourceString<'source>),
-    Identifier(SourceString<'source>),
-    String(String), //this one is not zero copy because the string is escaped during lexical analysis, it's a new allocation
+    LiteralFloat(String),
+    Operator(String),
+    Identifier(String),
+    String(String),
     NewLine,
     Comma,
     OpenArrayBracket,
@@ -227,7 +111,7 @@ pub enum PartialToken<'source> {
     Colon,
 }
 
-impl<'source> PartialToken<'source> {
+impl PartialToken {
     fn to_token(self, interner: &StringInterner) -> Token {
         match self {
             Self::UndefinedOrWhitespace => {
@@ -252,7 +136,7 @@ impl<'source> PartialToken<'source> {
                 "while" => Token::WhileKeyword,
                 "break" => Token::BreakKeyword,
                 "struct" => Token::StructDef,
-                _ => Token::Identifier(interner.get(s)),
+                _ => Token::Identifier(interner.get(&s)),
             },
             Self::Comma => Token::Comma,
             Self::Colon => Token::Colon,
@@ -299,18 +183,18 @@ impl<'source> PartialToken<'source> {
     }
 }
 
-pub struct Tokenizer<'source, 'interner> {
+pub struct Tokenizer<'interner> {
     index: usize,
-    source: SourceString<'source>,
+    source: String,
     chars: Vec<char>,
-    cur_partial_token: PartialToken<'source>,
+    cur_partial_token: PartialToken,
     final_result: Vec<Token>,
     eater_buf: String,
-    interner: &'interner StringInterner
+    interner: &'interner StringInterner,
 }
 
-impl<'source, 'interner> Tokenizer<'source, 'interner> {
-    pub fn new(source: SourceString<'source>, interner: &'interner StringInterner) -> Tokenizer<'source, 'interner> {
+impl<'interner> Tokenizer<'interner> {
+    pub fn new(source: String, interner: &'interner StringInterner) -> Tokenizer<'interner> {
         let chars = source.chars().collect::<Vec<_>>();
         Tokenizer {
             index: 0,
@@ -319,7 +203,7 @@ impl<'source, 'interner> Tokenizer<'source, 'interner> {
             cur_partial_token: PartialToken::UndefinedOrWhitespace,
             final_result: vec![],
             eater_buf: String::new(),
-            interner
+            interner,
         }
     }
 
@@ -357,7 +241,7 @@ impl<'source, 'interner> Tokenizer<'source, 'interner> {
         ate
     }
 
-    fn eat_identifier(&mut self) -> Option<&'source str> {
+    fn eat_identifier(&mut self) -> Option<&str> {
         let start = self.index;
         let first_char_is_valid_identifier =
             self.can_go() && self.cur().is_ascii_alphabetic() || self.cur() == '_';
@@ -436,7 +320,10 @@ impl<'source, 'interner> Tokenizer<'source, 'interner> {
             return;
         }
 
-        let cur_token = std::mem::replace(&mut self.cur_partial_token, WHITESPACE);
+        let cur_token = std::mem::replace(
+            &mut self.cur_partial_token,
+            PartialToken::UndefinedOrWhitespace,
+        );
 
         let as_token = cur_token.to_token(self.interner);
         self.final_result.push(as_token);
@@ -457,7 +344,7 @@ impl<'source, 'interner> Tokenizer<'source, 'interner> {
         (true, matched_chars)
     }
 
-    fn match_first_and_advance<'a>(&mut self, query: &'a [&'a str]) -> Option<&'source str> {
+    fn match_first_and_advance<'a>(&mut self, query: &'a [&'a str]) -> Option<&str> {
         for q in query {
             let cur_idx = self.index;
             let (success, len) = self.match_partial(q);
@@ -487,7 +374,8 @@ impl<'source, 'interner> Tokenizer<'source, 'interner> {
                 self.eat_char('-');
                 self.eat_numbers();
                 let end_idx = self.index;
-                self.cur_partial_token = PartialToken::LiteralFloat(&self.source[cur_idx..end_idx]);
+                self.cur_partial_token =
+                    PartialToken::LiteralFloat(self.source[cur_idx..end_idx].to_string());
                 self.reset_eater_buffer();
             } else if self.cur() == ',' {
                 self.cur_partial_token = PartialToken::Comma;
@@ -531,11 +419,11 @@ impl<'source, 'interner> Tokenizer<'source, 'interner> {
                 //if it's whitespace and there's a pending token, add it
                 self.next();
             } else if let Some(s) = self.match_first_and_advance(operators) {
-                self.cur_partial_token = PartialToken::Operator(s);
+                self.cur_partial_token = PartialToken::Operator(s.to_string());
                 self.commit_current_token();
             } else if self.cur().is_ascii_alphabetic() || self.cur() == '_' {
                 let identifier = self.eat_identifier().unwrap();
-                self.cur_partial_token = PartialToken::Identifier(identifier);
+                self.cur_partial_token = PartialToken::Identifier(identifier.to_string());
                 self.reset_eater_buffer();
             } else if self.cur() == '\'' || self.cur() == '"' {
                 self.eat_string_literal();
@@ -553,8 +441,11 @@ impl<'source, 'interner> Tokenizer<'source, 'interner> {
     }
 }
 
-pub fn tokenize<'source, 'interner>(source: &'source str, interner: &'interner StringInterner) -> Result<Vec<Token>, String> {
-    Tokenizer::new(source, interner).tokenize()
+pub fn tokenize<'interner>(
+    source: &str,
+    interner: &'interner StringInterner,
+) -> Result<Vec<Token>, String> {
+    Tokenizer::new(source.to_string(), interner).tokenize()
 }
 
 #[cfg(test)]
@@ -690,7 +581,10 @@ mod tests {
     #[test]
     fn tokenizer_number_space_operator_lots_of_space_number() -> Result<(), String> {
         let mut i = StringInterner::new();
-        let result = tokenize("6         +                                6.2312e99", &mut i)?;
+        let result = tokenize(
+            "6         +                                6.2312e99",
+            &mut i,
+        )?;
         assert_eq!(
             result,
             [
@@ -777,9 +671,9 @@ mod tests {
 
     //macro to fetch an interned string
     macro_rules! istr {
-        ($s:expr, $interner:expr) => { 
+        ($s:expr, $interner:expr) => {
             $interner.get($s)
-        }
+        };
     }
 
     #[test]
@@ -885,7 +779,8 @@ mod tests {
         let result = tokenize(
             "if x == 0:
     x = x + 1",
-        &mut i)?;
+            &mut i,
+        )?;
         assert_eq!(
             result,
             [
@@ -1009,7 +904,10 @@ mod tests {
         let result = tokenize("raise SomeError", &mut i)?;
         assert_eq!(
             result,
-            [Token::RaiseKeyword, Token::Identifier(istr!("SomeError", i).into())]
+            [
+                Token::RaiseKeyword,
+                Token::Identifier(istr!("SomeError", i).into())
+            ]
         );
         Ok(())
     }

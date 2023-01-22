@@ -1,15 +1,11 @@
-
-
 use super::hir::{
     Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
     InferredTypeHIRRoot, NotChecked, HIR,
 };
+use crate::interner::InternedString;
 
 use crate::{
-    ast::{
-        lexer::InternedString,
-        parser::{Expr, AST},
-    },
+    ast::parser::{Expr, AST},
     types::type_instance_db::TypeInstanceId,
 };
 
@@ -722,7 +718,8 @@ def main(x: i32, y: i64, z: f64, name: str) -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main(x: i32, y: i64, z: f64, name: str) -> i32:
@@ -1555,8 +1552,11 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result =
-            mir_printer::print_mir_node(&result.mir.last().unwrap(), &result.type_db, &src.interner);
+        let final_result = mir_printer::print_mir_node(
+            &result.mir.last().unwrap(),
+            &result.type_db,
+            &src.interner,
+        );
         println!("{}", final_result);
         let expected = "
 def main() -> i32:

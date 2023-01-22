@@ -6,6 +6,7 @@
 #![feature(string_leak)]
 #![feature(once_cell)]
 #[macro_use]
+mod interner;
 mod ast;
 mod commons;
 mod compiler;
@@ -14,8 +15,6 @@ mod compiler;
 mod llvm;
 mod semantic;
 mod types;
-
-
 
 //use crate::compiler::donkey_backend::generate_donkey_vm;
 
@@ -35,7 +34,6 @@ use std::env;
 extern crate time_test;
 
 use crate::semantic::mir_printer;
-
 
 //use compiler::donkey_backend::DonkeyEmitter;
 //use donkey_vm::asm::assembler::DonkeyProgram;

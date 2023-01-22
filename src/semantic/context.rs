@@ -4,13 +4,12 @@ use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotChecked};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 use super::type_checker::typecheck;
-use crate::ast::lexer::{StringInterner};
 use crate::ast::{lexer, parser};
+use crate::interner::StringInterner;
 use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
 use crate::types::type_errors::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
-
 pub struct LoadedFile {
     pub file_name: String,
     pub ast: AST,
@@ -31,6 +30,7 @@ impl Source {
     }
 }
 impl Source {
+    #[allow(dead_code)]
     pub fn load_str_ref(self: &mut Source, file_name: &str, source: &str) {
         self.load(file_name.to_string(), source.to_string())
     }
@@ -41,7 +41,10 @@ impl Source {
             ast: AST::Break,
             contents: source.leak(),
         });
-        let tokens = lexer::tokenize(self.loaded_files.last().unwrap().contents.as_ref(), &self.interner);
+        let tokens = lexer::tokenize(
+            self.loaded_files.last().unwrap().contents.as_ref(),
+            &self.interner,
+        );
         let ast = parser::parse_ast(tokens.unwrap());
         let root = parser::AST::Root(ast);
         self.loaded_files.last_mut().unwrap().ast = root;
@@ -65,7 +68,7 @@ pub struct Analyzer<'source, 'interner> {
     pub globals: NameRegistry,
     pub type_errors: TypeErrors<'source>,
     pub hir: Vec<Vec<InferredTypeHIRRoot<'source>>>,
-    interner: &'interner StringInterner
+    interner: &'interner StringInterner,
 }
 
 impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
@@ -77,10 +80,11 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
             mir: vec![],
             hir: vec![],
             unchecked_mir: vec![],
-            interner
+            interner,
         }
     }
 
+    #[allow(dead_code)]
     pub fn print_errors(&self) {
         println!(
             "{}",
@@ -88,6 +92,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
         )
     }
 
+    #[allow(dead_code)]
     pub fn generate_mir(&mut self, source: &'source Source) {
         self.generate_mir_and_typecheck(source, false);
     }
@@ -106,7 +111,11 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                 ) {
                     Ok(hir) => hir,
                     Err(_e) => {
-                        let printer = TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.interner);
+                        let printer = TypeErrorPrinter::new(
+                            &self.type_errors,
+                            &self.type_db,
+                            &source.interner,
+                        );
                         panic!(
                             "build_name_registry_and_resolve_signatures Err\n{}",
                             printer
@@ -123,7 +132,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                 &self.globals,
                 &first_assignment_hir,
                 &mut self.type_errors,
-                &source.interner
+                &source.interner,
             ) {
                 panic!("detect_undeclared_vars_and_redeclarations Err: {e:#?}");
             }
@@ -133,18 +142,24 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                 &mut self.type_db,
                 first_assignment_hir,
                 &mut self.type_errors,
-                &source.interner
+                &source.interner,
             ) {
                 Ok(_) if self.type_errors.count() > 0 => {
-                    let printer = TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.interner);
+                    let printer =
+                        TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.interner);
                     panic!("{}", printer);
                 }
                 Ok(final_hir) => {
                     self.hir.push(final_hir.clone());
                     let mir = hir_to_mir(final_hir);
                     if do_typecheck {
-                        let typechecked =
-                            typecheck(mir, &self.type_db, &self.globals, &mut self.type_errors, &source.interner);
+                        let typechecked = typecheck(
+                            mir,
+                            &self.type_db,
+                            &self.globals,
+                            &mut self.type_errors,
+                            &source.interner,
+                        );
                         if self.type_errors.count() == 0 {
                             self.mir.extend(typechecked.unwrap());
                         }
@@ -161,15 +176,16 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
 #[cfg(test)]
 pub mod test_utils {
     use crate::{
+        interner::StringInterner,
         semantic::{hir::NotChecked, mir::MIRTopLevelNode},
-        types::type_instance_db::TypeInstanceManager, ast::lexer::StringInterner,
+        types::type_instance_db::TypeInstanceManager,
     };
 
-    use super::{Source, Analyzer};
-
+    use super::{Analyzer, Source};
 
     macro_rules! tls_interner {
         ($interner:expr) => {
+            #[allow(unused_macros)] //This IS being used!
             macro_rules! istr {
                 ($str:expr) => {
                     $interner.with(|i| i.get($str))
@@ -183,7 +199,7 @@ pub mod test_utils {
     pub struct AnalysisWithoutTypecheckResult<'source, 'interner> {
         pub mir: Vec<MIRTopLevelNode<'source, NotChecked>>,
         pub type_db: TypeInstanceManager<'interner>,
-        pub interner: &'interner StringInterner
+        pub interner: &'interner StringInterner,
     }
 
     pub fn parse<'a, 'f: 'a>(s: &'a str) -> Source {
@@ -206,14 +222,14 @@ pub mod test_utils {
     }
 
     pub fn do_analysis_no_typecheck<'s>(
-        source: &'s Source
+        source: &'s Source,
     ) -> AnalysisWithoutTypecheckResult<'s, 's> {
         let mut ctx = Analyzer::new(&source.interner);
         ctx.generate_mir(source);
         return AnalysisWithoutTypecheckResult {
             mir: ctx.unchecked_mir,
             type_db: ctx.type_db,
-            interner: &source.interner
+            interner: &source.interner,
         };
     }
 }
@@ -227,7 +243,9 @@ mod tests {
     use crate::{
         ast::lexer::Operator,
         semantic::{
-            context::test_utils::{do_analysis, parse}, hir_printer::HIRPrinter, hir::HIRTypeDisplayer
+            context::test_utils::{do_analysis, parse},
+            hir::HIRTypeDisplayer,
+            hir_printer::HIRPrinter,
         },
     };
 
@@ -447,7 +465,7 @@ def main():
         );
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
-  
+
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
         println!("{}", final_result);
@@ -842,14 +860,16 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.type_not_found.len(), 1);
 
-        let printer = HIRTypeDisplayer::new(&analyzed.type_errors.type_not_found[0].type_name, analyzed.interner);
-       
-        assert_eq!(
-            printer.to_string(),
-            "i65"
+        let printer = HIRTypeDisplayer::new(
+            &analyzed.type_errors.type_not_found[0].type_name,
+            analyzed.interner,
         );
+
+        assert_eq!(printer.to_string(), "i65");
         assert_eq!(
-            analyzed.type_errors.type_not_found[0].on_element.get_name(analyzed.interner),
+            analyzed.type_errors.type_not_found[0]
+                .on_element
+                .get_name(analyzed.interner),
             "my_function"
         );
     }

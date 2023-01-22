@@ -1,14 +1,14 @@
 use std::fmt::Display;
 use std::fmt::Write;
 
-use crate::ast::lexer::InternedString;
 use crate::ast::lexer::Operator;
-use crate::ast::lexer::PrintableInternedString;
-use crate::ast::lexer::StringInterner;
 use crate::ast::parser::ASTIfStatement;
 use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
+use crate::interner::InternedString;
+use crate::interner::PrintableInternedString;
+use crate::interner::StringInterner;
 use crate::types::type_constructor_db::GenericParameter;
 use crate::types::type_constructor_db::TypeUsage;
 use crate::types::type_instance_db::TypeInstanceId;
@@ -664,7 +664,6 @@ pub fn ast_globals_to_hir<'source, 'interner>(
 #[cfg(test)]
 mod tests {
 
-
     thread_local! {
         static INTERNER: StringInterner = StringInterner::new();
     }
@@ -672,7 +671,6 @@ mod tests {
     tls_interner!(INTERNER);
     use super::*;
 
-    use crate::ast::lexer::{StringInterner};
     use crate::ast::parser::parse_ast;
     use crate::semantic::context::test_utils::tls_interner;
     use crate::semantic::hir;

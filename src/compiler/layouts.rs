@@ -6,11 +6,10 @@ use std::{
 };
 
 use crate::{
+    interner::InternedString,
     semantic::mir::{MIRScope, ScopeId},
-    types::type_instance_db::TypeInstanceManager, ast::lexer::InternedString,
+    types::type_instance_db::TypeInstanceManager,
 };
-
-
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
 pub struct Bytes(pub u32);

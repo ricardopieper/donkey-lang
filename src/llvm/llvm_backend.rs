@@ -14,8 +14,9 @@ use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnu
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{AddressSpace, OptimizationLevel};
 
-use crate::ast::lexer::{Operator, InternedString, StringInterner};
+use crate::ast::lexer::Operator;
 use crate::compiler::layouts::FunctionLayout;
+use crate::interner::{InternedString, StringInterner};
 use crate::llvm::linker::{link, LinkerError};
 use crate::semantic::hir::{HIRExpr, LiteralHIRExpr};
 
@@ -165,9 +166,9 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         } else {
             Some(inkwell::module::Linkage::Private)
         };
-        let function = self
-            .module
-            .add_function(&function_name.borrow(self.interner), function_type, linkage);
+        let function =
+            self.module
+                .add_function(&function_name.borrow(self.interner), function_type, linkage);
 
         for (i, param) in function.get_param_iter().enumerate() {
             param.set_name(&parameters[i].name.borrow(self.interner));
@@ -202,7 +203,10 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         alloca
     }
 
-    pub fn generate_for_top_lvl<'source>(&mut self, node: &'source MIRTopLevelNode<'source, Checked>) {
+    pub fn generate_for_top_lvl<'source>(
+        &mut self,
+        node: &'source MIRTopLevelNode<'source, Checked>,
+    ) {
         match node {
             MIRTopLevelNode::DeclareFunction {
                 function_name,
@@ -224,7 +228,9 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
                 for (i, param) in function_signature.get_param_iter().enumerate() {
                     let param_name = &parameters[i].name;
-                    let alloca = self.builder.build_alloca(param.get_type(), &param_name.borrow(self.interner));
+                    let alloca = self
+                        .builder
+                        .build_alloca(param.get_type(), &param_name.borrow(self.interner));
                     self.builder.build_store(alloca, param);
                     llvm_variables.insert(*param_name, alloca.into());
                 }
@@ -296,8 +302,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                                 if path.len() > 1 {
                                     panic!("Assignment to path with len > 1")
                                 }
-                                let ptr =
-                                    *symbol_table.get(&(path[0], block.scope)).unwrap();
+                                let ptr = *symbol_table.get(&(path[0], block.scope)).unwrap();
 
                                 let expr_compiled = self
                                     .compile_expr_load(block.scope, &symbol_table, expression)
@@ -321,7 +326,10 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                                 if let Some(f) = self.functions.get(function) {
                                     self.builder.build_call(*f, &llvm_args, &self.make_temp(""));
                                 } else {
-                                    panic!("Function not yet added to llvm IR {function}", function = function.borrow(self.interner));
+                                    panic!(
+                                        "Function not yet added to llvm IR {function}",
+                                        function = function.borrow(self.interner)
+                                    );
                                 }
                             }
                         }
@@ -415,7 +423,10 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                         null_terminated.push('\0');
 
                         //let buf_val = self.context.const_string(null_terminated.as_bytes(), true);
-                        let len_val = self.context.i64_type().const_int(s.borrow(self.interner).len() as u64, false);
+                        let len_val = self
+                            .context
+                            .i64_type()
+                            .const_int(s.borrow(self.interner).len() as u64, false);
                         let str = self.type_db.find_by_name("str").unwrap();
                         let llvm_str_type = self.make_llvm_type(str.id);
 
@@ -927,7 +938,7 @@ fn build_function_symbol_table<'mir, 'function_layout, 'ctx>(
     body: &'mir [MIRBlock<Checked>],
     scopes: &'mir [MIRScope],
     function_layout: &'function_layout FunctionLayout,
-    llvm_variables: HashMap<InternedString, PointerValue<'ctx>>
+    llvm_variables: HashMap<InternedString, PointerValue<'ctx>>,
 ) -> FunctionSymbolTable<'ctx> {
     let mut symbol_table = HashMap::<(InternedString, ScopeId), PointerValue<'ctx>>::new();
     for block in body.iter() {
@@ -962,7 +973,7 @@ fn optimize_module(target_machine: &TargetMachine, module: &Module) {
 pub fn generate_llvm<'source, 'interner>(
     type_db: &TypeInstanceManager<'interner>,
     mir_top_level_nodes: &[MIRTopLevelNode<'source, Checked>],
-    interner: &'interner StringInterner
+    interner: &'interner StringInterner,
 ) -> Result<(), Box<dyn Error>> {
     let context = Context::create();
     let module = context.create_module("program");
@@ -976,7 +987,7 @@ pub fn generate_llvm<'source, 'interner>(
         type_cache: HashMap::new(),
         next_temporary: 0,
         functions: HashMap::new(),
-        interner
+        interner,
     };
 
     for mir_node in mir_top_level_nodes {

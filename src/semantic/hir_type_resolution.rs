@@ -1,12 +1,10 @@
-use std::{borrow::Borrow};
-
-use crate::{types::{
+use super::{compiler_errors::CompilerError, hir::HIRType};
+use crate::interner::{InternedString, StringInterner};
+use crate::types::{
     type_constructor_db::TypeUsage,
     type_errors::{TypeErrors, TypeNotFound},
     type_instance_db::TypeInstanceManager,
-}, ast::lexer::{InternedString, StringInterner}};
-
-use super::{compiler_errors::CompilerError, hir::HIRType};
+};
 
 #[derive(Copy, Clone)]
 pub enum RootElementType {
@@ -14,11 +12,13 @@ pub enum RootElementType {
     Function(InternedString),
 }
 
-
 impl<'s> RootElementType {
+    #[allow(dead_code)]
     pub fn get_name(&self, interner: &StringInterner) -> String {
         match self {
-            RootElementType::Struct(s) | RootElementType::Function(s) => interner.get_string(*s).to_string(),
+            RootElementType::Struct(s) | RootElementType::Function(s) => {
+                interner.get_string(*s).to_string()
+            }
         }
     }
 

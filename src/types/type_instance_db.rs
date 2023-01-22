@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::{ast::lexer::{Operator, InternedString, StringInterner}, compiler::layouts::Bytes};
+use crate::interner::{InternedString, StringInterner};
+use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
 use super::type_constructor_db::{
     TypeConstructor, TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeUsage,
@@ -96,7 +97,6 @@ pub struct CommonTypeInstances {
     pub bool: TypeInstanceId,
 }
 
-
 pub enum StructMember<'type_db> {
     Field(&'type_db TypeInstanceStructField, usize),
     Method(&'type_db TypeInstanceStructMethod),
@@ -109,7 +109,6 @@ pub struct TypeInstanceManager<'interner> {
     pub common_types: CommonTypeInstances,
 }
 
-
 impl<'interner> TypeInstanceManager<'interner> {
     pub fn new(interner: &'interner StringInterner) -> TypeInstanceManager<'interner> {
         let mut item = TypeInstanceManager {
@@ -117,7 +116,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             constructors: TypeConstructorDatabase::new(interner),
             common_types: CommonTypeInstances {
                 ..Default::default()
-            }
+            },
         };
         item.init_builtin();
         item
@@ -243,9 +242,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
             TypeUsage::Generic(param) => type_args
                 .get(&param.0)
-                .ok_or_else(|| TypeConstructionError::TypeNotFound {
-                    name: param.0,
-                })
+                .ok_or_else(|| TypeConstructionError::TypeNotFound { name: param.0 })
                 .map(|op| *op),
             TypeUsage::Parameterized(constructor_id, params) => {
                 let mut constructed = vec![];
@@ -273,7 +270,12 @@ impl<'interner> TypeInstanceManager<'interner> {
         }
 
         let id = TypeInstanceId(self.types.len());
-        self.types.push(make_base_instance(id, c, positional_args, &self.constructors.interner));
+        self.types.push(make_base_instance(
+            id,
+            c,
+            positional_args,
+            &self.constructors.interner,
+        ));
 
         //build a map of argname => type id
         let mut type_args = HashMap::new();
@@ -299,7 +301,10 @@ impl<'interner> TypeInstanceManager<'interner> {
 
         let name = if positional_args.is_empty() {
             let constructor = self.constructors.find(constructor_id);
-            self.constructors.interner.get_string(constructor.name).to_string()
+            self.constructors
+                .interner
+                .get_string(constructor.name)
+                .to_string()
         } else {
             let constructor = self.constructors.find(constructor_id);
             let generics = positional_args
@@ -307,7 +312,10 @@ impl<'interner> TypeInstanceManager<'interner> {
                 .map(|x| self.get_instance(*x).name.clone())
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{base}<{generics}>", base = self.constructors.interner.get_string(constructor.name))
+            format!(
+                "{base}<{generics}>",
+                base = self.constructors.interner.get_string(constructor.name)
+            )
         };
 
         {
@@ -473,7 +481,7 @@ fn make_base_instance(
     id: TypeInstanceId,
     constructor: &TypeConstructor,
     positional_args: &[TypeInstanceId],
-    interner: &StringInterner
+    interner: &StringInterner,
 ) -> TypeInstance {
     TypeInstance {
         id,

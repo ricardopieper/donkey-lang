@@ -1,7 +1,6 @@
-use std::{fmt::Display};
-
+use crate::interner::{InternedString, StringInterner};
 use crate::{
-    ast::lexer::{Operator, StringInterner, InternedString},
+    ast::lexer::Operator,
     semantic::{
         hir::{Checked, HIRExpr, HIRExprMetadata, HIRType, HIRTypeDisplayer},
         hir_printer::{operator_str, HIRExprPrinter},
@@ -9,6 +8,7 @@ use crate::{
         type_checker::FunctionName,
     },
 };
+use std::fmt::Display;
 
 use super::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
 
@@ -73,7 +73,7 @@ pub struct FunctionCallContext {
     pub argument_position: usize,
 }
 
-impl TypeErrorDisplay for TypeMismatch< FunctionCallContext> {
+impl TypeErrorDisplay for TypeMismatch<FunctionCallContext> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -541,9 +541,9 @@ macro_rules! make_type_errors {
 }
 
 make_type_errors!(
-    assign_mismatches: Vec<TypeMismatch< AssignContext>>,
-    return_type_mismatches: Vec<TypeMismatch< ReturnTypeContext>>,
-    function_call_mismatches: Vec<TypeMismatch< FunctionCallContext>>,
+    assign_mismatches: Vec<TypeMismatch<AssignContext>>,
+    return_type_mismatches: Vec<TypeMismatch<ReturnTypeContext>>,
+    function_call_mismatches: Vec<TypeMismatch<FunctionCallContext>>,
     function_call_argument_count: Vec<FunctionCallArgumentCountMismatch>,
     call_non_callable: Vec<CallToNonCallableType>,
     type_not_found: Vec<TypeNotFound>,

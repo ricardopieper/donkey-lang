@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::lexer::{InternedString};
+use crate::interner::InternedString;
 use crate::types::type_constructor_db::{TypeKind, TypeSign};
 use crate::types::type_errors::{TypeConstructionFailure, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
@@ -19,8 +19,7 @@ pub struct PartiallyResolvedFunctionSignature {
 pub struct NameRegistry {
     names: HashMap<InternedString, TypeInstanceId>,
     //This could help still provide some type inference when just enough information is available
-    partially_resolved_function_sigs:
-        HashMap<InternedString, PartiallyResolvedFunctionSignature>,
+    partially_resolved_function_sigs: HashMap<InternedString, PartiallyResolvedFunctionSignature>,
 }
 
 impl NameRegistry {
