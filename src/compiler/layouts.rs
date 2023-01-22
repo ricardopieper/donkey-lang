@@ -7,10 +7,10 @@ use std::{
 
 use crate::{
     semantic::mir::{MIRScope, ScopeId},
-    types::type_instance_db::TypeInstanceManager,
+    types::type_instance_db::TypeInstanceManager, ast::lexer::InternedString,
 };
 
-use crate::lexer::SourceString;
+
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default, PartialOrd, Ord)]
 pub struct Bytes(pub u32);
@@ -210,11 +210,11 @@ impl ByteRange {
     }
 }
 
-fn build_write_scope_byte_layout<'source>(
-    scope: &MIRScope<'source>,
-    all_scopes: &[MIRScope<'source>],
-    type_db: &TypeInstanceManager<'source>,
-) -> HashMap<SourceString<'source>, (ByteRange, ScopeId)> {
+fn build_write_scope_byte_layout<'interner>(
+    scope: &MIRScope,
+    all_scopes: &[MIRScope],
+    type_db: &TypeInstanceManager<'interner>,
+) -> HashMap<InternedString, (ByteRange, ScopeId)> {
     let mut current_index = scope.id;
     let mut found_var = vec![];
     loop {
@@ -230,7 +230,7 @@ fn build_write_scope_byte_layout<'source>(
         current_index = scope.inherit;
     }
 
-    let mut map: HashMap<SourceString<'source>, (ByteRange, ScopeId)> = HashMap::new();
+    let mut map: HashMap<InternedString, (ByteRange, ScopeId)> = HashMap::new();
     let mut used_bytes = Bytes(0);
     for (name, size, scope) in found_var.into_iter().rev() {
         map.insert(
@@ -249,21 +249,21 @@ fn build_write_scope_byte_layout<'source>(
     map
 }
 
-pub type ScopeVariables<'source> = HashMap<SourceString<'source>, (ByteRange, ScopeId)>;
-pub type ScopesVariables<'source> = Vec<ScopeVariables<'source>>;
+pub type ScopeVariables = HashMap<InternedString, (ByteRange, ScopeId)>;
+pub type ScopesVariables = Vec<ScopeVariables>;
 
 #[derive(Debug)]
-pub struct FunctionLayout<'source> {
+pub struct FunctionLayout {
     //Tells all variables accessible on a given scope, and on which scope it was declared
-    pub variables_for_each_scope: ScopesVariables<'source>,
+    pub variables_for_each_scope: ScopesVariables,
 
     pub largest_scope_size: Bytes,
 }
 
-pub fn generate_function_layout<'source>(
-    scopes: &[MIRScope<'source>],
-    type_db: &TypeInstanceManager<'source>,
-) -> FunctionLayout<'source> {
+pub fn generate_function_layout<'interner>(
+    scopes: &[MIRScope],
+    type_db: &TypeInstanceManager<'interner>,
+) -> FunctionLayout {
     let scope_byte_layout = scopes
         .iter()
         .map(|scope| build_write_scope_byte_layout(scope, scopes, type_db))

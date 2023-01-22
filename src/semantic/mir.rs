@@ -1,17 +1,13 @@
-use std::borrow::Cow;
 
-use super::{
-    hir::{
-        Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
-        InferredTypeHIRRoot, NotChecked, HIR,
-    },
-    hir_printer::expr_str,
-    mir_printer::PrintableExpression,
+
+use super::hir::{
+    Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
+    InferredTypeHIRRoot, NotChecked, HIR,
 };
 
 use crate::{
     ast::{
-        lexer::SourceString,
+        lexer::InternedString,
         parser::{Expr, AST},
     },
     types::type_instance_db::TypeInstanceId,
@@ -19,12 +15,6 @@ use crate::{
 
 pub type TypecheckPendingExpression<'source> = HIRExpr<'source, TypeInstanceId, NotChecked>;
 pub type TypecheckedExpression<'source> = HIRExpr<'source, TypeInstanceId, Checked>;
-
-impl<'source, T> PrintableExpression for HIRExpr<'source, TypeInstanceId, T> {
-    fn print_expr(&self) -> Cow<'source, str> {
-        expr_str(self)
-    }
-}
 
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
@@ -44,15 +34,15 @@ but represent the main parts of the program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRTopLevelNode<'source, TTypecheckStateExpr> {
     IntrinsicFunction {
-        function_name: SourceString<'source>,
-        parameters: Vec<MIRTypedBoundName<'source>>,
+        function_name: InternedString,
+        parameters: Vec<MIRTypedBoundName>,
         return_type: TypeInstanceId,
     },
     DeclareFunction {
-        function_name: SourceString<'source>,
-        parameters: Vec<MIRTypedBoundName<'source>>,
+        function_name: InternedString,
+        parameters: Vec<MIRTypedBoundName>,
         body: Vec<MIRBlock<'source, TTypecheckStateExpr>>,
-        scopes: Vec<MIRScope<'source>>,
+        scopes: Vec<MIRScope>,
         return_type: TypeInstanceId,
     },
 }
@@ -69,16 +59,16 @@ a scope and a block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockNode<'source, TTypecheckState> {
     Assign {
-        path: Vec<SourceString<'source>>,
+        path: Vec<InternedString>,
         expression: HIRExpr<'source, TypeInstanceId, TTypecheckState>,
-        meta_ast: &'source AST<'source>,
-        meta_expr: &'source Expr<'source>,
+        meta_ast: &'source AST,
+        meta_expr: &'source Expr,
     },
     FunctionCall {
-        function: SourceString<'source>,
+        function: InternedString,
         args: Vec<HIRExpr<'source, TypeInstanceId, TTypecheckState>>,
-        meta_ast: &'source AST<'source>,
-        meta_expr: &'source Expr<'source>,
+        meta_ast: &'source AST,
+        meta_expr: &'source Expr,
         return_type: TypeInstanceId,
     },
     //@TODO Add method call here
@@ -91,8 +81,8 @@ pub enum MIRBlockNode<'source, TTypecheckState> {
  Everything that needs a name and a type can use a `MIRTypedBoundName`.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRTypedBoundName<'source> {
-    pub name: SourceString<'source>,
+pub struct MIRTypedBoundName {
+    pub name: InternedString,
     pub type_instance: TypeInstanceId,
 }
 
@@ -102,10 +92,10 @@ pub struct MIRTypedBoundName<'source> {
   can introduce a new scope, and you don't have access to variables declared after the fact.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRScope<'source> {
+pub struct MIRScope {
     pub id: ScopeId,
     pub inherit: ScopeId,
-    pub boundnames: Vec<MIRTypedBoundName<'source>>,
+    pub boundnames: Vec<MIRTypedBoundName>,
 }
 
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
@@ -155,7 +145,7 @@ struct MIRFunctionEmitter<'source> {
     current_scope: ScopeId,
     current_block: BlockId,
     blocks: Vec<MIRMaybeUnfinishedBlock<'source>>,
-    scopes: Vec<MIRScope<'source>>,
+    scopes: Vec<MIRScope>,
     goto_stack: Vec<BlockId>,
 }
 
@@ -200,7 +190,7 @@ impl<'source> MIRFunctionEmitter<'source> {
     fn scope_add_variable(
         &mut self,
         scope_id: ScopeId,
-        var: SourceString<'source>,
+        var: InternedString,
         typedef: TypeInstanceId,
     ) {
         let scope = &mut self.scopes[scope_id.0];
@@ -248,7 +238,7 @@ impl<'source> MIRFunctionEmitter<'source> {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::EmptyReturn);
     }
 
-    fn finish(self) -> (Vec<MIRScope<'source>>, Vec<MIRBlock<'source, NotChecked>>) {
+    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<'source, NotChecked>>) {
         let blocks = self
             .blocks
             .into_iter()
@@ -360,7 +350,7 @@ fn process_body<'source>(
                         let pending_args = args.iter().map(std::clone::Clone::clone).collect();
 
                         emitter.emit(MIRBlockNode::FunctionCall {
-                            function: var,
+                            function: *var,
                             args: pending_args,
                             meta_ast,
                             meta_expr,
@@ -540,8 +530,8 @@ fn generate_or_get_fallback_block<'source>(
 }
 
 pub fn process_hir_funcdecl<'source>(
-    function_name: SourceString<'source>,
-    parameters: Vec<HIRTypedBoundName<'source, TypeInstanceId>>,
+    function_name: InternedString,
+    parameters: Vec<HIRTypedBoundName<TypeInstanceId>>,
     body: Vec<InferredTypeHIR<'source>>,
     return_type: TypeInstanceId,
     is_intrinsic: bool,
@@ -652,7 +642,7 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &result.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -675,7 +665,7 @@ def main():
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> Void:
@@ -709,7 +699,7 @@ def main(x: i32) -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
@@ -732,7 +722,7 @@ def main(x: i32, y: i64, z: f64, name: str) -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db);
+        let final_result = mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main(x: i32, y: i64, z: f64, name: str) -> i32:
@@ -758,7 +748,7 @@ def main(x: i32) -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
@@ -783,7 +773,7 @@ def main(x: i32) -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
@@ -820,7 +810,7 @@ def main(x: i32) -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main(x: i32) -> i32:
@@ -871,7 +861,7 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -910,7 +900,7 @@ def main():
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> Void:
@@ -959,7 +949,7 @@ def main():
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> Void:
@@ -1014,7 +1004,7 @@ def main():
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def print(x: i32) -> Void
@@ -1061,7 +1051,7 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -1105,7 +1095,7 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -1183,7 +1173,7 @@ def main() -> i32:
     ",
         );
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def print(x: i32) -> Void
@@ -1241,7 +1231,7 @@ def main() -> i32:
     ",
         );
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def print(x: i32) -> Void
@@ -1303,7 +1293,7 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def print(x: i32) -> Void
@@ -1371,7 +1361,7 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def print(x: i32) -> Void
@@ -1459,7 +1449,7 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -1566,7 +1556,7 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result =
-            mir_printer::print_mir_node(&result.mir.last().unwrap(), &result.type_db);
+            mir_printer::print_mir_node(&result.mir.last().unwrap(), &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> i32:
@@ -1671,7 +1661,7 @@ def main():
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
         println!("{}", final_result);
         let expected = "
 def main() -> Void:

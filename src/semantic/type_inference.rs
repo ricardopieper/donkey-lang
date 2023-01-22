@@ -1,4 +1,4 @@
-use crate::ast::lexer::{Operator, SourceString};
+use crate::ast::lexer::{Operator, InternedString, StringInterner};
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
 use crate::semantic::name_registry::NameRegistry;
@@ -20,20 +20,21 @@ use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 pub type TypeInferenceInputHIRRoot<'source> = FirstAssignmentsDeclaredHIRRoot<'source>;
 pub type TypeInferenceInputHIR<'source> = FirstAssignmentsDeclaredHIR<'source>;
 
-pub struct FunctionTypeInferenceContext<'compiler_state, 'source> {
-    pub on_function: &'source str,
-    pub type_db: &'compiler_state mut TypeInstanceManager<'source>,
+pub struct FunctionTypeInferenceContext<'compiler_state, 'source, 'interner> {
+    pub on_function: RootElementType,
+    pub type_db: &'compiler_state mut TypeInstanceManager<'interner>,
     pub errors: &'compiler_state mut TypeErrors<'source>,
-    pub decls_in_scope: &'compiler_state mut NameRegistry<'source>,
+    pub decls_in_scope: &'compiler_state mut NameRegistry,
+    pub interner: &'interner StringInterner
 }
 
-impl<'source> FunctionTypeInferenceContext<'_, 'source> {
+impl<'source, 'interner> FunctionTypeInferenceContext<'_, 'source, 'interner> {
     pub fn instantiate_type(
         &mut self,
-        typedef: &HIRType<'source>,
+        typedef: &HIRType,
     ) -> Result<TypeInstanceId, CompilerError> {
         let usage = hir_type_to_usage(
-            RootElementType::Function(self.on_function),
+            self.on_function,
             typedef,
             self.type_db,
             self.errors,
@@ -44,7 +45,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                 self.errors
                     .type_construction_failure
                     .push(TypeConstructionFailure {
-                        on_element: RootElementType::Function(&self.on_function),
+                        on_element: self.on_function,
                         error: e,
                     });
                 Err(CompilerError::TypeInferenceError)
@@ -62,7 +63,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                 let decl_type = self.decls_in_scope.get(&var);
                 let Some(found_type) = decl_type else {
                     self.errors.variable_not_found.push(VariableNotFound {
-                    on_element: RootElementType::Function(self.on_function),
+                    on_element: self.on_function,
                     variable_name: var
                     });
                     return Err(CompilerError::TypeInferenceError);
@@ -78,7 +79,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                         let str_type = self
                             .type_db
                             .constructors
-                            .find_by_name("str")
+                            .find_by_name(self.interner.get("str"))
                             .expect("str intrinsic not loaded");
                         self.type_db.construct_type(str_type.id, &[]).unwrap()
                     }
@@ -116,7 +117,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
     fn compute_infer_method_call(
         &mut self,
         obj: HIRExpr<'source, ()>,
-        method_name: SourceString<'source>,
+        method_name: InternedString,
         params: Vec<HIRExpr<'source, ()>>,
         meta: HIRExprMetadata<'source>,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
@@ -130,7 +131,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         let method = type_data
             .methods
             .iter()
-            .find(|method| method.name == *method_name);
+            .find(|method| method.name == method_name);
         if let Some(method) = method {
             let method_type = self.type_db.get_instance(method.function_type);
             let return_type = method_type.function_return_type.unwrap();
@@ -147,7 +148,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             self.errors
                 .field_or_method_not_found
                 .push(FieldOrMethodNotFound {
-                    on_element: RootElementType::Function(self.on_function),
+                    on_element: self.on_function,
                     object_type: typeof_obj,
                     field_or_method: method_name,
                 });
@@ -167,7 +168,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             } else {
                 self.errors.insufficient_array_type_info.push(
                     InsufficientTypeInformationForArray {
-                        on_element: RootElementType::Function(self.on_function),
+                        on_element: self.on_function,
                     },
                 );
                 Err(CompilerError::TypeInferenceError)
@@ -192,7 +193,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                 //hint does not matter much
                 self.errors.insufficient_array_type_info.push(
                     InsufficientTypeInformationForArray {
-                        on_element: RootElementType::Function(self.on_function),
+                        on_element: self.on_function,
                     },
                 );
 
@@ -205,14 +206,14 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         &mut self,
         obj: HIRExpr<'source, ()>,
         meta: HIRExprMetadata<'source>,
-        name: SourceString<'source>,
+        name: InternedString,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let obj_expr = self.compute_and_infer_expr_type(obj, None)?;
 
         let typeof_obj = obj_expr.get_type();
         let type_data = self.type_db.get_instance(typeof_obj);
 
-        let field = type_data.fields.iter().find(|field| field.name == *name);
+        let field = type_data.fields.iter().find(|field| field.name == name);
         if let Some(field) = field {
             let resolved_type = field.field_type;
 
@@ -228,7 +229,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             self.errors
                 .field_or_method_not_found
                 .push(FieldOrMethodNotFound {
-                    on_element: RootElementType::Function(self.on_function),
+                    on_element: self.on_function,
                     object_type: typeof_obj,
                     field_or_method: name,
                 });
@@ -257,7 +258,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         }
 
         self.errors.unary_op_not_found.push(UnaryOperatorNotFound {
-            on_element: RootElementType::Function(self.on_function),
+            on_element: self.on_function,
             rhs: rhs_type,
             operator: op,
         });
@@ -291,7 +292,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 
         let Some(decl_type) = self.decls_in_scope.get(&var) else {
             self.errors.variable_not_found.push(VariableNotFound {
-                on_element: RootElementType::Function(self.on_function),
+                on_element: self.on_function,
                 variable_name: var
             });
             return Err(CompilerError::TypeInferenceError);
@@ -315,7 +316,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         } else {
             //type is fully resolved but all wrong
             self.errors.call_non_callable.push(CallToNonCallableType {
-                on_element: RootElementType::Function(self.on_function),
+                on_element: self.on_function,
                 actual_type: type_instance.id,
             });
             Err(CompilerError::TypeInferenceError)
@@ -353,7 +354,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         self.errors
             .binary_op_not_found
             .push(BinaryOperatorNotFound {
-                on_element: RootElementType::Function(self.on_function),
+                on_element: self.on_function,
                 lhs: lhs_type,
                 rhs: rhs_type,
                 operator: op,
@@ -468,7 +469,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
     fn infer_types_in_assignment(
         &mut self,
         expression: HIRExpr<'source, ()>,
-        path: Vec<SourceString<'source>>,
+        path: Vec<InternedString>,
         meta_ast: HIRAstMetadata<'source>,
         meta_expr: HIRExprMetadata<'source>,
     ) -> Result<InferredTypeHIR<'source>, CompilerError> {
@@ -483,9 +484,9 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 
     fn infer_types_in_variable_declaration(
         &mut self,
-        variable_typedecl: HIRTypeDef<'source>,
+        variable_typedecl: HIRTypeDef,
         assigned_value: HIRExpr<'source, ()>,
-        variable_name: SourceString<'source>,
+        variable_name: InternedString,
         meta_ast: HIRAstMetadata<'source>,
         meta_expr: HIRExprMetadata<'source>,
     ) -> Result<InferredTypeHIR<'source>, CompilerError> {
@@ -504,7 +505,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             None => typed_expr.get_type(),
         };
 
-        self.decls_in_scope.insert(&variable_name, actual_type);
+        self.decls_in_scope.insert(variable_name, actual_type);
 
         Ok(HIR::Declare {
             var: variable_name,
@@ -517,13 +518,13 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 
     fn infer_variable_types_in_functions<'params>(
         &mut self,
-        parameters: &[HIRTypedBoundName<'source, TypeInstanceId>],
+        parameters: &[HIRTypedBoundName<TypeInstanceId>],
         body: Vec<TypeInferenceInputHIR<'source>>,
     ) -> Result<Vec<InferredTypeHIR<'source>>, CompilerError> {
         let mut decls_in_scope = NameRegistry::new();
         for p in parameters {
             let typedef = p.typename;
-            decls_in_scope.insert(&p.name, typedef);
+            decls_in_scope.insert(p.name, typedef);
         }
         //We should add the function itself in the scope, to allow recursion!
         //Luckily the function itself is already on the globals!
@@ -534,17 +535,19 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             type_db: self.type_db,
             errors: self.errors,
             decls_in_scope: &mut decls_in_scope,
+            interner: self.interner
         };
 
         new_ctx.infer_types_in_body(body)
     }
 }
 
-pub fn infer_types<'source>(
-    globals: &mut NameRegistry<'source>,
-    type_db: &mut TypeInstanceManager<'source>,
+pub fn infer_types<'source, 'interner>(
+    globals: &mut NameRegistry,
+    type_db: &mut TypeInstanceManager<'interner>,
     mir: Vec<TypeInferenceInputHIRRoot<'source>>,
     errors: &mut TypeErrors<'source>,
+    interner: &'interner StringInterner
 ) -> Result<Vec<InferredTypeHIRRoot<'source>>, CompilerError> {
     let mut new_mir = vec![];
 
@@ -559,10 +562,11 @@ pub fn infer_types<'source>(
                 is_intrinsic,
             } => {
                 let mut inference_ctx = FunctionTypeInferenceContext {
-                    on_function: &function_name,
+                    on_function: RootElementType::Function(function_name),
                     type_db,
                     errors,
                     decls_in_scope: globals,
+                    interner
                 };
 
                 let new_body =

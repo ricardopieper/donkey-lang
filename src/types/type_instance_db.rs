@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
+use crate::{ast::lexer::{Operator, InternedString, StringInterner}, compiler::layouts::Bytes};
 
 use super::type_constructor_db::{
     TypeConstructor, TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeUsage,
@@ -8,7 +8,7 @@ use super::type_constructor_db::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeConstructionError {
-    TypeNotFound { name: String },
+    TypeNotFound { name: InternedString },
     //GenericArgumentNotFound { name: String },
     IncorrectNumberOfArgs { expected: usize, received: usize },
 }
@@ -47,13 +47,13 @@ impl Default for TypeInstanceId {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeInstanceStructMethod {
-    pub name: String,
+    pub name: InternedString,
     pub function_type: TypeInstanceId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeInstanceStructField {
-    pub name: String,
+    pub name: InternedString,
     pub field_type: TypeInstanceId,
 }
 
@@ -96,11 +96,6 @@ pub struct CommonTypeInstances {
     pub bool: TypeInstanceId,
 }
 
-pub struct TypeInstanceManager<'source> {
-    pub constructors: TypeConstructorDatabase<'source>,
-    pub types: Vec<TypeInstance>,
-    pub common_types: CommonTypeInstances,
-}
 
 pub enum StructMember<'type_db> {
     Field(&'type_db TypeInstanceStructField, usize),
@@ -108,14 +103,21 @@ pub enum StructMember<'type_db> {
     NotFound,
 }
 
-impl<'source> TypeInstanceManager<'source> {
-    pub fn new() -> TypeInstanceManager<'source> {
+pub struct TypeInstanceManager<'interner> {
+    pub constructors: TypeConstructorDatabase<'interner>,
+    pub types: Vec<TypeInstance>,
+    pub common_types: CommonTypeInstances,
+}
+
+
+impl<'interner> TypeInstanceManager<'interner> {
+    pub fn new(interner: &'interner StringInterner) -> TypeInstanceManager<'interner> {
         let mut item = TypeInstanceManager {
             types: vec![],
-            constructors: TypeConstructorDatabase::new(),
+            constructors: TypeConstructorDatabase::new(interner),
             common_types: CommonTypeInstances {
                 ..Default::default()
-            },
+            }
         };
         item.init_builtin();
         item
@@ -132,7 +134,7 @@ impl<'source> TypeInstanceManager<'source> {
     pub fn find_struct_member<'this>(
         &'this self,
         id: TypeInstanceId,
-        name: &str,
+        name: InternedString,
     ) -> StructMember<'this> {
         let instance = self.get_instance(id);
         if let Some((index, field)) = instance
@@ -227,22 +229,22 @@ impl<'source> TypeInstanceManager<'source> {
 
     pub fn construct_usage(
         &mut self,
-        usage: &TypeUsage<'source>,
+        usage: &TypeUsage,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
 
     pub fn construct_usage_generic(
         &mut self,
-        usage: &TypeUsage<'source>,
-        type_args: &HashMap<String, TypeInstanceId>,
+        usage: &TypeUsage,
+        type_args: &HashMap<InternedString, TypeInstanceId>,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         match usage {
             TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
             TypeUsage::Generic(param) => type_args
-                .get(param.0)
+                .get(&param.0)
                 .ok_or_else(|| TypeConstructionError::TypeNotFound {
-                    name: param.0.to_string(),
+                    name: param.0,
                 })
                 .map(|op| *op),
             TypeUsage::Parameterized(constructor_id, params) => {
@@ -271,7 +273,7 @@ impl<'source> TypeInstanceManager<'source> {
         }
 
         let id = TypeInstanceId(self.types.len());
-        self.types.push(make_base_instance(id, c, positional_args));
+        self.types.push(make_base_instance(id, c, positional_args, &self.constructors.interner));
 
         //build a map of argname => type id
         let mut type_args = HashMap::new();
@@ -285,7 +287,7 @@ impl<'source> TypeInstanceManager<'source> {
             }
 
             for (index, type_arg) in constructor.type_args.iter().enumerate() {
-                type_args.insert(type_arg.0.to_string(), positional_args[index]);
+                type_args.insert(type_arg.0, positional_args[index]);
             }
         }
 
@@ -297,7 +299,7 @@ impl<'source> TypeInstanceManager<'source> {
 
         let name = if positional_args.is_empty() {
             let constructor = self.constructors.find(constructor_id);
-            constructor.name.to_string()
+            self.constructors.interner.get_string(constructor.name).to_string()
         } else {
             let constructor = self.constructors.find(constructor_id);
             let generics = positional_args
@@ -305,7 +307,7 @@ impl<'source> TypeInstanceManager<'source> {
                 .map(|x| self.get_instance(*x).name.clone())
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{base}<{generics}>", base = constructor.name)
+            format!("{base}<{generics}>", base = self.constructors.interner.get_string(constructor.name))
         };
 
         {
@@ -387,7 +389,7 @@ impl<'source> TypeInstanceManager<'source> {
             let fields = constructor.fields.clone();
             for field_decl in &fields {
                 result.push(TypeInstanceStructField {
-                    name: field_decl.name.to_string(),
+                    name: field_decl.name,
                     field_type: self.construct_usage(&field_decl.field_type)?,
                 });
             }
@@ -399,7 +401,7 @@ impl<'source> TypeInstanceManager<'source> {
     fn make_methods(
         &mut self,
         constructor_id: TypeConstructorId,
-        type_args: &HashMap<String, TypeInstanceId>,
+        type_args: &HashMap<InternedString, TypeInstanceId>,
         id: TypeInstanceId,
     ) -> Result<Vec<TypeInstanceStructMethod>, TypeConstructionError> {
         let methods = {
@@ -423,7 +425,7 @@ impl<'source> TypeInstanceManager<'source> {
                 let method_type_id = self.construct_method(id, &args, return_type);
 
                 result.push(TypeInstanceStructMethod {
-                    name: method_decl.name.to_string(),
+                    name: method_decl.name,
                     function_type: method_type_id,
                 });
             }
@@ -471,12 +473,13 @@ fn make_base_instance(
     id: TypeInstanceId,
     constructor: &TypeConstructor,
     positional_args: &[TypeInstanceId],
+    interner: &StringInterner
 ) -> TypeInstance {
     TypeInstance {
         id,
         base: constructor.id,
         size: Bytes(0),
-        name: constructor.name.to_string(),
+        name: interner.get_string(constructor.name).to_string(),
         allowed_casts: vec![],
         rhs_binary_ops: vec![],
         unary_ops: vec![],
@@ -487,11 +490,5 @@ fn make_base_instance(
         function_args: vec![],
         function_return_type: None,
         is_method_of: None,
-    }
-}
-
-impl Default for TypeInstanceManager<'_> {
-    fn default() -> Self {
-        Self::new()
     }
 }

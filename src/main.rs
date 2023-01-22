@@ -4,7 +4,8 @@
 #![feature(generic_const_exprs)]
 #![feature(const_trait_impl)]
 #![feature(string_leak)]
-
+#![feature(once_cell)]
+#[macro_use]
 mod ast;
 mod commons;
 mod compiler;
@@ -14,7 +15,7 @@ mod llvm;
 mod semantic;
 mod types;
 
-use crate::ast::lexer;
+
 
 //use crate::compiler::donkey_backend::generate_donkey_vm;
 
@@ -35,6 +36,7 @@ extern crate time_test;
 
 use crate::semantic::mir_printer;
 
+
 //use compiler::donkey_backend::DonkeyEmitter;
 //use donkey_vm::asm::assembler::DonkeyProgram;
 //use donkey_vm::vm::runner::DonkeyVMRunner;
@@ -51,15 +53,13 @@ fn main() {
     let mut source = Source::new();
 
     source.load_stdlib();
-    //source.parse_last();
     source.load_file(&args[1]);
-    //source.parse_last();
 
-    let mut ctx = crate::semantic::context::Analyzer::new();
+    let mut ctx = crate::semantic::context::Analyzer::new(&source.interner);
     ctx.analyze(&source);
 
     if args.contains(&"print_mir".to_string()) {
-        let printed_mir = mir_printer::print_mir(&ctx.mir, &ctx.type_db);
+        let printed_mir = mir_printer::print_mir(&ctx.mir, &ctx.type_db, &source.interner);
         println!("MIR:\n{printed_mir}");
     }
     if args.contains(&"dump_types".to_string()) {
@@ -67,18 +67,18 @@ fn main() {
             if t.type_args.len() > 0 {
                 println!(
                     "{}<{}>",
-                    t.name,
+                    t.name.borrow(&source.interner),
                     t.type_args
                         .iter()
-                        .map(|x| x.0.as_ref())
+                        .map(|x| x.0.to_string(&source.interner))
                         .collect::<Vec<_>>()
                         .join(",")
                 )
             } else {
-                println!("{}", t.name);
+                println!("{}", t.name.borrow(&source.interner));
             }
         }
     }
 
-    generate_llvm(&ctx.type_db, &ctx.mir).unwrap();
+    generate_llvm(&ctx.type_db, &ctx.mir, &source.interner).unwrap();
 }

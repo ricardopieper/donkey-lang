@@ -1,12 +1,12 @@
-use std::borrow::Cow;
+
 use std::collections::HashSet;
 
 use super::compiler_errors::CompilerError;
-use super::hir::{Checked, HIRExpr, HIRExprMetadata, LiteralHIRExpr, NotChecked};
-use super::hir_printer::expr_str;
+use super::hir::{Checked, HIRAstMetadata, HIRExpr, HIRExprMetadata, LiteralHIRExpr, NotChecked};
+use super::hir_printer::HIRExprPrinter;
 use super::hir_type_resolution::RootElementType;
-use crate::ast::lexer::{Operator, SourceString};
-use crate::ast::parser::{Expr, AST};
+use crate::ast::lexer::{InternedString, Operator, StringInterner};
+use crate::ast::parser::{Expr};
 use crate::types::type_errors::{
     ArrayExpressionsNotAllTheSameType, AssignContext, FunctionCallArgumentCountMismatch,
     FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
@@ -31,25 +31,28 @@ use super::name_registry::NameRegistry;
 //Only when the strings are computed in-place instead of coming from source they are really cloned,
 //and only when something bad happens.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FunctionName<'source> {
-    Function(Cow<'source, str>),
+pub enum FunctionName {
+    Function(InternedString),
     #[allow(dead_code)]
     IndexAccess,
     #[allow(dead_code)]
     Method {
-        function_name: Cow<'source, str>,
-        type_name: String,
+        function_name: InternedString,
+        type_name: InternedString,
     },
 }
 
-pub struct TypeCheckContext<'compiler_context, 'source> {
-    names: &'compiler_context NameRegistry<'source>,
-    type_db: &'compiler_context TypeInstanceManager<'source>,
+pub struct TypeCheckContext<'compiler_context, 'source, 'interner> {
+    names: &'compiler_context NameRegistry,
+    type_db: &'compiler_context TypeInstanceManager<'interner>,
     errors: &'compiler_context mut TypeErrors<'source>,
-    on_element: &'source str,
+    interner: &'interner StringInterner,
+    on_element: RootElementType,
 }
 
-impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
+impl<'compiler_context, 'source, 'interner>
+    TypeCheckContext<'compiler_context, 'source, 'interner>
+{
     //We will check that function arguments and index operators are receiving the correct types.
     //Binary operators are actually certainly correct, since type inference will report errors if it can't find an appropriate operator.
     //We might implement sanity checks here, to prevent bugs in the type inference propagating to the backend code.
@@ -100,10 +103,12 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         return_type: TypeInstanceId,
         meta: HIRExprMetadata<'source>,
     ) -> Result<TypecheckedExpression<'source>, CompilerError> {
+        let printer = HIRExprPrinter::new(self.interner);
         let function_type_id = function_expr.get_type();
-        let function_name = FunctionName::Function(expr_str(&function_expr));
+        let interned = self.interner.get(&printer.print(&function_expr));
         let checked_func = self.typecheck(function_expr)?;
-        let checked_args = self.function_call_check(function_type_id, function_name, args)?;
+        let checked_args =
+            self.function_call_check(function_type_id, FunctionName::Function(interned), args)?;
         Ok(HIRExpr::FunctionCall(
             checked_func.into(),
             checked_args,
@@ -115,7 +120,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
     fn check_expr_method_call(
         &mut self,
         obj: TypecheckPendingExpression<'source>,
-        name: SourceString<'source>,
+        name: InternedString,
         args: Vec<TypecheckPendingExpression<'source>>,
         return_type: TypeInstanceId,
         meta: HIRExprMetadata<'source>,
@@ -150,7 +155,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         } else {
             self.errors.array_expressions_not_all_the_same_type.push(
                 ArrayExpressionsNotAllTheSameType {
-                    on_element: RootElementType::Function(self.on_element),
+                    on_element: self.on_element,
                     expected_type: all_array_exprs_checked[0].get_type(),
                 },
             );
@@ -161,7 +166,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
     fn check_expr_member_access(
         &mut self,
         obj: TypecheckPendingExpression<'source>,
-        member: SourceString<'source>,
+        member: InternedString,
         inferred_type: TypeInstanceId,
         meta: HIRExprMetadata<'source>,
     ) -> Result<TypecheckedExpression<'source>, CompilerError> {
@@ -169,7 +174,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         let checked_obj = self.typecheck(obj)?;
         let member_type = match self
             .type_db
-            .find_struct_member(checked_obj.get_type(), &member)
+            .find_struct_member(checked_obj.get_type(), member)
         {
             StructMember::Field(f, _) => f.field_type,
             StructMember::Method(m) => m.function_type,
@@ -177,7 +182,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                 self.errors
                     .field_or_method_not_found
                     .push(FieldOrMethodNotFound {
-                        on_element: RootElementType::Function(self.on_element),
+                        on_element: self.on_element,
                         object_type: obj_type,
                         field_or_method: member,
                     });
@@ -189,7 +194,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             self.errors
                 .type_inference_check_mismatch
                 .push(UnexpectedTypeInferenceMismatch {
-                    on_element: RootElementType::Function(self.on_element),
+                    on_element: self.on_element,
                     inferred: inferred_type,
                     checked: checked_obj.get_type(),
                     expr: checked_obj,
@@ -230,7 +235,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             ))
         } else {
             self.errors.unary_op_not_found.push(UnaryOperatorNotFound {
-                on_element: RootElementType::Function(self.on_element),
+                on_element: self.on_element,
                 rhs: checked_rhs.get_type(),
                 operator: op,
             });
@@ -267,7 +272,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             self.errors
                 .binary_op_not_found
                 .push(BinaryOperatorNotFound {
-                    on_element: RootElementType::Function(self.on_element),
+                    on_element: self.on_element,
                     lhs: checked_lhs.get_type(),
                     rhs: checked_rhs.get_type(),
                     operator: op,
@@ -289,7 +294,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             Ok(HIRExpr::Cast(checked.into(), cast_to, meta))
         } else {
             self.errors.invalid_casts.push(InvalidCast {
-                on_element: RootElementType::Function(self.on_element),
+                on_element: self.on_element,
                 expr: checked,
                 cast_to,
             });
@@ -299,7 +304,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
 
     fn check_literal_expr_value_bounds(
         &mut self,
-        literal: LiteralHIRExpr<'source>,
+        literal: LiteralHIRExpr,
         type_id: TypeInstanceId,
         common_types: &CommonTypeInstances,
         expr: HIRExprMetadata<'source>,
@@ -316,7 +321,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     i >= i128::from(u64::MIN) && i <= i128::from(u64::MAX)
                 } else {
                     self.errors.unexpected_types.push(UnexpectedTypeFound {
-                        on_element: RootElementType::Function(self.on_element),
+                        on_element: self.on_element,
                         type_def: type_id,
                     });
                     return Err(CompilerError::TypeCheckError);
@@ -325,7 +330,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     true
                 } else {
                     self.errors.out_of_bounds.push(OutOfTypeBounds {
-                        on_element: RootElementType::Function(self.on_element),
+                        on_element: self.on_element,
                         typ: type_id,
                         expr,
                     });
@@ -340,7 +345,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     true
                 } else {
                     self.errors.unexpected_types.push(UnexpectedTypeFound {
-                        on_element: RootElementType::Function(self.on_element),
+                        on_element: self.on_element,
                         type_def: type_id,
                     });
                     return Err(CompilerError::TypeCheckError);
@@ -349,7 +354,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     true
                 } else {
                     self.errors.out_of_bounds.push(OutOfTypeBounds {
-                        on_element: RootElementType::Function(self.on_element),
+                        on_element: self.on_element,
                         expr,
                         typ: type_id,
                     });
@@ -368,7 +373,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
     fn method_call_check(
         &mut self,
         obj: TypecheckPendingExpression<'source>,
-        name: SourceString<'source>,
+        name: InternedString,
         args: Vec<TypecheckPendingExpression<'source>>,
         meta: HIRExprMetadata<'source>,
     ) -> Result<
@@ -381,13 +386,13 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         let checked_method = self.typecheck(obj)?;
         let obj_type = self.type_db.get_instance(checked_method.get_type());
 
-        let function_type = if let Some(ftype) = obj_type.methods.iter().find(|x| &x.name == name) {
+        let function_type = if let Some(ftype) = obj_type.methods.iter().find(|x| x.name == name) {
             self.type_db.get_instance(ftype.function_type)
         } else {
             self.errors
                 .field_or_method_not_found
                 .push(FieldOrMethodNotFound {
-                    on_element: RootElementType::Function(self.on_element),
+                    on_element: self.on_element,
                     object_type: checked_method.get_type(),
                     field_or_method: name,
                 });
@@ -403,8 +408,8 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             self.errors
                 .function_call_argument_count
                 .push(FunctionCallArgumentCountMismatch {
-                    on_element: RootElementType::Function(self.on_element),
-                    called_function_name: make_method_name_or_index(&name, &obj_type.name, meta),
+                    on_element: self.on_element,
+                    called_function_name: make_method_name_or_index(name, &obj_type.name, meta, self.interner),
                     expected_count: function_type.function_args.len(),
                     passed_count: checked_args.len(),
                 });
@@ -423,9 +428,9 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
 
         if let Some((arg_pos, types)) = has_invalid_arg {
             self.errors.function_call_mismatches.push(TypeMismatch {
-                on_element: RootElementType::Function(self.on_element),
+                on_element: self.on_element,
                 context: FunctionCallContext {
-                    called_function_name: make_method_name_or_index(&name, &obj_type.name, meta),
+                    called_function_name: make_method_name_or_index(name, &obj_type.name, meta, self.interner),
                     argument_position: arg_pos,
                 },
                 expected: *types.0,
@@ -439,7 +444,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
     fn function_call_check(
         &mut self,
         function_type: TypeInstanceId,
-        function_name: FunctionName<'source>,
+        function_name: FunctionName,
         args: Vec<TypecheckPendingExpression<'source>>,
     ) -> Result<Vec<TypecheckedExpression<'source>>, CompilerError> {
         let function_type = self.type_db.get_instance(function_type);
@@ -452,7 +457,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             self.errors
                 .function_call_argument_count
                 .push(FunctionCallArgumentCountMismatch {
-                    on_element: RootElementType::Function(self.on_element),
+                    on_element: self.on_element,
                     called_function_name: function_name,
                     expected_count: function_type.function_args.len(),
                     passed_count: checked_args.len(),
@@ -469,7 +474,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         for (index, (expected, actual)) in arg_pairs.enumerate() {
             if *expected != actual {
                 self.errors.function_call_mismatches.push(TypeMismatch {
-                    on_element: RootElementType::Function(self.on_element),
+                    on_element: self.on_element,
                     context: FunctionCallContext {
                         called_function_name: function_name.clone(),
                         argument_position: index,
@@ -490,7 +495,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
     fn type_check_function<'scopes>(
         &mut self,
         body: Vec<MIRBlock<'source, NotChecked>>,
-        scopes: &'scopes [MIRScope<'source>],
+        scopes: &'scopes [MIRScope],
         return_type: TypeInstanceId,
     ) -> Result<Vec<TypecheckedMIRBlock<'source>>, CompilerError> {
         let mut has_errors = false;
@@ -511,8 +516,8 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         MIRBlockFinal::Return(checked_return_expr, ast_meta)
                     } else {
                         self.errors.return_type_mismatches.push(TypeMismatch {
-                            context: ReturnTypeContext(Some(ast_meta)),
-                            on_element: RootElementType::Function(self.on_element),
+                            context: ReturnTypeContext(),
+                            on_element: self.on_element,
                             expected: return_type,
                             actual: expr_type,
                         });
@@ -524,8 +529,8 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         MIRBlockFinal::EmptyReturn
                     } else {
                         self.errors.return_type_mismatches.push(TypeMismatch {
-                            context: ReturnTypeContext(None),
-                            on_element: RootElementType::Function(self.on_element),
+                            context: ReturnTypeContext(),
+                            on_element: self.on_element,
                             expected: return_type,
                             actual: self.type_db.common_types.void,
                         });
@@ -561,7 +566,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         &mut self,
         node: MIRBlockNode<'source, NotChecked>,
         scope: ScopeId,
-        scopes: &'scopes [MIRScope<'source>],
+        scopes: &'scopes [MIRScope],
     ) -> Result<MIRBlockNode<'source, Checked>, CompilerError> {
         match node {
             MIRBlockNode::Assign {
@@ -572,7 +577,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             } if path.len() == 1 => {
                 let var = path.first().unwrap();
                 //find variable
-                let variable_type = self.find_variable_and_get_type(var, scope, scopes);
+                let variable_type = self.find_variable_and_get_type(*var, scope, scopes);
                 let expr_type = expression.get_type();
 
                 if variable_type == expr_type {
@@ -585,9 +590,9 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     })
                 } else {
                     self.errors.assign_mismatches.push(TypeMismatch {
-                        on_element: RootElementType::Function(self.on_element),
+                        on_element: self.on_element,
                         context: AssignContext {
-                            target_variable_name: var,
+                            target_variable_name: *var,
                         },
                         expected: variable_type,
                         actual: expr_type,
@@ -605,10 +610,10 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                 meta_expr,
                 return_type,
             } => {
-                let function_type = self.find_variable_and_get_type(&function, scope, scopes);
+                let function_type = self.find_variable_and_get_type(function, scope, scopes);
                 match self.function_call_check(
                     function_type,
-                    FunctionName::Function(function.into()),
+                    FunctionName::Function(function),
                     args,
                 ) {
                     Ok(checked_args) => Ok(MIRBlockNode::FunctionCall {
@@ -626,7 +631,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
 
     fn find_variable_and_get_type(
         &mut self,
-        name: &str,
+        name: InternedString,
         current_block_scope: ScopeId,
         scopes: &[MIRScope],
     ) -> TypeInstanceId {
@@ -644,7 +649,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         }
 
         //try find in the global scope
-        return *self.names.get(name).unwrap();
+        return *self.names.get(&name).unwrap();
     }
 
     fn check_if_statement_expression(
@@ -652,7 +657,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         expr: TypecheckPendingExpression<'source>,
         goto_true: BlockId,
         goto_false: BlockId,
-        ast: &'source AST<'source>,
+        ast: HIRAstMetadata<'source>,
     ) -> Result<MIRBlockFinal<'source, Checked>, CompilerError> {
         let expr_type = expr.get_type();
         let expr_checked = self.typecheck(expr)?;
@@ -662,7 +667,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             self.errors
                 .if_statement_unexpected_type
                 .push(IfStatementNotBoolean {
-                    on_element: RootElementType::Function(self.on_element),
+                    on_element: self.on_element,
                     actual_type: expr_type,
                 });
             return Err(CompilerError::TypeCheckError);
@@ -671,25 +676,27 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
 }
 
 fn make_method_name_or_index<'source>(
-    name: &'source str,
+    name: InternedString,
     obj_type_name: &str,
-    expr: &'source Expr<'source>,
-) -> FunctionName<'source> {
+    expr: HIRExprMetadata<'source>,
+    interner: &StringInterner
+) -> FunctionName {
     dbg!(expr);
     match expr {
         Expr::IndexAccess(_, _) => FunctionName::IndexAccess,
         _ => FunctionName::Method {
-            function_name: Cow::Borrowed(name),
-            type_name: obj_type_name.to_string(),
+            function_name: name,
+            type_name: interner.get(obj_type_name),
         },
     }
 }
 
-pub fn typecheck<'source>(
+pub fn typecheck<'source, 'interner>(
     top_nodes: Vec<MIRTopLevelNode<'source, NotChecked>>,
-    type_db: &TypeInstanceManager<'source>,
-    names: &NameRegistry<'source>,
+    type_db: &TypeInstanceManager<'interner>,
+    names: &NameRegistry,
     errors: &mut TypeErrors<'source>,
+    interner: &StringInterner,
 ) -> Result<Vec<MIRTopLevelNode<'source, Checked>>, CompilerError> {
     let mut new_mir = vec![];
     for node in top_nodes {
@@ -716,7 +723,8 @@ pub fn typecheck<'source>(
                     names,
                     type_db,
                     errors,
-                    on_element: &function_name,
+                    on_element: RootElementType::Function(function_name),
+                    interner,
                 };
 
                 let checked_body = context.type_check_function(body, &scopes, return_type)?;
@@ -752,19 +760,26 @@ mod tests {
     //Parses a single expression
 
     fn run_test<'source>(
-        src: &'source Source<'source>,
+        src: &'source Source,
     ) -> (TypeErrors<'source>, TypeInstanceManager<'source>) {
         let analysis_result = do_analysis(src);
-
         println!(
             "{}",
-            mir_printer::print_mir(&analysis_result.mir, &analysis_result.type_db)
+            mir_printer::print_mir(
+                &analysis_result.mir,
+                &analysis_result.type_db,
+                &src.interner
+            )
         );
 
         if analysis_result.type_errors.count() > 0 {
             println!(
                 "{}",
-                TypeErrorPrinter::new(&analysis_result.type_errors, &analysis_result.type_db)
+                TypeErrorPrinter::new(
+                    &analysis_result.type_errors,
+                    &analysis_result.type_db,
+                    &src.interner
+                )
             );
         } else {
             println!("No errors found!");
@@ -1024,7 +1039,7 @@ def main():
 ",
         );
         let (err, db) = run_test(&ast);
-        let error_msg = print_error(&err, &db);
+        let error_msg = print_error(&err, &db, &ast.interner);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
     }
@@ -1039,7 +1054,7 @@ def main():
 ",
         );
         let (err, db) = run_test(&ast);
-        let error_msg = print_error(&err, &db);
+        let error_msg = print_error(&err, &db, &ast.interner);
         let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
     }
@@ -1054,13 +1069,17 @@ def main(args: array<str>):
         );
 
         let (err, db) = run_test(&ast);
-        let error_msg = print_error(&err, &db);
+        let error_msg = print_error(&err, &db, &ast.interner);
         let expected = "Function argument type mismatch: In function main, on index operator, parameter on position 0 has incorrect type: Expected u32 but passed str\n";
         assert_eq!(error_msg, expected);
     }
 
-    fn print_error(err: &TypeErrors, db: &TypeInstanceManager) -> String {
-        let printer = TypeErrorPrinter::new(err, db);
+    fn print_error(
+        err: &TypeErrors,
+        db: &TypeInstanceManager,
+        interner: &StringInterner,
+    ) -> String {
+        let printer = TypeErrorPrinter::new(err, db, interner);
         let error_msg = format!("{}", printer);
         error_msg
     }
@@ -1077,7 +1096,7 @@ def main():
         let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
 
-        let error_msg = print_error(&err, &db);
+        let error_msg = print_error(&err, &db, &ast.interner);
         let expected = "In function main, binary operator + not found for types: i32 + f32\n";
         assert_eq!(error_msg, expected);
     }
@@ -1094,7 +1113,7 @@ def main():
         let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
 
-        let error_msg = print_error(&err, &db);
+        let error_msg = print_error(&err, &db, &ast.interner);
         let expected = "In function main, binary operator * not found for types: i32 * f32\n";
         assert_eq!(error_msg, expected);
     }

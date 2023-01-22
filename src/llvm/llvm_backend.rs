@@ -14,7 +14,7 @@ use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnu
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{AddressSpace, OptimizationLevel};
 
-use crate::ast::lexer::{Operator, SourceString};
+use crate::ast::lexer::{Operator, InternedString, StringInterner};
 use crate::compiler::layouts::FunctionLayout;
 use crate::llvm::linker::{link, LinkerError};
 use crate::semantic::hir::{HIRExpr, LiteralHIRExpr};
@@ -59,18 +59,19 @@ impl<'ctx> LlvmExpression<'ctx> {
     }
 }
 
-pub struct CodeGen<'codegen_scope, 'ctx, 'source> {
+pub struct CodeGen<'codegen_scope, 'ctx, 'interner> {
     context: &'ctx Context,
     builder: &'codegen_scope Builder<'ctx>,
     module: &'codegen_scope Module<'ctx>,
-    type_db: &'codegen_scope TypeInstanceManager<'source>,
+    type_db: &'codegen_scope TypeInstanceManager<'interner>,
+    interner: &'interner StringInterner,
     type_cache: HashMap<TypeInstanceId, AnyTypeEnum<'ctx>>,
-    functions: HashMap<SourceString<'source>, FunctionValue<'ctx>>,
+    functions: HashMap<InternedString, FunctionValue<'ctx>>,
     next_temporary: u32,
     //    fpm: PassManager<FunctionValue<'ctx>>
 }
 
-impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
+impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
     pub fn as_basic_type(&self, typ: AnyTypeEnum<'ctx>) -> BasicTypeEnum<'ctx> {
         match typ.try_into() {
             Ok(b) => b,
@@ -138,7 +139,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
 
     pub fn create_function(
         &mut self,
-        function_name: SourceString<'source>,
+        function_name: InternedString,
         parameters: &[MIRTypedBoundName],
         return_type: TypeInstanceId,
         is_intrinsic: bool,
@@ -159,17 +160,17 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
             self.as_basic_type(llvm_return_type).fn_type(&params, false)
         };
 
-        let linkage = if function_name == "main" || is_intrinsic {
+        let linkage = if function_name == self.interner.get("main") || is_intrinsic {
             None
         } else {
             Some(inkwell::module::Linkage::Private)
         };
         let function = self
             .module
-            .add_function(function_name, function_type, linkage);
+            .add_function(&function_name.borrow(self.interner), function_type, linkage);
 
         for (i, param) in function.get_param_iter().enumerate() {
-            param.set_name(&parameters[i].name);
+            param.set_name(&parameters[i].name.borrow(self.interner));
         }
         self.functions.insert(function_name, function);
 
@@ -201,7 +202,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
         alloca
     }
 
-    pub fn generate_for_top_lvl(&mut self, node: &'source MIRTopLevelNode<'source, Checked>) {
+    pub fn generate_for_top_lvl<'source>(&mut self, node: &'source MIRTopLevelNode<'source, Checked>) {
         match node {
             MIRTopLevelNode::DeclareFunction {
                 function_name,
@@ -213,19 +214,19 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
                 let function_layout =
                     crate::compiler::layouts::generate_function_layout(&scopes, self.type_db);
                 let function_signature =
-                    self.create_function(&function_name, parameters, *return_type, false);
+                    self.create_function(*function_name, parameters, *return_type, false);
 
                 let cur_basic = self.context.append_basic_block(function_signature, "entry");
                 self.builder.position_at_end(cur_basic);
 
                 //@TODO cloneless: HashMap<&'str, ..
-                let mut llvm_variables: HashMap<&str, PointerValue<'_>> = HashMap::new();
+                let mut llvm_variables: HashMap<InternedString, PointerValue<'_>> = HashMap::new();
 
                 for (i, param) in function_signature.get_param_iter().enumerate() {
                     let param_name = &parameters[i].name;
-                    let alloca = self.builder.build_alloca(param.get_type(), param_name);
+                    let alloca = self.builder.build_alloca(param.get_type(), &param_name.borrow(self.interner));
                     self.builder.build_store(alloca, param);
-                    llvm_variables.insert(param_name, alloca.into());
+                    llvm_variables.insert(*param_name, alloca.into());
                 }
 
                 //register the variables first by navigating in the scopes,
@@ -246,10 +247,10 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
                         };
                         let ptr = self.create_variable_stack_alloc(
                             function_signature,
-                            &name,
+                            &name.borrow(self.interner),
                             *type_instance,
                         );
-                        llvm_variables.insert(name, ptr.into());
+                        llvm_variables.insert(*name, ptr.into());
                     }
                 }
 
@@ -296,7 +297,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
                                     panic!("Assignment to path with len > 1")
                                 }
                                 let ptr =
-                                    *symbol_table.get(&(path[0].as_ref(), block.scope)).unwrap();
+                                    *symbol_table.get(&(path[0], block.scope)).unwrap();
 
                                 let expr_compiled = self
                                     .compile_expr_load(block.scope, &symbol_table, expression)
@@ -317,10 +318,10 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
                                     })
                                     .collect::<Vec<_>>();
 
-                                if let Some(f) = self.functions.get(*function) {
+                                if let Some(f) = self.functions.get(function) {
                                     self.builder.build_call(*f, &llvm_args, &self.make_temp(""));
                                 } else {
-                                    panic!("Function not yet added to llvm IR {function}");
+                                    panic!("Function not yet added to llvm IR {function}", function = function.borrow(self.interner));
                                 }
                             }
                         }
@@ -363,7 +364,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
                 parameters,
                 return_type,
             } => {
-                self.create_function(&function_name, &parameters, *return_type, true);
+                self.create_function(*function_name, &parameters, *return_type, true);
             }
         }
     }
@@ -371,7 +372,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
     pub fn compile_expr_load(
         &mut self,
         current_scope: ScopeId,
-        symbol_table: &FunctionSymbolTable<'_, 'ctx>,
+        symbol_table: &FunctionSymbolTable<'ctx>,
         expression: &HIRExpr<TypeInstanceId, Checked>,
     ) -> LlvmExpression<'ctx> {
         let types = &self.type_db.common_types;
@@ -410,11 +411,11 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
                     ),
                     LiteralHIRExpr::String(s) => {
                         //build a buf, len struct
-                        let mut null_terminated = s.to_string();
+                        let mut null_terminated = s.to_string(self.interner);
                         null_terminated.push('\0');
 
                         //let buf_val = self.context.const_string(null_terminated.as_bytes(), true);
-                        let len_val = self.context.i64_type().const_int(s.len() as u64, false);
+                        let len_val = self.context.i64_type().const_int(s.borrow(self.interner).len() as u64, false);
                         let str = self.type_db.find_by_name("str").unwrap();
                         let llvm_str_type = self.make_llvm_type(str.id);
 
@@ -449,7 +450,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
                 }
             }
             HIRExpr::Variable(name, ..) => {
-                LlvmExpression::Pointer(*symbol_table.get(&(name.as_ref(), current_scope)).unwrap())
+                LlvmExpression::Pointer(*symbol_table.get(&(*name, current_scope)).unwrap())
             }
             HIRExpr::Cast(_, _, _) => todo!(),
             HIRExpr::BinaryOperation(lhs, op, rhs, _, ..) => {
@@ -841,7 +842,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
 
                 let function_compiled = self
                     .module
-                    .get_function(var_name)
+                    .get_function(&var_name.borrow(self.interner))
                     .expect("Function does not exist or was not compiled");
                 let call_site_val = self.builder.build_call(
                     function_compiled,
@@ -891,7 +892,7 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
                     .compile_expr_load(current_scope, symbol_table, obj)
                     .expect_ptr();
 
-                let index = match self.type_db.find_struct_member(obj.get_type(), member) {
+                let index = match self.type_db.find_struct_member(obj.get_type(), *member) {
                     StructMember::Field(_, idx) => idx,
                     StructMember::Method(_) => todo!("Unimplemented"),
                     StructMember::NotFound => {
@@ -920,15 +921,15 @@ impl<'codegen_scope, 'ctx, 'source> CodeGen<'codegen_scope, 'ctx, 'source> {
     }
 }
 
-type FunctionSymbolTable<'a, 'llvm_ctx> = HashMap<(&'a str, ScopeId), PointerValue<'llvm_ctx>>;
+type FunctionSymbolTable<'llvm_ctx> = HashMap<(InternedString, ScopeId), PointerValue<'llvm_ctx>>;
 
-fn build_function_symbol_table<'mir, 'f, 'ctx, 'source>(
+fn build_function_symbol_table<'mir, 'function_layout, 'ctx>(
     body: &'mir [MIRBlock<Checked>],
     scopes: &'mir [MIRScope],
-    function_layout: &'f FunctionLayout,
-    llvm_variables: HashMap<&'source str, PointerValue<'ctx>>,
-) -> FunctionSymbolTable<'f, 'ctx> {
-    let mut symbol_table = HashMap::<(&'f str, ScopeId), PointerValue<'ctx>>::new();
+    function_layout: &'function_layout FunctionLayout,
+    llvm_variables: HashMap<InternedString, PointerValue<'ctx>>
+) -> FunctionSymbolTable<'ctx> {
+    let mut symbol_table = HashMap::<(InternedString, ScopeId), PointerValue<'ctx>>::new();
     for block in body.iter() {
         let _block_scope = &scopes[block.scope.0];
 
@@ -938,7 +939,7 @@ fn build_function_symbol_table<'mir, 'f, 'ctx, 'source>(
             let variable_llvm = llvm_variables
                 .get(name)
                 .expect("Should find the variable here");
-            symbol_table.insert((name, block.scope), (*variable_llvm).into());
+            symbol_table.insert((*name, block.scope), (*variable_llvm).into());
         }
     }
     symbol_table
@@ -958,9 +959,10 @@ fn optimize_module(target_machine: &TargetMachine, module: &Module) {
         .unwrap();
 }
 
-pub fn generate_llvm<'source>(
-    type_db: &TypeInstanceManager<'source>,
+pub fn generate_llvm<'source, 'interner>(
+    type_db: &TypeInstanceManager<'interner>,
     mir_top_level_nodes: &[MIRTopLevelNode<'source, Checked>],
+    interner: &'interner StringInterner
 ) -> Result<(), Box<dyn Error>> {
     let context = Context::create();
     let module = context.create_module("program");
@@ -974,6 +976,7 @@ pub fn generate_llvm<'source>(
         type_cache: HashMap::new(),
         next_temporary: 0,
         functions: HashMap::new(),
+        interner
     };
 
     for mir_node in mir_top_level_nodes {

@@ -1,6 +1,6 @@
-use std::borrow::Cow;
-
-use crate::ast::lexer;
+use crate::ast::lexer::{
+    self, JoinableInternedStringSlice, PrintableInternedString, StringInterner,
+};
 
 use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR};
 
@@ -27,193 +27,263 @@ pub fn operator_str(op: lexer::Operator) -> String {
     }
 }
 
-pub fn expr_str<'source, T, T1>(expr: &HIRExpr<'source, T, T1>) -> Cow<'source, str> {
-    match expr {
-        HIRExpr::Variable(s, ..) => Cow::Borrowed(*s),
-        HIRExpr::Literal(literal, ..) => Cow::Owned(literal_expr_str(literal)),
-        HIRExpr::FunctionCall(f, args, ..) => {
-            let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
-            format!("{}({})", expr_str(f), args_str).into()
-        }
-        HIRExpr::MethodCall(obj, name, args, ..) => {
-            let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
-            format!("{}.{}({})", expr_str(obj), name, args_str).into()
-        }
-
-        HIRExpr::BinaryOperation(var, op, var2, ..) => {
-            format!("{} {} {}", expr_str(var), operator_str(*op), expr_str(var2)).into()
-        }
-
-        HIRExpr::Array(items, ..) => {
-            let array_items_str = items.iter().map(expr_str).collect::<Vec<_>>().join(", ");
-            format!("[{}]", array_items_str).into()
-        }
-        HIRExpr::UnaryExpression(op, expr, ..) => {
-            format!("{}{}", operator_str(*op), expr_str(expr)).into()
-        }
-        HIRExpr::MemberAccess(obj, elem, ..) => format!("{}.{}", expr_str(obj), elem).into(),
-        HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".into(),
-        HIRExpr::TypecheckTag(_) => unreachable!(),
-    }
+pub struct HIRExprPrinter<'interner> {
+    interner: &'interner StringInterner,
 }
 
-fn literal_expr_str(expr: &LiteralHIRExpr) -> String {
-    match &expr {
-        LiteralHIRExpr::Float(f) => format!("{:?}", f.0),
-        LiteralHIRExpr::Integer(i) => format!("{}", i),
-        LiteralHIRExpr::String(s) => format!("\"{}\"", s),
-        LiteralHIRExpr::Boolean(true) => "True".to_string(),
-        LiteralHIRExpr::Boolean(false) => "False".to_string(),
-        LiteralHIRExpr::None => "None".into(),
+impl<'interner> HIRExprPrinter<'interner> {
+    pub fn new(interner: &'interner StringInterner) -> Self {
+        HIRExprPrinter { interner }
     }
-}
 
-#[allow(dead_code)]
-fn print_hir_body_str<'source>(
-    node: &HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
-    indent: &str,
-    type_db: &TypeInstanceManager<'source>,
-) -> String {
-    match node {
-        HIR::Assign {
-            path, expression, ..
-        } => {
-            format!("{}{} = {}\n", indent, path.join("."), expr_str(expression))
-        }
-        HIR::Declare {
-            var,
-            typedef: typename,
-            expression,
-            ..
-        } => {
-            format!(
-                "{}{} : {} = {}\n",
-                indent,
-                var,
-                typename.print_name(type_db),
-                expr_str(expression)
+    pub fn print<'source, T, T1>(&self, expr: &HIRExpr<'source, T, T1>) -> String {
+        match expr {
+            HIRExpr::Variable(s, ..) => s.to_string(self.interner),
+            HIRExpr::Literal(literal, ..) => self.print_literal_expr(literal),
+            HIRExpr::FunctionCall(f, args, ..) => {
+                let args_str = args
+                    .iter()
+                    .map(|x| self.print(x))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}({})", self.print(f), args_str).into()
+            }
+            HIRExpr::MethodCall(obj, name, args, ..) => {
+                let args_str = args
+                    .iter()
+                    .map(|x| self.print(x))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{}.{}({})",
+                    self.print(obj),
+                    name.to_string(self.interner),
+                    args_str
+                )
+                .into()
+            }
+            HIRExpr::BinaryOperation(var, op, var2, ..) => format!(
+                "{} {} {}",
+                self.print(var),
+                operator_str(*op),
+                self.print(var2)
             )
+            .into(),
+            HIRExpr::Array(items, ..) => {
+                let array_items_str = items
+                    .iter()
+                    .map(|x| self.print(x))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{}]", array_items_str).into()
+            }
+            HIRExpr::UnaryExpression(op, expr, ..) => {
+                format!("{}{}", operator_str(*op), self.print(expr)).into()
+            }
+            HIRExpr::MemberAccess(obj, elem, ..) => {
+                format!("{}.{}", self.print(obj), elem.to_string(self.interner)).into()
+            }
+            HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".into(),
+            HIRExpr::TypecheckTag(_) => unreachable!(),
         }
-        HIR::Return(expr, ..) => {
-            format!("{}return {}\n", indent, expr_str(expr))
-        }
-        HIR::EmptyReturn => {
-            format!("{}return\n", indent)
-        }
+    }
 
-        HIR::FunctionCall { function, args, .. } => {
-            let args_str = args.iter().map(expr_str).collect::<Vec<_>>().join(", ");
-
-            format!("{}{}({})\n", indent, expr_str(function), args_str)
-        }
-        HIR::If(condition, true_body, false_body, ..) => {
-            let condition_str = expr_str(condition);
-            let mut ifdecl = format!("{}if {}:\n", indent, condition_str);
-            let indent_block = format!("{}    ", indent);
-            for statement in true_body {
-                let statement_str = print_hir_body_str(statement, &indent_block, type_db);
-                ifdecl.push_str(&statement_str);
-            }
-            ifdecl.push_str(&format!("{}else:\n", indent));
-            for statement in false_body {
-                let statement_str = print_hir_body_str(statement, &indent_block, type_db);
-                ifdecl.push_str(&statement_str);
-            }
-
-            if false_body.is_empty() {
-                ifdecl.push_str(&format!("{}pass\n", indent_block));
-            }
-            ifdecl
-        }
-        HIR::While(expr, body, ..) => {
-            let expr_str = expr_str(expr);
-            let mut while_decl = format!("{}while {}:\n", indent, expr_str);
-            let indent_block = format!("{}    ", indent);
-            for statement in body {
-                let statement_str = print_hir_body_str(statement, &indent_block, type_db);
-                while_decl.push_str(&statement_str);
-            }
-            while_decl
+    pub fn print_literal_expr(&self, expr: &LiteralHIRExpr) -> String {
+        match &expr {
+            LiteralHIRExpr::Float(f) => format!("{:?}", f.0),
+            LiteralHIRExpr::Integer(i) => format!("{}", i),
+            LiteralHIRExpr::String(s) => format!("\"{}\"", self.interner.borrow(*s)),
+            LiteralHIRExpr::Boolean(true) => self.interner.get("True").to_string(self.interner),
+            LiteralHIRExpr::Boolean(false) => self.interner.get("False").to_string(self.interner),
+            LiteralHIRExpr::None => self.interner.get("None").to_string(self.interner),
         }
     }
 }
 
-fn print_hir_str<'source>(
-    node: &HIRRoot<
-        impl TypeNamePrinter,
-        HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
-        impl TypeNamePrinter,
-    >,
-    indent: &str,
-    type_db: &TypeInstanceManager<'source>,
-) -> String {
-    match node {
-        HIRRoot::DeclareFunction {
-            function_name,
-            parameters,
-            body,
-            return_type,
-            ..
-        } => {
-            let parameters = parameters
-                .iter()
-                .map(|param| {
-                    format!(
-                        "{}{}: {}",
-                        indent,
-                        param.name,
-                        param.typename.print_name(type_db)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
+pub struct HIRPrinter<'type_db, 'interner> {
+    type_db: &'type_db TypeInstanceManager<'interner>,
+    interner: &'interner StringInterner,
+    expr_printer: HIRExprPrinter<'interner>,
+}
 
-            let mut function = format!(
-                "{}def {}({}) -> {}:\n",
-                indent,
+impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
+    pub fn new(
+        type_db: &'type_db TypeInstanceManager<'interner>,
+        interner: &'interner StringInterner,
+    ) -> Self {
+        HIRPrinter {
+            type_db,
+            interner,
+            expr_printer: HIRExprPrinter { interner },
+        }
+    }
+
+    #[allow(dead_code)]
+    fn print_hir_body_str(
+        &self,
+        node: &HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
+        indent: &str,
+    ) -> String {
+        match node {
+            HIR::Assign {
+                path, expression, ..
+            } => {
+                let p = path.join_interned(self.interner, ".");
+                format!(
+                    "{}{} = {}\n",
+                    indent,
+                    p,
+                    self.expr_printer.print(expression)
+                )
+            }
+            HIR::Declare {
+                var,
+                typedef: typename,
+                expression,
+                ..
+            } => {
+                format!(
+                    "{}{} : {} = {}\n",
+                    indent,
+                    var.to_string(self.interner),
+                    typename.print_name(self.type_db, self.interner),
+                    self.expr_printer.print(expression)
+                )
+            }
+            HIR::Return(expr, ..) => {
+                format!("{}return {}\n", indent, self.expr_printer.print(expr))
+            }
+            HIR::EmptyReturn => {
+                format!("{}return\n", indent)
+            }
+
+            HIR::FunctionCall { function, args, .. } => {
+                let args_str = args
+                    .iter()
+                    .map(|x| self.expr_printer.print(x))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                format!(
+                    "{}{}({})\n",
+                    indent,
+                    self.expr_printer.print(function),
+                    args_str
+                )
+            }
+            HIR::If(condition, true_body, false_body, ..) => {
+                let condition_str = self.expr_printer.print(condition);
+                let mut ifdecl = format!("{}if {}:\n", indent, condition_str);
+                let indent_block = format!("{}    ", indent);
+                for statement in true_body {
+                    let statement_str = self.print_hir_body_str(statement, &indent_block);
+                    ifdecl.push_str(&statement_str);
+                }
+                ifdecl.push_str(&format!("{}else:\n", indent));
+                for statement in false_body {
+                    let statement_str = self.print_hir_body_str(statement, &indent_block);
+                    ifdecl.push_str(&statement_str);
+                }
+
+                if false_body.is_empty() {
+                    ifdecl.push_str(&format!("{}pass\n", indent_block));
+                }
+                ifdecl
+            }
+            HIR::While(expr, body, ..) => {
+                let expr_str = self.expr_printer.print(expr);
+                let mut while_decl = format!("{}while {}:\n", indent, expr_str);
+                let indent_block = format!("{}    ", indent);
+                for statement in body {
+                    let statement_str = self.print_hir_body_str(statement, &indent_block);
+                    while_decl.push_str(&statement_str);
+                }
+                while_decl
+            }
+        }
+    }
+
+    fn print_hir_str(
+        &self,
+        node: &HIRRoot<
+            impl TypeNamePrinter,
+            HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
+            impl TypeNamePrinter,
+        >,
+        indent: &str,
+    ) -> String {
+        match node {
+            HIRRoot::DeclareFunction {
                 function_name,
                 parameters,
-                return_type.print_name(type_db)
-            );
-            let indent_block = format!("{}    ", indent);
-            for n in body {
-                function.push_str(&print_hir_body_str(n, &indent_block, type_db));
-            }
-            function
-        }
-        HIRRoot::StructDeclaration {
-            struct_name,
-            fields: body,
-            ..
-        } => {
-            let mut structdecl = format!("{}struct {}:\n", indent, struct_name);
+                body,
+                return_type,
+                ..
+            } => {
+                let parameters = parameters
+                    .iter()
+                    .map(|param| {
+                        format!(
+                            "{}{}: {}",
+                            indent,
+                            param.name.to_string(self.interner),
+                            param.typename.print_name(self.type_db, self.interner)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
 
-            for field in body {
-                structdecl.push_str(&format!(
-                    "{}  {}: {}",
+                let mut function = format!(
+                    "{}def {}({}) -> {}:\n",
                     indent,
-                    field.name,
-                    field.typename.print_name(type_db)
-                ));
+                    function_name.to_string(self.interner),
+                    parameters,
+                    return_type.print_name(self.type_db, self.interner)
+                );
+                let indent_block = format!("{}    ", indent);
+                for n in body {
+                    function.push_str(&self.print_hir_body_str(n, &indent_block));
+                }
+                function
             }
+            HIRRoot::StructDeclaration {
+                struct_name,
+                fields: body,
+                ..
+            } => {
+                let mut structdecl = format!(
+                    "{}struct {}:\n",
+                    indent,
+                    struct_name.to_string(self.interner)
+                );
 
-            structdecl
+                for field in body {
+                    structdecl.push_str(&format!(
+                        "{}  {}: {}",
+                        indent,
+                        field.name.to_string(self.interner),
+                        field.typename.print_name(self.type_db, self.interner)
+                    ));
+                }
+
+                structdecl
+            }
         }
     }
-}
 
-#[allow(dead_code)]
-pub fn print_hir<'source>(
-    mir: &[HIRRoot<
-        impl TypeNamePrinter,
-        HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
-        impl TypeNamePrinter,
-    >],
-    type_db: &TypeInstanceManager<'source>,
-) -> String {
-    let mut buffer = String::new();
-    for node in mir {
-        buffer.push_str(&print_hir_str(node, "", type_db));
+    #[allow(dead_code)]
+    pub fn print_hir(
+        &self,
+        hir: &[HIRRoot<
+            impl TypeNamePrinter,
+            HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
+            impl TypeNamePrinter,
+        >],
+    ) -> String {
+        let mut buffer = String::new();
+        for node in hir {
+            buffer.push_str(&self.print_hir_str(node, ""));
+        }
+        buffer
     }
-    buffer
 }

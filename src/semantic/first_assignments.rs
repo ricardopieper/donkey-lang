@@ -1,5 +1,5 @@
 use crate::{
-    ast::lexer::SourceString,
+    ast::lexer::{InternedString},
     semantic::hir::{HIRTypedBoundName, HIR},
     types::type_instance_db::TypeInstanceId,
 };
@@ -13,7 +13,7 @@ use super::hir::{
 
 fn make_first_assignments_in_body<'source>(
     body: Vec<UninferredHIR<'source>>,
-    declarations_found: &mut HashSet<SourceString<'source>>,
+    declarations_found: &mut HashSet<InternedString>,
 ) -> Vec<FirstAssignmentsDeclaredHIR<'source>> {
     let mut new_mir: Vec<FirstAssignmentsDeclaredHIR<'source>> = vec![];
     for node in body {
@@ -49,9 +49,9 @@ fn make_first_assignments_in_body<'source>(
                         meta_expr,
                     }
                 } else {
-                    declarations_found.insert(var);
+                    declarations_found.insert(*var);
                     HIR::Declare {
-                        var,
+                        var: *var,
                         typedef: HIRTypeDef::PendingInference,
                         expression,
                         meta_ast,
@@ -100,7 +100,7 @@ fn make_first_assignments_in_body<'source>(
 }
 
 fn make_assignments_into_declarations_in_function<'source>(
-    parameters: &[HIRTypedBoundName<'source, TypeInstanceId>],
+    parameters: &[HIRTypedBoundName<TypeInstanceId>],
     body: Vec<UninferredHIR<'source>>,
 ) -> Vec<FirstAssignmentsDeclaredHIR<'source>> {
     //find all assignments, check if they were declared already.
@@ -115,7 +115,7 @@ fn make_assignments_into_declarations_in_function<'source>(
 
     //@TODO there is some trouble here with lifetimes, because the body is consumed, the strings
     //move to the new body and cannot be stored as refs in the declarations_found set.
-    let mut declarations_found = HashSet::<SourceString<'source>>::new();
+    let mut declarations_found = HashSet::<InternedString>::new();
     for p in parameters {
         declarations_found.insert(p.name);
     }

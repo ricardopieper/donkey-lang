@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::lexer::SourceString;
+use crate::ast::lexer::{InternedString};
 use crate::types::type_constructor_db::{TypeKind, TypeSign};
 use crate::types::type_errors::{TypeConstructionFailure, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
@@ -10,20 +10,20 @@ use super::hir::{GlobalsInferredMIRRoot, HIRRoot, HIRType, HIRTypedBoundName, St
 use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 
 #[derive(Debug, Clone)]
-pub struct PartiallyResolvedFunctionSignature<'source> {
-    pub args: Vec<HIRType<'source>>,
-    pub return_type: HIRType<'source>,
+pub struct PartiallyResolvedFunctionSignature {
+    pub args: Vec<HIRType>,
+    pub return_type: HIRType,
 }
 
 #[derive(Debug, Clone)]
-pub struct NameRegistry<'source> {
-    names: HashMap<SourceString<'source>, TypeInstanceId>,
+pub struct NameRegistry {
+    names: HashMap<InternedString, TypeInstanceId>,
     //This could help still provide some type inference when just enough information is available
     partially_resolved_function_sigs:
-        HashMap<SourceString<'source>, PartiallyResolvedFunctionSignature<'source>>,
+        HashMap<InternedString, PartiallyResolvedFunctionSignature>,
 }
 
-impl<'source> NameRegistry<'source> {
+impl NameRegistry {
     pub fn new() -> Self {
         NameRegistry {
             names: HashMap::new(),
@@ -34,8 +34,8 @@ impl<'source> NameRegistry<'source> {
     #[allow(dead_code)]
     pub fn insert_partially_resolved_signature(
         &mut self,
-        name: SourceString<'source>,
-        sig: PartiallyResolvedFunctionSignature<'source>,
+        name: InternedString,
+        sig: PartiallyResolvedFunctionSignature,
     ) {
         self.partially_resolved_function_sigs.insert(name, sig);
     }
@@ -43,27 +43,27 @@ impl<'source> NameRegistry<'source> {
     #[allow(dead_code)]
     pub fn find_partially_resolved_sig(
         &mut self,
-        name: &SourceString<'source>,
+        name: InternedString,
     ) -> Option<&PartiallyResolvedFunctionSignature> {
-        self.partially_resolved_function_sigs.get(name)
+        self.partially_resolved_function_sigs.get(&name)
     }
 
-    pub fn include(&mut self, outer: &NameRegistry<'source>) {
+    pub fn include(&mut self, outer: &NameRegistry) {
         for (k, v) in &outer.names {
             self.names.insert(*k, *v);
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<&TypeInstanceId> {
+    pub fn get(&self, name: &InternedString) -> Option<&TypeInstanceId> {
         self.names.get(name)
     }
 
-    pub fn get_names(&self) -> impl Iterator<Item = &SourceString<'source>> {
+    pub fn get_names(&self) -> impl Iterator<Item = &InternedString> {
         self.names.keys()
     }
 
-    pub fn insert(&mut self, variable_name: &SourceString<'source>, var_type: TypeInstanceId) {
-        self.names.insert(*variable_name, var_type);
+    pub fn insert(&mut self, variable_name: InternedString, var_type: TypeInstanceId) {
+        self.names.insert(variable_name, var_type);
     }
 }
 
@@ -85,9 +85,9 @@ fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegis
 }*/
 
 /*Builds a name registry and resolves the top level declarations*/
-pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
-    type_db: &'a mut TypeInstanceManager<'source>,
-    registry: &'a mut NameRegistry<'source>,
+pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
+    type_db: &'a mut TypeInstanceManager<'interner>,
+    registry: &'a mut NameRegistry,
     errors: &'a mut TypeErrors<'source>,
     mir: Vec<StartingHIRRoot<'source>>,
 ) -> Result<Vec<GlobalsInferredMIRRoot<'source>>, CompilerError> {
@@ -110,7 +110,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
 
                 for type_def in parameters {
                     let usage = hir_type_to_usage(
-                        RootElementType::Function(&function_name),
+                        RootElementType::Function(function_name),
                         &type_def.typename,
                         type_db,
                         errors,
@@ -121,7 +121,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                         errors
                             .type_construction_failure
                             .push(TypeConstructionFailure {
-                                on_element: RootElementType::Function(&function_name),
+                                on_element: RootElementType::Function(function_name),
                                 error: e,
                             });
                         return Err(CompilerError::TypeInferenceError);
@@ -135,7 +135,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 }
 
                 let usage = hir_type_to_usage(
-                    RootElementType::Function(&function_name),
+                    RootElementType::Function(function_name),
                     &return_type,
                     type_db,
                     errors,
@@ -146,7 +146,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                     errors
                         .type_construction_failure
                         .push(TypeConstructionFailure {
-                            on_element: RootElementType::Function(&function_name),
+                            on_element: RootElementType::Function(function_name),
                             error: e,
                         });
                     return Err(CompilerError::TypeInferenceError);
@@ -155,7 +155,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
 
                 let func_id = type_db.construct_function(&param_types, return_type);
 
-                registry.insert(&function_name, func_id);
+                registry.insert(function_name, func_id);
 
                 new_mir.push(HIRRoot::DeclareFunction {
                     function_name,
@@ -174,17 +174,17 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 let type_id =
                     type_db
                         .constructors
-                        .add(TypeKind::Struct, TypeSign::Unsigned, &struct_name);
+                        .add(TypeKind::Struct, TypeSign::Unsigned, struct_name);
                 for field in fields.iter() {
                     let type_usage = hir_type_to_usage(
-                        RootElementType::Struct(&struct_name),
+                        RootElementType::Struct(struct_name),
                         &field.typename,
                         type_db,
                         errors,
                     )?;
                     type_db
                         .constructors
-                        .add_field(type_id, &field.name, type_usage); //cloneless: ok to clone
+                        .add_field(type_id, field.name, type_usage); //cloneless: ok to clone
                 }
             }
         };
