@@ -216,7 +216,6 @@ pub mod test_utils {
     }
 
     pub(crate) use tls_interner;
-    
 
     pub struct AnalysisWithoutTypecheckResult<'source, 'interner> {
         pub mir: Vec<MIRTopLevelNode<'source, NotChecked>>,

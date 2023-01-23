@@ -51,18 +51,13 @@ impl StringInterner {
     pub fn borrow<'intern>(&'intern self, string: InternedString) -> &'intern str {
         let borrow = self.strings.borrow();
         let at_index: &str = (&borrow[string.0]).as_ref();
-        let ptr = at_index.as_ptr();
-        let len = at_index.len();
 
-        let last_pushed_str: &'intern str = unsafe {
-            //@SAFETY: The strings are only deallocated after Self is dropped.
-            //Even if the vec is resized, the (ptr, len) tuple inside str are still valid.
-            //There is also no way to mutate the strings.
-            let u8_slice = std::slice::from_raw_parts(ptr, len);
-
-            //@SAFETY: This comes from a String. If that isn't valid UTF-8, I don't know what is.
-            std::str::from_utf8_unchecked(u8_slice)
-        };
+        //@SAFETY: The strings are only deallocated after Self is dropped.
+        //Even if the vec is resized, the (ptr, len) tuple inside str are still valid.
+        //There is also no way to mutate the strings.
+        //Also, if there's currently a mutable borrow of self.strings happening, this will crash
+        //on the refcell borrow()
+        let last_pushed_str: &'intern str = unsafe { std::mem::transmute(at_index) };
 
         last_pushed_str
     }
@@ -114,9 +109,8 @@ impl InternedString {
         interner.get_string(self)
     }
 
-    pub fn borrow<'intern>(self, _interner: &'intern StringInterner) -> Ref<'intern, String> {
-        todo!()
-        //interner.borrow(self)
+    pub fn borrow<'intern>(self, interner: &'intern StringInterner) -> &'intern str {
+        interner.borrow(self)
     }
 }
 
@@ -130,6 +124,6 @@ macro_rules! interner {
     };
 }
 use std::{
-    cell::{Ref, RefCell},
+    cell::{RefCell},
     collections::HashMap,
 };

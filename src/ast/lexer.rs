@@ -241,18 +241,22 @@ impl<'interner> Tokenizer<'interner> {
 
         let mut line_indices: Vec<LineIndex> = vec![];
 
-        let mut line = LineIndex { start: 0, end: 0, line: 0 };
+        let mut line = LineIndex {
+            start: 0,
+            end: 0,
+            line: 0,
+        };
         let mut last_line_needs_push = true;
         for c in chars.iter() {
             line.end += 1;
             last_line_needs_push = true;
-           
+
             if *c == '\n' {
                 last_line_needs_push = false;
-                let next = LineIndex { 
-                    start: line.end, 
-                    end: line.end, 
-                    line: line.line + 1 
+                let next = LineIndex {
+                    start: line.end,
+                    end: line.end,
+                    line: line.line + 1,
                 };
                 let this_line = std::mem::replace(&mut line, next);
                 line_indices.push(this_line);
@@ -263,7 +267,6 @@ impl<'interner> Tokenizer<'interner> {
             line_indices.push(line);
         }
 
-        
         Tokenizer {
             index: 0,
             file,
@@ -508,13 +511,12 @@ impl<'interner> Tokenizer<'interner> {
                     token_table.add(Token::Indentation, self.file, current, location);
                     current = location;
                 }
-            }
-            else if self.cur() == '\n' {
+            } else if self.cur() == '\n' {
                 self.start_token();
                 self.end_token();
                 token_table.add(Token::NewLine, self.file, self.start_token, self.end_token);
                 self.next();
-            }  else if self.cur().is_whitespace() {
+            } else if self.cur().is_whitespace() {
                 //if it's whitespace and there's a pending token, add it
                 self.next();
             } else if let Some(s) = self.match_first_and_advance(operators) {
@@ -883,7 +885,8 @@ mod tests {
 
     #[test]
     fn tokenize_if() -> Result<(), String> {
-        let result = tokenize("if x == 0:
+        let result = tokenize(
+            "if x == 0:
     x = x + 1",
         )?;
         assert_eq!(

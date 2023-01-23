@@ -1,5 +1,4 @@
-
-#[cfg(not(test))] 
+#[cfg(not(test))]
 use std::ops::Deref;
 
 use crate::ast::lexer::{Operator, Token};
@@ -25,7 +24,7 @@ impl ExprBox {
     }
 }
 
-#[cfg(not(test))] 
+#[cfg(not(test))]
 impl Deref for ExprBox {
     type Target = Box<SpanExpr>;
 
@@ -1623,10 +1622,7 @@ mod tests {
         }
     }
 
-    use std::{
-        assert_matches::assert_matches,
-        ops::Deref,
-    };
+    use std::{assert_matches::assert_matches, ops::Deref};
 
     use crate::{
         interner::StringInterner,
