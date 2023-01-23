@@ -34,12 +34,9 @@ impl StringInterner {
         }
         //get a 'static str from the last pushed string, which now lives in the
         //vec and will be dropped when Self is dropped
-        let last_pushed_str: &'static str = unsafe {
-            let strings_ref = self.strings.borrow();
-            let ptr = strings_ref.last().unwrap();
-            let const_str = ptr.as_ref() as *const str;
-            &*const_str
-        };
+        let strings_ref = self.strings.borrow();
+        let ptr = strings_ref.last().unwrap();
+        let last_pushed_str: &'static str = unsafe { &*(ptr.as_ref() as *const str) };
 
         {
             self.table.borrow_mut().insert(last_pushed_str, index);
@@ -51,9 +48,23 @@ impl StringInterner {
         return self.strings.borrow()[string.0].to_string();
     }
 
-    pub fn borrow<'intern>(&'intern self, string: InternedString) -> Ref<'intern, String> {
+    pub fn borrow<'intern>(&'intern self, string: InternedString) -> &'intern str {
         let borrow = self.strings.borrow();
-        Ref::map(borrow, |x| &x[string.0])
+        let at_index: &str = (&borrow[string.0]).as_ref();
+        let ptr = at_index.as_ptr();
+        let len = at_index.len();
+
+        let last_pushed_str: &'intern str = unsafe {
+            //@SAFETY: The strings are only deallocated after Self is dropped.
+            //Even if the vec is resized, the (ptr, len) tuple inside str are still valid.
+            //There is also no way to mutate the strings.
+            let u8_slice = std::slice::from_raw_parts(ptr, len);
+
+            //@SAFETY: This comes from a String. If that isn't valid UTF-8, I don't know what is.
+            std::str::from_utf8_unchecked(u8_slice)
+        };
+
+        last_pushed_str
     }
 }
 
@@ -103,8 +114,9 @@ impl InternedString {
         interner.get_string(self)
     }
 
-    pub fn borrow<'intern>(self, interner: &'intern StringInterner) -> Ref<'intern, String> {
-        interner.borrow(self)
+    pub fn borrow<'intern>(self, _interner: &'intern StringInterner) -> Ref<'intern, String> {
+        todo!()
+        //interner.borrow(self)
     }
 }
 

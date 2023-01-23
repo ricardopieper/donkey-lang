@@ -5,6 +5,7 @@
 #![feature(const_trait_impl)]
 #![feature(string_leak)]
 #![feature(once_cell)]
+#![feature(thread_local)]
 #[macro_use]
 mod interner;
 mod ast;

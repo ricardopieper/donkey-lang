@@ -3,6 +3,7 @@ use std::fmt::Write;
 
 use crate::ast::lexer::Operator;
 use crate::ast::parser::ASTIfStatement;
+use crate::ast::parser::SpanAST;
 use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
@@ -148,10 +149,10 @@ pub enum HIRType {
 impl<'source> From<&ASTType> for HIRType {
     fn from(typ: &ASTType) -> Self {
         match typ {
-            ASTType::Simple(name) => Self::Simple(*name),
+            ASTType::Simple(name) => Self::Simple(name.0),
             ASTType::Generic(name, generics) => {
                 let hir_generics = generics.iter().map(Self::from).collect::<Vec<_>>();
-                HIRType::Generic(*name, hir_generics)
+                HIRType::Generic(name.0, hir_generics)
             }
         }
     }
@@ -284,58 +285,60 @@ fn expr_to_hir_expr<'source, 'interner>(
     interner: &'interner StringInterner,
 ) -> HIRExpr<'source, (), NotChecked> {
     match expr {
-        Expr::IntegerValue(i) => HIRExpr::Literal(LiteralHIRExpr::Integer(*i), (), expr),
-        Expr::FloatValue(f) => HIRExpr::Literal(LiteralHIRExpr::Float(*f), (), expr),
-        Expr::StringValue(s) => HIRExpr::Literal(LiteralHIRExpr::String(*s), (), expr),
-        Expr::BooleanValue(b) => HIRExpr::Literal(LiteralHIRExpr::Boolean(*b), (), expr),
-        Expr::NoneExpr => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
-        Expr::Variable(name) => HIRExpr::Variable(*name, (), expr),
-        Expr::FunctionCall(fun_expr, args) => match &**fun_expr {
+        Expr::IntegerValue(i, _) => HIRExpr::Literal(LiteralHIRExpr::Integer(*i), (), expr),
+        Expr::FloatValue(f, _) => HIRExpr::Literal(LiteralHIRExpr::Float(*f), (), expr),
+        Expr::StringValue(s) => HIRExpr::Literal(LiteralHIRExpr::String(s.0), (), expr),
+        Expr::BooleanValue(b, _) => HIRExpr::Literal(LiteralHIRExpr::Boolean(*b), (), expr),
+        Expr::NoneExpr(_) => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
+        Expr::Variable(name) => HIRExpr::Variable(name.0, (), expr),
+        Expr::FunctionCall(fun_expr, args, _) => match &fun_expr.expr.expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
                 expr_to_hir_expr(var, interner).into(),
-                args.iter().map(|x| expr_to_hir_expr(x, interner)).collect(),
+                args.iter()
+                    .map(|x| expr_to_hir_expr(&x.expr, interner))
+                    .collect(),
                 (),
                 expr,
             ),
             Expr::MemberAccess(obj, var_name) => HIRExpr::MethodCall(
-                expr_to_hir_expr(obj, interner).into(),
-                *var_name,
+                expr_to_hir_expr(&obj.expr.expr, interner).into(),
+                var_name.0,
                 args.iter()
-                    .map(|arg| expr_to_hir_expr(arg, interner))
+                    .map(|arg| expr_to_hir_expr(&arg.expr, interner))
                     .collect(),
                 (),
                 expr,
             ),
             _ => panic!("Cannot lower function call to HIR: not variable or member access"),
         },
-        Expr::IndexAccess(object, index) => {
+        Expr::IndexAccess(object, index, _) => {
             let idx = interner.get("__index__");
             HIRExpr::MethodCall(
-                Box::new(expr_to_hir_expr(object, interner)),
+                Box::new(expr_to_hir_expr(&object.expr.expr, interner)),
                 idx,
-                vec![expr_to_hir_expr(index, interner)],
+                vec![expr_to_hir_expr(&index.expr.expr, interner)],
                 (),
                 expr,
             )
         }
         Expr::BinaryOperation(lhs, op, rhs) => {
-            let lhs = expr_to_hir_expr(lhs, interner);
-            let rhs = expr_to_hir_expr(rhs, interner);
-            HIRExpr::BinaryOperation(lhs.into(), *op, rhs.into(), (), expr)
+            let lhs = expr_to_hir_expr(&lhs.expr.expr, interner);
+            let rhs = expr_to_hir_expr(&rhs.expr.expr, interner);
+            HIRExpr::BinaryOperation(lhs.into(), op.0, rhs.into(), (), expr)
         }
         Expr::Parenthesized(_) => panic!("parenthesized not expected"),
         Expr::UnaryExpression(op, rhs) => {
-            let rhs = expr_to_hir_expr(rhs, interner);
-            HIRExpr::UnaryExpression(*op, rhs.into(), (), expr)
+            let rhs = expr_to_hir_expr(&rhs.expr.expr, interner);
+            HIRExpr::UnaryExpression(op.0, rhs.into(), (), expr)
         }
         Expr::MemberAccess(object, member) => {
-            let object = expr_to_hir_expr(object, interner);
-            HIRExpr::MemberAccess(object.into(), *member, (), expr)
+            let object = expr_to_hir_expr(&object.expr.expr, interner);
+            HIRExpr::MemberAccess(object.into(), member.0, (), expr)
         }
-        Expr::Array(items) => {
+        Expr::Array(items, _) => {
             let items = items
                 .iter()
-                .map(|item| expr_to_hir_expr(item, interner))
+                .map(|item| expr_to_hir_expr(&item.expr, interner))
                 .collect();
             HIRExpr::Array(items, (), expr)
         }
@@ -343,10 +346,11 @@ fn expr_to_hir_expr<'source, 'interner>(
 }
 
 fn ast_to_hir<'source, 'interner>(
-    ast: &'source AST,
+    ast: &'source SpanAST,
     accum: &mut Vec<UninferredHIR<'source>>,
     interner: &'interner StringInterner,
 ) {
+    let ast = &ast.ast;
     match ast {
         AST::Declare { var, expression } => {
             //expr: we have to decompose the expression into HIR declarations
@@ -356,57 +360,55 @@ fn ast_to_hir<'source, 'interner>(
             //maybe a way to do it is by calling reduce_expr_to_hir_declarations, and the function
             //itself returns a HIRExpr. It will also add to the HIR any declarations needed
             //for the decomposition.
-            let result_expr = expr_to_hir_expr(expression, interner);
+            let result_expr = expr_to_hir_expr(&expression.expr, interner);
 
             let typedef: HIRType = (&var.name_type).into();
             let decl_hir = HIR::Declare {
-                var: var.name,
+                var: var.name.0,
                 typedef,
                 expression: result_expr,
-                meta_expr: expression,
+                meta_expr: &expression.expr,
                 meta_ast: ast,
             };
 
             accum.push(decl_hir);
         }
         AST::Assign { path, expression } => {
-            let result_expr = expr_to_hir_expr(expression, interner);
+            let result_expr = expr_to_hir_expr(&expression.expr, interner);
 
             let decl_hir = HIR::Assign {
-                path: path.to_vec(),
+                path: path.0.iter().map(|x| x.0).collect::<Vec<_>>(),
                 expression: result_expr,
                 meta_ast: ast,
-                meta_expr: expression,
+                meta_expr: &expression.expr,
             };
 
             accum.push(decl_hir);
         }
-        AST::Return(expr) => match expr {
+        AST::Return(_, expr) => match expr {
             None => {
                 accum.push(HIR::EmptyReturn);
             }
             Some(e) => {
-                let result_expr = expr_to_hir_expr(e, interner);
+                let result_expr = expr_to_hir_expr(&e.expr, interner);
                 accum.push(HIR::Return(result_expr, ast));
             }
         },
         AST::StandaloneExpr(expr) => {
-            let Expr::FunctionCall(_, _) = expr else {
+            let Expr::FunctionCall(..) = &expr.expr else {
                 panic!("Can only lower function call standalone expr: {:#?}", expr);
             };
 
-            let result_expr = expr_to_hir_expr(expr, interner);
+            let result_expr = expr_to_hir_expr(&expr.expr, interner);
             let HIRExpr::FunctionCall(function, args, ..) = result_expr else {
                 panic!("Lowering of function call returned invalid result: {:?}", result_expr);
             };
 
-            let typed_args = args;
-
             accum.push(HIR::FunctionCall {
                 function: *function,
-                args: typed_args.to_vec(),
+                args: args.to_vec(),
                 meta_ast: ast,
-                meta_expr: expr,
+                meta_expr: &expr.expr,
             });
         }
         AST::IfStatement {
@@ -417,15 +419,15 @@ fn ast_to_hir<'source, 'interner>(
             ast_if_to_hir(true_branch, accum, elifs, final_else, ast, interner);
         }
         AST::WhileStatement { expression, body } => {
-            ast_while_to_hir(expression, accum, body, ast, interner);
+            ast_while_to_hir(&expression.expr, accum, body, ast, interner);
         }
-        AST::Intrinsic => panic!("Cannot use intrinsic keyword"),
+        AST::Intrinsic(_) => panic!("Cannot use intrinsic keyword"),
         ast => panic!("Not implemented HIR for {:?}", ast),
     }
 }
 
 fn ast_decl_function_to_hir<'source, 'interner>(
-    body: &'source [AST],
+    body: &'source [SpanAST],
     function_name: InternedString,
     parameters: &'source [TypeBoundName],
     return_type: &Option<ASTType>,
@@ -434,7 +436,7 @@ fn ast_decl_function_to_hir<'source, 'interner>(
     interner: &'interner StringInterner,
 ) {
     if body.len() == 1 {
-        if let AST::Intrinsic = body[0] {
+        if let AST::Intrinsic(_) = &body[0].ast {
             accum.push(HIRRoot::DeclareFunction {
                 function_name,
                 parameters: create_type_bound_names(parameters),
@@ -479,7 +481,7 @@ fn create_type_bound_names<'source>(
 
 fn create_type_bound_name<'source>(param: &'source TypeBoundName) -> HIRTypedBoundName<HIRType> {
     HIRTypedBoundName {
-        name: param.name,
+        name: param.name.0,
         typename: (&param.name_type).into(),
     }
 }
@@ -488,11 +490,11 @@ fn ast_if_to_hir<'source, 'interner>(
     true_branch: &'source ASTIfStatement,
     accum: &mut Vec<UninferredHIR<'source>>,
     elifs: &'source [ASTIfStatement],
-    final_else: &'source Option<Vec<AST>>,
+    final_else: &'source Option<Vec<SpanAST>>,
     ast: &'source AST,
     interner: &'interner StringInterner,
 ) {
-    let true_branch_result_expr = expr_to_hir_expr(&true_branch.expression, interner);
+    let true_branch_result_expr = expr_to_hir_expr(&true_branch.expression.expr, interner);
 
     let mut true_body_hir = vec![];
     for node in &true_branch.statements {
@@ -546,7 +548,7 @@ fn ast_if_to_hir<'source, 'interner>(
         nodes.push(root_node);
 
         for item in elifs {
-            let elif_true_branch_result_expr = expr_to_hir_expr(&item.expression, interner);
+            let elif_true_branch_result_expr = expr_to_hir_expr(&item.expression.expr, interner);
 
             let mut if_node = IfTreeNode {
                 condition: elif_true_branch_result_expr,
@@ -599,7 +601,7 @@ fn ast_if_to_hir<'source, 'interner>(
 fn ast_while_to_hir<'source, 'interner>(
     expression: &'source Expr,
     accum: &mut Vec<UninferredHIR<'source>>,
-    body: &'source [AST],
+    body: &'source [SpanAST],
     ast: &'source AST,
     interner: &'interner StringInterner,
 ) {
@@ -627,7 +629,7 @@ pub fn ast_globals_to_hir<'source, 'interner>(
         } => {
             ast_decl_function_to_hir(
                 body,
-                *function_name,
+                function_name.0,
                 parameters,
                 return_type,
                 ast,
@@ -637,7 +639,7 @@ pub fn ast_globals_to_hir<'source, 'interner>(
         }
         AST::Root(ast_nodes) => {
             for node in ast_nodes {
-                accum.extend(ast_globals_to_hir(node, interner));
+                accum.extend(ast_globals_to_hir(&node.ast, interner));
             }
         }
         AST::StructDeclaration {
@@ -647,11 +649,11 @@ pub fn ast_globals_to_hir<'source, 'interner>(
         } => {
             let fields = create_type_bound_names(body);
             accum.push(HIRRoot::StructDeclaration {
-                struct_name: *struct_name,
+                struct_name: struct_name.0,
                 fields,
                 type_parameters: type_parameters
                     .iter()
-                    .map(|x| GenericParameter(*x))
+                    .map(|x| GenericParameter(x.0))
                     .collect(),
                 meta: ast,
             });
@@ -673,6 +675,7 @@ mod tests {
 
     use crate::ast::parser::parse_ast;
     use crate::semantic::context::test_utils::tls_interner;
+    use crate::semantic::context::FileTableIndex;
     use crate::semantic::hir;
 
     use crate::semantic::hir_printer::HIRPrinter;
@@ -680,7 +683,7 @@ mod tests {
 
     //Parses a single expression
     fn parse<'source>(source: &str) -> AST {
-        let tokens = INTERNER.with(|x| crate::ast::lexer::tokenize(source, x));
+        let tokens = INTERNER.with(|x| crate::ast::lexer::tokenize(FileTableIndex(0), source, x));
         let ast = parse_ast(tokens.unwrap());
         return AST::Root(ast);
     }

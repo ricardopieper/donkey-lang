@@ -1,7 +1,59 @@
 use crate::{
     commons::float::FloatLiteral,
     interner::{InternedString, StringInterner},
+    semantic::context::FileTableIndex,
 };
+
+#[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
+pub struct TokenSpanIndex(pub usize);
+
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
+pub struct TokenData {
+    pub token: Token,
+    pub loc: TokenSpanIndex,
+}
+
+#[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
+pub struct SourceLocation {
+    pub line: u32,
+    pub column: u32,
+}
+
+#[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
+pub struct TokenSpan {
+    pub file: FileTableIndex,
+    pub start: SourceLocation,
+    pub end: SourceLocation,
+}
+
+pub struct TokenTable {
+    pub tokens: Vec<TokenData>,
+    pub spans: Vec<TokenSpan>,
+}
+
+impl TokenTable {
+    fn new() -> Self {
+        TokenTable {
+            tokens: vec![],
+            spans: vec![],
+        }
+    }
+
+    pub fn add(
+        &mut self,
+        token: Token,
+        file: FileTableIndex,
+        start: SourceLocation,
+        end: SourceLocation,
+    ) {
+        let cur_len = self.spans.len();
+        self.spans.push(TokenSpan { file, start, end });
+        self.tokens.push(TokenData {
+            loc: TokenSpanIndex(cur_len),
+            token,
+        });
+    }
+}
 
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
 pub enum Operator {
@@ -24,7 +76,7 @@ pub enum Operator {
     LessEquals,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Token {
     LiteralFloat(FloatLiteral),
     LiteralInteger(i128),
@@ -68,11 +120,11 @@ impl Token {
             Token::Operator(_) => "operator",
             Token::Identifier(_) => "identifier",
             Token::NewLine => "new line",
-            Token::Assign => "assign",
+            Token::Assign => "assign = ",
             Token::True | Token::False => "boolean literal",
-            Token::None => "none",
-            Token::Comma => "comma",
-            Token::Colon => "colon",
+            Token::None => "None",
+            Token::Comma => "comma ,",
+            Token::Colon => "colon :",
             Token::StructDef => "struct keyword",
             Token::IfKeyword => "if keyword",
             Token::ForKeyword => "for keyword",
@@ -85,10 +137,10 @@ impl Token {
             Token::ElifKeyword => "elif keyword",
             Token::ElseKeyword => "else keyword",
             Token::DefKeyword => "def keyword",
-            Token::OpenParen => "open parenthesis",
-            Token::CloseParen => "close parenthesis",
-            Token::OpenArrayBracket => "open bracket",
-            Token::CloseArrayBracket => "close bracket",
+            Token::OpenParen => "open parenthesis (",
+            Token::CloseParen => "close parenthesis )",
+            Token::OpenArrayBracket => "open bracket [",
+            Token::CloseArrayBracket => "close bracket ]",
             Token::MemberAccessor => "member access (dot)",
             Token::ArrowRight => "arrow right (->)",
             Token::Indentation => "indentation",
@@ -99,16 +151,8 @@ impl Token {
 #[derive(Debug)]
 pub enum PartialToken {
     UndefinedOrWhitespace,
-    LiteralFloat(String),
     Operator(String),
     Identifier(String),
-    String(String),
-    NewLine,
-    Comma,
-    OpenArrayBracket,
-    CloseArrayBracket,
-    MemberAccessor,
-    Colon,
 }
 
 impl PartialToken {
@@ -138,26 +182,6 @@ impl PartialToken {
                 "struct" => Token::StructDef,
                 _ => Token::Identifier(interner.get(&s)),
             },
-            Self::Comma => Token::Comma,
-            Self::Colon => Token::Colon,
-            Self::NewLine => Token::NewLine,
-            Self::MemberAccessor => Token::MemberAccessor,
-            Self::OpenArrayBracket => Token::OpenArrayBracket,
-            Self::CloseArrayBracket => Token::CloseArrayBracket,
-            Self::LiteralFloat(s) => {
-                if s.contains('.') || s.contains('e') {
-                    match s.parse::<f64>() {
-                        Ok(f) => Token::LiteralFloat(f.into()),
-                        _ => panic!("Error parsing float value {}. Should have generated a tokenizer error. This is a bug.", s)
-                    }
-                } else {
-                    match s.parse::<i128>() {
-                        Ok(f) => Token::LiteralInteger(f),
-                        _ => panic!("Error parsing integer value {}. Should have generated a tokenizer error. This is a bug.", s)
-                    }
-                }
-            }
-            Self::String(s) => Token::LiteralString(interner.get(&s)),
             Self::Operator(s) => match s.as_ref() {
                 "+" => Token::Operator(Operator::Plus),
                 "-" => Token::Operator(Operator::Minus),
@@ -183,28 +207,101 @@ impl PartialToken {
     }
 }
 
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
+pub struct LineIndex {
+    //This is a char index
+    start: usize,
+    //this is a char index too, includes newlines
+    end: usize,
+    //The number of the line
+    line: u32,
+}
+
 pub struct Tokenizer<'interner> {
     index: usize,
+    file: FileTableIndex,
     source: String,
     chars: Vec<char>,
     cur_partial_token: PartialToken,
-    final_result: Vec<Token>,
     eater_buf: String,
     interner: &'interner StringInterner,
+    line_indices: Vec<LineIndex>,
+    start_token: SourceLocation,
+    end_token: SourceLocation,
 }
 
 impl<'interner> Tokenizer<'interner> {
-    pub fn new(source: String, interner: &'interner StringInterner) -> Tokenizer<'interner> {
+    pub fn new(
+        file: FileTableIndex,
+        source: String,
+        interner: &'interner StringInterner,
+    ) -> Tokenizer<'interner> {
         let chars = source.chars().collect::<Vec<_>>();
+        //add a new line always so that the loop finds a newline in the end
+
+        let mut line_indices: Vec<LineIndex> = vec![];
+
+        let mut line = LineIndex { start: 0, end: 0, line: 0 };
+        let mut last_line_needs_push = true;
+        for c in chars.iter() {
+            line.end += 1;
+            last_line_needs_push = true;
+           
+            if *c == '\n' {
+                last_line_needs_push = false;
+                let next = LineIndex { 
+                    start: line.end, 
+                    end: line.end, 
+                    line: line.line + 1 
+                };
+                let this_line = std::mem::replace(&mut line, next);
+                line_indices.push(this_line);
+            }
+        }
+
+        if last_line_needs_push {
+            line_indices.push(line);
+        }
+
+        
         Tokenizer {
             index: 0,
+            file,
             source,
             chars,
             cur_partial_token: PartialToken::UndefinedOrWhitespace,
-            final_result: vec![],
             eater_buf: String::new(),
             interner,
+            line_indices,
+            start_token: SourceLocation { line: 0, column: 0 },
+            end_token: SourceLocation { line: 0, column: 0 },
         }
+    }
+
+    fn get_location(&self, index: usize) -> SourceLocation {
+        //line_indices is ordered, just find the one that has end >= index
+        for line in self.line_indices.iter() {
+            if line.end >= index {
+                return SourceLocation {
+                    line: line.line,
+                    column: (index - line.start) as u32,
+                };
+            }
+        }
+        //if no location has found, then we must be in the last (or only) line.
+        let last = self.line_indices.last().unwrap();
+        SourceLocation {
+            line: last.line,
+            column: (index - last.start) as u32,
+        }
+    }
+
+    fn start_token(&mut self) {
+        self.start_token = self.get_location(self.index);
+    }
+
+    fn end_token(&mut self) {
+        self.end_token = self.get_location(self.index);
     }
 
     fn reset_eater_buffer(&mut self) {
@@ -243,6 +340,7 @@ impl<'interner> Tokenizer<'interner> {
 
     fn eat_identifier(&mut self) -> Option<&str> {
         let start = self.index;
+        self.start_token();
         let first_char_is_valid_identifier =
             self.can_go() && self.cur().is_ascii_alphabetic() || self.cur() == '_';
 
@@ -258,7 +356,7 @@ impl<'interner> Tokenizer<'interner> {
             self.next();
         }
         let end = self.index;
-
+        self.end_token();
         Some(&self.source[start..end])
     }
 
@@ -315,7 +413,7 @@ impl<'interner> Tokenizer<'interner> {
         finished
     }
 
-    fn commit_current_token(&mut self) {
+    fn commit_current_token(&mut self, table: &mut TokenTable) {
         if let PartialToken::UndefinedOrWhitespace = self.cur_partial_token {
             return;
         }
@@ -326,11 +424,7 @@ impl<'interner> Tokenizer<'interner> {
         );
 
         let as_token = cur_token.to_token(self.interner);
-        self.final_result.push(as_token);
-    }
-
-    fn clone_buf(&self) -> String {
-        self.eater_buf.clone()
+        table.add(as_token, self.file, self.start_token, self.end_token);
     }
 
     fn match_partial(&mut self, query: &str) -> (bool, usize) {
@@ -345,6 +439,7 @@ impl<'interner> Tokenizer<'interner> {
     }
 
     fn match_first_and_advance<'a>(&mut self, query: &'a [&'a str]) -> Option<&str> {
+        self.start_token();
         for q in query {
             let cur_idx = self.index;
             let (success, len) = self.match_partial(q);
@@ -354,145 +449,189 @@ impl<'interner> Tokenizer<'interner> {
                 return Some(&self.source[cur_idx..new_idx]);
             }
         }
+        self.end_token();
         None
     }
 
-    pub fn tokenize(mut self) -> Result<Vec<Token>, String> {
+    pub fn tokenize(mut self) -> Result<TokenTable, String> {
+        let mut token_table = TokenTable::new();
+
         let operators = &[
             "+", "->", "-", "*", "%", "/", "<<", ">>", "<=", ">=", ">", "<", "!=", "==", "=", "^",
             "(", ")",
         ];
         while self.can_go() {
-            self.commit_current_token();
+            self.commit_current_token(&mut token_table);
             if self.cur().is_numeric() {
-                let cur_idx = self.index;
                 self.reset_eater_buffer();
+
+                self.start_token();
                 self.eat_numbers();
                 self.eat_char('.');
                 self.eat_numbers();
                 self.eat_char('e');
                 self.eat_char('-');
                 self.eat_numbers();
-                let end_idx = self.index;
-                self.cur_partial_token =
-                    PartialToken::LiteralFloat(self.source[cur_idx..end_idx].to_string());
-                self.reset_eater_buffer();
-            } else if self.cur() == ',' {
-                self.cur_partial_token = PartialToken::Comma;
-                self.commit_current_token();
-                self.next();
-            } else if self.cur() == ':' {
-                self.cur_partial_token = PartialToken::Colon;
-                self.commit_current_token();
-                self.next();
-            } else if self.cur() == '[' {
-                self.cur_partial_token = PartialToken::OpenArrayBracket;
-                self.commit_current_token();
-                self.next();
-            } else if self.cur() == ']' {
-                self.cur_partial_token = PartialToken::CloseArrayBracket;
-                self.commit_current_token();
-                self.next();
-            } else if self.cur() == '.' {
-                self.cur_partial_token = PartialToken::MemberAccessor;
-                self.commit_current_token();
-                self.next();
-            } else if self.cur() == '\n' {
-                self.cur_partial_token = PartialToken::NewLine;
-                self.commit_current_token();
-                self.next();
+
+                self.end_token();
+
+                let token = if self.eater_buf.contains('.') || self.eater_buf.contains('e') {
+                    self.eater_buf
+                        .parse::<f64>()
+                        .map_err(|_| "Error parsing float value")
+                        .map(|f| Token::LiteralFloat(f.into()))
+                } else {
+                    self.eater_buf
+                        .parse::<i128>()
+                        .map_err(|_| "Error parsing integer value")
+                        .map(|i| Token::LiteralInteger(i))
+                }?;
+
+                token_table.add(token, self.file, self.start_token, self.end_token);
             } else if self.index > 0 && self.cur_offset(-1) == '\n' && self.cur() == ' ' {
+                let mut current = self.get_location(self.index);
+
                 let mut current_spaces = 0;
                 while self.can_go() && self.cur() == ' ' {
                     current_spaces += 1;
                     self.next();
                 }
+
                 assert!(
                     current_spaces % 4 == 0,
                     "Indentation must be a multiple of 4"
                 );
                 let indents = current_spaces / 4;
-                for _i in 0..indents {
-                    self.final_result.push(Token::Indentation);
+
+                for i in 0..indents {
+                    let location = self.get_location(self.index + (4 * i));
+                    token_table.add(Token::Indentation, self.file, current, location);
+                    current = location;
                 }
-            } else if self.cur().is_whitespace() {
+            }
+            else if self.cur() == '\n' {
+                self.start_token();
+                self.end_token();
+                token_table.add(Token::NewLine, self.file, self.start_token, self.end_token);
+                self.next();
+            }  else if self.cur().is_whitespace() {
                 //if it's whitespace and there's a pending token, add it
                 self.next();
             } else if let Some(s) = self.match_first_and_advance(operators) {
                 self.cur_partial_token = PartialToken::Operator(s.to_string());
-                self.commit_current_token();
             } else if self.cur().is_ascii_alphabetic() || self.cur() == '_' {
+                self.reset_eater_buffer();
                 let identifier = self.eat_identifier().unwrap();
                 self.cur_partial_token = PartialToken::Identifier(identifier.to_string());
-                self.reset_eater_buffer();
             } else if self.cur() == '\'' || self.cur() == '"' {
-                self.eat_string_literal();
-                self.cur_partial_token = PartialToken::String(self.clone_buf());
-                self.commit_current_token();
                 self.reset_eater_buffer();
+
+                self.start_token();
+                self.eat_string_literal();
+                self.end_token();
+
+                let interned = self.interner.get(&self.eater_buf);
+
+                token_table.add(
+                    Token::LiteralString(interned),
+                    self.file,
+                    self.start_token,
+                    self.end_token,
+                );
+
                 self.next();
             } else {
-                return Err(format!("Unrecognized token {}", self.cur()));
+                self.start_token();
+                let token = match self.cur() {
+                    ',' => Some(Token::Comma),
+                    ':' => Some(Token::Colon),
+                    '[' => Some(Token::OpenArrayBracket),
+                    ']' => Some(Token::CloseArrayBracket),
+                    '.' => Some(Token::MemberAccessor),
+                    _ => None,
+                };
+
+                if let Some(t) = token {
+                    self.next();
+                    self.end_token();
+                    token_table.add(t, self.file, self.start_token, self.end_token)
+                } else {
+                    return Err(format!("Unrecognized token {}", self.cur()));
+                }
             }
         }
-        self.commit_current_token();
-        let final_result = self.final_result.drain(0..self.final_result.len());
-        Ok(final_result.collect())
+        self.commit_current_token(&mut token_table);
+
+        Ok(token_table)
     }
 }
 
 pub fn tokenize<'interner>(
+    file: FileTableIndex,
     source: &str,
     interner: &'interner StringInterner,
-) -> Result<Vec<Token>, String> {
-    Tokenizer::new(source.to_string(), interner).tokenize()
+) -> Result<TokenTable, String> {
+    Tokenizer::new(file, source.to_string(), interner).tokenize()
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::semantic::context::test_utils::tls_interner;
+
     use super::*;
+    thread_local! {
+        static INTERNER: StringInterner = StringInterner::new();
+    }
+
+    tls_interner!(INTERNER);
+
+    fn tokenize(str: &str) -> Result<Vec<Token>, String> {
+        INTERNER.with(|interner| {
+            crate::ast::lexer::tokenize(FileTableIndex(0), str, interner).map(|table| {
+                table
+                    .tokens
+                    .into_iter()
+                    .map(|x| x.token)
+                    .collect::<Vec<_>>()
+            })
+        })
+    }
 
     #[test]
     fn tokenizer_simple_number() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("2", &mut i)?;
+        let result = tokenize("2")?;
         assert_eq!(result, [Token::LiteralInteger(2)]);
         Ok(())
     }
     #[test]
     fn tokenizer_bigger_number() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("22", &mut i)?;
+        let result = tokenize("22")?;
         assert_eq!(result, [Token::LiteralInteger(22)]);
         Ok(())
     }
     #[test]
     fn tokenizer_decimal_number() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("22.321", &mut i)?;
+        let result = tokenize("22.321")?;
         assert_eq!(result, [Token::LiteralFloat(22.321.into())]);
         Ok(())
     }
 
     #[test]
     fn tokenizer_decimal_exponent_number() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("22.22e2", &mut i)?;
+        let result = tokenize("22.22e2")?;
         assert_eq!(result, [Token::LiteralFloat(22.22e2.into())]);
         Ok(())
     }
     #[test]
     fn tokenizer_operator() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("+", &mut i)?;
+        let result = tokenize("+")?;
         assert_eq!(result, [Token::Operator(Operator::Plus)]);
         Ok(())
     }
 
     #[test]
     fn tokenizer_number_space_operator() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("6 +", &mut i)?;
+        let result = tokenize("6 +")?;
         assert_eq!(
             result,
             [Token::LiteralInteger(6), Token::Operator(Operator::Plus)]
@@ -502,8 +641,7 @@ mod tests {
 
     #[test]
     fn tokenizer_number_space_operator_space_operator() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("6 + +", &mut i)?;
+        let result = tokenize("6 + +")?;
         assert_eq!(
             result,
             [
@@ -517,8 +655,7 @@ mod tests {
 
     #[test]
     fn tokenizer_not_equals() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("10 != 12", &mut i)?;
+        let result = tokenize("10 != 12")?;
         assert_eq!(
             result,
             [
@@ -532,8 +669,7 @@ mod tests {
 
     #[test]
     fn tokenizer_unrecognized_token() -> Result<(), &'static str> {
-        let mut i = StringInterner::new();
-        let result = tokenize("10 # 12", &mut i);
+        let result = tokenize("10 # 12");
         match result {
             Ok(_) => Err("Operator # doesnt exist and shouldn't be tokenized"),
             Err(_) => Ok(()),
@@ -542,8 +678,7 @@ mod tests {
 
     #[test]
     fn tokenizer_many_operators() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("10 + - / * << >> != == -12", &mut i)?;
+        let result = tokenize("10 + - / * << >> != == -12")?;
         assert_eq!(
             result,
             [
@@ -565,8 +700,7 @@ mod tests {
 
     #[test]
     fn tokenizer_number_space_operator_space_number() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("6 + 6", &mut i)?;
+        let result = tokenize("6 + 6")?;
         assert_eq!(
             result,
             [
@@ -580,11 +714,7 @@ mod tests {
 
     #[test]
     fn tokenizer_number_space_operator_lots_of_space_number() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize(
-            "6         +                                6.2312e99",
-            &mut i,
-        )?;
+        let result = tokenize("6         +                                6.2312e99")?;
         assert_eq!(
             result,
             [
@@ -598,8 +728,7 @@ mod tests {
 
     #[test]
     fn tokenizer_number_operator_number() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("6+6", &mut i)?;
+        let result = tokenize("6+6")?;
         assert_eq!(
             result,
             [
@@ -613,8 +742,7 @@ mod tests {
 
     #[test]
     fn tokenizer_space_corner_cases() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("   6         +             6.2312e99   ", &mut i)?;
+        let result = tokenize("   6         +             6.2312e99   ")?;
         assert_eq!(
             result,
             [
@@ -628,32 +756,28 @@ mod tests {
 
     #[test]
     fn tokenier_openparen() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("(", &mut i)?;
+        let result = tokenize("(")?;
         assert_eq!(result, [Token::OpenParen]);
         Ok(())
     }
 
     #[test]
     fn tokenier_closeparen() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize(")", &mut i)?;
+        let result = tokenize(")")?;
         assert_eq!(result, [Token::CloseParen]);
         Ok(())
     }
 
     #[test]
     fn tokenier_opencloseparen() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("()", &mut i)?;
+        let result = tokenize("()")?;
         assert_eq!(result, [Token::OpenParen, Token::CloseParen]);
         Ok(())
     }
 
     #[test]
     fn tokenier_opencloseparen_with_expr() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("(1 + 2) * 3", &mut i)?;
+        let result = tokenize("(1 + 2) * 3")?;
         assert_eq!(
             result,
             [
@@ -669,29 +793,20 @@ mod tests {
         Ok(())
     }
 
-    //macro to fetch an interned string
-    macro_rules! istr {
-        ($s:expr, $interner:expr) => {
-            $interner.get($s)
-        };
-    }
-
     #[test]
     fn tokenizer_identifier() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("some_identifier", &mut i)?;
-        assert_eq!(result, [Token::Identifier(istr!("some_identifier", i))]);
+        let result = tokenize("some_identifier")?;
+        assert_eq!(result, [Token::Identifier(istr!("some_identifier"))]);
         Ok(())
     }
 
     #[test]
     fn tokenizer_function_call() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("some_identifier(1)", &mut i)?;
+        let result = tokenize("some_identifier(1)")?;
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("some_identifier", i)),
+                Token::Identifier(istr!("some_identifier")),
                 Token::OpenParen,
                 Token::LiteralInteger(1),
                 Token::CloseParen
@@ -702,12 +817,11 @@ mod tests {
 
     #[test]
     fn assign_operator() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("x = 1", &mut i)?;
+        let result = tokenize("x = 1")?;
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("x", i).into()),
+                Token::Identifier(istr!("x").into()),
                 Token::Assign,
                 Token::LiteralInteger(1)
             ]
@@ -717,16 +831,14 @@ mod tests {
 
     #[test]
     fn none() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("None", &mut i)?;
+        let result = tokenize("None")?;
         assert_eq!(result, [Token::None]);
         Ok(())
     }
 
     #[test]
     fn boolean_tokens() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("not True and False or ^", &mut i)?;
+        let result = tokenize("not True and False or ^")?;
         assert_eq!(
             result,
             [
@@ -743,57 +855,50 @@ mod tests {
 
     #[test]
     fn string_literal() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("'abc'", &mut i)?;
-        assert_eq!(result, [Token::LiteralString(istr!("abc", i))]);
+        let result = tokenize("'abc'")?;
+        assert_eq!(result, [Token::LiteralString(istr!("abc"))]);
         Ok(())
     }
 
     #[test]
     fn string_literal_doublequotes() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("\"abc\"", &mut i)?;
-        assert_eq!(result, [Token::LiteralString(istr!("abc", i))]);
+        let result = tokenize("\"abc\"")?;
+        assert_eq!(result, [Token::LiteralString(istr!("abc"))]);
         Ok(())
     }
 
     #[test]
     fn string_literal_escapedouble() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("\"a\\\"b\\\"c\"", &mut i)?;
-        assert_eq!(result, [Token::LiteralString(istr!("a\"b\"c", i))]);
+        let result = tokenize("\"a\\\"b\\\"c\"")?;
+        assert_eq!(result, [Token::LiteralString(istr!("a\"b\"c"))]);
         Ok(())
     }
 
     #[test]
     fn string_literal_escapesingle() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("\'a\\'b\\'c\'", &mut i)?;
-        assert_eq!(result, [Token::LiteralString(istr!("a'b'c", i))]);
+        let result = tokenize("\'a\\'b\\'c\'")?;
+        assert_eq!(result, [Token::LiteralString(istr!("a'b'c"))]);
         Ok(())
     }
 
     #[test]
     fn tokenize_if() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize(
-            "if x == 0:
+        let result = tokenize("if x == 0:
     x = x + 1",
-            &mut i,
         )?;
         assert_eq!(
             result,
             [
                 Token::IfKeyword,
-                Token::Identifier(istr!("x", i).into()),
+                Token::Identifier(istr!("x").into()),
                 Token::Operator(Operator::Equals),
                 Token::LiteralInteger(0),
                 Token::Colon,
                 Token::NewLine,
                 Token::Indentation,
-                Token::Identifier(istr!("x", i).into()),
+                Token::Identifier(istr!("x").into()),
                 Token::Assign,
-                Token::Identifier(istr!("x", i).into()),
+                Token::Identifier(istr!("x").into()),
                 Token::Operator(Operator::Plus),
                 Token::LiteralInteger(1)
             ]
@@ -803,14 +908,13 @@ mod tests {
 
     #[test]
     fn method_call() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("obj.method", &mut i)?;
+        let result = tokenize("obj.method")?;
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("obj", i).into()),
+                Token::Identifier(istr!("obj").into()),
                 Token::MemberAccessor,
-                Token::Identifier(istr!("method", i).into()),
+                Token::Identifier(istr!("method").into()),
             ]
         );
         Ok(())
@@ -818,14 +922,13 @@ mod tests {
 
     #[test]
     fn method_call2() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("obj . method", &mut i)?;
+        let result = tokenize("obj . method")?;
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("obj", i).into()),
+                Token::Identifier(istr!("obj").into()),
                 Token::MemberAccessor,
-                Token::Identifier(istr!("method", i).into()),
+                Token::Identifier(istr!("method").into()),
             ]
         );
         Ok(())
@@ -833,15 +936,14 @@ mod tests {
 
     #[test]
     fn for_list() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("for item in ls:", &mut i)?;
+        let result = tokenize("for item in ls:")?;
         assert_eq!(
             result,
             [
                 Token::ForKeyword,
-                Token::Identifier(istr!("item", i).into()),
+                Token::Identifier(istr!("item").into()),
                 Token::InKeyword,
-                Token::Identifier(istr!("ls", i).into()),
+                Token::Identifier(istr!("ls").into()),
                 Token::Colon,
             ]
         );
@@ -850,17 +952,16 @@ mod tests {
 
     #[test]
     fn def_function() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("def function(x: i32):", &mut i)?;
+        let result = tokenize("def function(x: i32):")?;
         assert_eq!(
             result,
             [
                 Token::DefKeyword,
-                Token::Identifier(istr!("function", i).into()),
+                Token::Identifier(istr!("function").into()),
                 Token::OpenParen,
-                Token::Identifier(istr!("x", i).into()),
+                Token::Identifier(istr!("x").into()),
                 Token::Colon,
-                Token::Identifier(istr!("i32", i).into()),
+                Token::Identifier(istr!("i32").into()),
                 Token::CloseParen,
                 Token::Colon,
             ]
@@ -870,20 +971,19 @@ mod tests {
 
     #[test]
     fn def_function_return() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("def function(x: i32) -> i32:", &mut i)?;
+        let result = tokenize("def function(x: i32) -> i32:")?;
         assert_eq!(
             result,
             [
                 Token::DefKeyword,
-                Token::Identifier(istr!("function", i).into()),
+                Token::Identifier(istr!("function").into()),
                 Token::OpenParen,
-                Token::Identifier(istr!("x", i).into()),
+                Token::Identifier(istr!("x").into()),
                 Token::Colon,
-                Token::Identifier(istr!("i32", i).into()),
+                Token::Identifier(istr!("i32").into()),
                 Token::CloseParen,
                 Token::ArrowRight,
-                Token::Identifier(istr!("i32", i).into()),
+                Token::Identifier(istr!("i32").into()),
                 Token::Colon,
             ]
         );
@@ -892,21 +992,19 @@ mod tests {
 
     #[test]
     fn return_keyword() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("return", &mut i)?;
+        let result = tokenize("return")?;
         assert_eq!(result, [Token::ReturnKeyword]);
         Ok(())
     }
 
     #[test]
     fn raise_exception_expr() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("raise SomeError", &mut i)?;
+        let result = tokenize("raise SomeError")?;
         assert_eq!(
             result,
             [
                 Token::RaiseKeyword,
-                Token::Identifier(istr!("SomeError", i).into())
+                Token::Identifier(istr!("SomeError").into())
             ]
         );
         Ok(())
@@ -914,12 +1012,11 @@ mod tests {
 
     #[test]
     fn array_access() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("array[0]", &mut i)?;
+        let result = tokenize("array[0]")?;
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("array", i).into()),
+                Token::Identifier(istr!("array").into()),
                 Token::OpenArrayBracket,
                 Token::LiteralInteger(0),
                 Token::CloseArrayBracket
@@ -930,13 +1027,12 @@ mod tests {
 
     #[test]
     fn class_def() -> Result<(), String> {
-        let mut i = StringInterner::new();
-        let result = tokenize("struct Test:", &mut i)?;
+        let result = tokenize("struct Test:")?;
         assert_eq!(
             result,
             [
                 Token::StructDef,
-                Token::Identifier(istr!("Test", i).into()),
+                Token::Identifier(istr!("Test").into()),
                 Token::Colon
             ]
         );

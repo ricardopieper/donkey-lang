@@ -693,7 +693,7 @@ fn make_method_name_or_index<'source>(
 ) -> FunctionName {
     dbg!(expr);
     match expr {
-        Expr::IndexAccess(_, _) => FunctionName::IndexAccess,
+        Expr::IndexAccess(..) => FunctionName::IndexAccess,
         _ => FunctionName::Method {
             function_name: name,
             type_name: interner.get(obj_type_name),

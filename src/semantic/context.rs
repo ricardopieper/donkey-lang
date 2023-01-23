@@ -4,12 +4,18 @@ use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotChecked};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 use super::type_checker::typecheck;
+use crate::ast::lexer::TokenSpanIndex;
+use crate::ast::parser::AstSpan;
 use crate::ast::{lexer, parser};
 use crate::interner::StringInterner;
 use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
 use crate::types::type_errors::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
+
+#[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
+pub struct FileTableIndex(pub usize);
+
 pub struct LoadedFile {
     pub file_name: String,
     pub ast: AST,
@@ -38,10 +44,14 @@ impl Source {
     pub fn load(self: &mut Source, file_name: String, source: String) {
         self.loaded_files.push(LoadedFile {
             file_name,
-            ast: AST::Break,
+            ast: AST::Break(AstSpan {
+                start: TokenSpanIndex(0),
+                end: TokenSpanIndex(0),
+            }),
             contents: source.leak(),
         });
         let tokens = lexer::tokenize(
+            FileTableIndex(self.loaded_files.len()),
             self.loaded_files.last().unwrap().contents.as_ref(),
             &self.interner,
         );
@@ -194,7 +204,19 @@ pub mod test_utils {
         };
     }
 
+    macro_rules! tls_interner_static {
+        ($interner:expr) => {
+            #[allow(unused_macros)] //This IS being used!
+            macro_rules! istr {
+                ($str:expr) => {
+                    $interner.get($str)
+                };
+            }
+        };
+    }
+
     pub(crate) use tls_interner;
+    
 
     pub struct AnalysisWithoutTypecheckResult<'source, 'interner> {
         pub mir: Vec<MIRTopLevelNode<'source, NotChecked>>,
