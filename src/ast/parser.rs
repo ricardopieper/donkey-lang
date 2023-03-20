@@ -3,7 +3,9 @@ use std::ops::Deref;
 
 use crate::ast::lexer::{Operator, Token};
 use crate::commons::float::FloatLiteral;
-use crate::interner::InternedString;
+use crate::interner::{InternedString, StringInterner};
+use crate::semantic::context::{FileTableEntry, FileTableIndex};
+use crate::Source;
 
 //This is a box wrapper type so that I can implement a "double deref"
 //automatically to make testing easier
@@ -47,14 +49,14 @@ impl Spanned for TokenSpanIndex {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SpannedString(pub InternedString, pub AstSpan);
+pub struct StringSpan(pub InternedString, pub AstSpan);
 
 impl InternedString {
-    pub fn spanned(self, span: AstSpan) -> SpannedString {
-        SpannedString(self, span)
+    pub fn spanned(self, span: AstSpan) -> StringSpan {
+        StringSpan(self, span)
     }
 
-    pub fn token_spanned(self, loc: TokenSpanIndex) -> SpannedString {
+    pub fn token_spanned(self, loc: TokenSpanIndex) -> StringSpan {
         self.spanned(AstSpan {
             start: loc,
             end: loc,
@@ -62,7 +64,7 @@ impl InternedString {
     }
 }
 
-impl Spanned for SpannedString {
+impl Spanned for StringSpan {
     fn get_span(&self) -> AstSpan {
         self.1
     }
@@ -75,10 +77,10 @@ pub struct SpannedOperator(pub Operator, pub AstSpan);
 pub enum Expr {
     IntegerValue(i128, AstSpan),
     FloatValue(FloatLiteral, AstSpan),
-    StringValue(SpannedString),
+    StringValue(StringSpan),
     BooleanValue(bool, AstSpan),
     NoneExpr(AstSpan),
-    Variable(SpannedString),
+    Variable(StringSpan),
     //the last parameter here contains the closing parenthesis.
     FunctionCall(ExprBox, Vec<SpanExpr>, AstSpan),
     //the last parameter here contains the array closing bracket
@@ -86,7 +88,7 @@ pub enum Expr {
     BinaryOperation(ExprBox, SpannedOperator, ExprBox),
     Parenthesized(ExprBox),
     UnaryExpression(SpannedOperator, ExprBox),
-    MemberAccess(ExprBox, SpannedString),
+    MemberAccess(ExprBox, StringSpan),
     //the last parameter here contains the entire span, from start to beginning
     Array(Vec<SpanExpr>, AstSpan),
     //maybe there could be a syntax to specify the type of the array
@@ -182,8 +184,24 @@ impl Spanned for ASTIfStatement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ASTType {
-    Simple(SpannedString),
-    Generic(SpannedString, Vec<ASTType>),
+    Simple(StringSpan),
+    Generic(StringSpan, Vec<ASTType>),
+}
+
+impl ASTType {
+    pub fn to_string(&self, interner: &StringInterner) -> String {
+        match self {
+            ASTType::Simple(s) => format!("{}", interner.borrow(s.0)),
+            ASTType::Generic(s, params) => {
+                let generic_params = params
+                    .iter()
+                    .map(|x| x.to_string(interner))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{}<{}>", interner.borrow(s.0), generic_params)
+            }
+        }
+    }
 }
 
 impl Spanned for ASTType {
@@ -197,7 +215,7 @@ impl Spanned for ASTType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeBoundName {
-    pub name: SpannedString,
+    pub name: StringSpan,
     pub name_type: ASTType,
 }
 
@@ -211,7 +229,7 @@ impl Spanned for TypeBoundName {
 pub enum AST {
     StandaloneExpr(SpanExpr),
     Assign {
-        path: (Vec<SpannedString>, AstSpan),
+        path: (Vec<StringSpan>, AstSpan),
         expression: SpanExpr,
     },
     Declare {
@@ -228,17 +246,17 @@ pub enum AST {
         body: Vec<SpanAST>,
     },
     ForStatement {
-        item_name: SpannedString,
+        item_name: StringSpan,
         list_expression: SpanExpr,
         body: Vec<SpanAST>,
     },
     StructDeclaration {
-        struct_name: SpannedString,
-        type_parameters: Vec<SpannedString>,
+        struct_name: StringSpan,
+        type_parameters: Vec<StringSpan>,
         body: Vec<TypeBoundName>,
     },
     DeclareFunction {
-        function_name: SpannedString,
+        function_name: StringSpan,
         parameters: Vec<TypeBoundName>,
         body: Vec<SpanAST>,
         return_type: Option<ASTType>,
@@ -246,7 +264,6 @@ pub enum AST {
     Break(AstSpan),
     Intrinsic(AstSpan),
     Return(AstSpan, Option<SpanExpr>),
-    Raise(SpanExpr),
     Root(Vec<SpanAST>),
 }
 
@@ -321,7 +338,6 @@ impl Spanned for AST {
                 Some(e) => span.range(&e.span),
                 None => *span,
             },
-            AST::Raise(e) => e.span,
             AST::Root(r) => {
                 let first = r.first().unwrap().span;
                 let last = r.last().unwrap().span;
@@ -357,6 +373,8 @@ fn clean_parens(expr: SpanExpr) -> SpanExpr {
 pub struct Parser<'tok> {
     parsing_state: Vec<ParsingState>,
     tokens: &'tok TokenTable,
+    errors: Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>,
+    irrecoverable_error: bool,
 }
 
 struct ParsingState {
@@ -369,13 +387,46 @@ struct ParsingState {
 #[derive(Debug, Clone)]
 pub enum ParsingError {
     ExprError(String),
+    InvalidSyntax(String),
+    ContextForError(String, Box<ParsingError>),
+    Fatal(String),
     //TypeBoundMissingTypeSpecifier,
     TypeBoundExpectedColonAfterFieldName,
 }
 
+impl ToString for ParsingError {
+    fn to_string(&self) -> String {
+        match self {
+            ParsingError::ExprError(e) => format!("Expression error: {e}"),
+            ParsingError::InvalidSyntax(e) => format!("Invalid syntax: {e}"),
+            ParsingError::ContextForError(context, e) => {
+                format!("{context}, error: {err}", err = e.to_string())
+            }
+            ParsingError::Fatal(e) => {
+                format!("Error: {e}")
+            }
+            ParsingError::TypeBoundExpectedColonAfterFieldName => {
+                format!("Error: Expected column after field name")
+            }
+        }
+    }
+}
+
+pub enum ParsingEvent {
+    //When the compiler is trying to parse X but found Y, must ignore and retry using another grammar rule
+    TryAnotherGrammarRule,
+    //When the compiler found the correct grammar rule, but the input is not legal. It can continue parsing the next elements to report more errors.
+    //However the parser will generate AST that is unusable by the next stages
+    GrammarRuleFail(ParsingError, FileTableIndex, TokenSpanIndex),
+    //When there is a syntax error so big that there is just no recovering from it, continuing parsing would only throw hundreds more errors
+    NonRecoverable(ParsingError, FileTableIndex, TokenSpanIndex),
+    //When parsing of a grammar rule succeeds
+    Success(SpanAST),
+}
+
 macro_rules! parse_guard {
     ($parser:expr, $pattern:pat_param) => {
-        parse_guard!($parser, $pattern, None)
+        parse_guard!($parser, $pattern, ParsingEvent::TryAnotherGrammarRule)
     };
     ($parser:expr, $pattern:pat_param, $result:expr) => {
         if let $pattern = $parser.cur().token {
@@ -394,10 +445,16 @@ macro_rules! expect_token {
         if let $token::$pattern = $parser.cur().token {
             $parser.next();
         } else {
-            panic!(
-                "Expected {}, got {}",
-                ($token::$pattern).name(),
-                $parser.cur().token.name()
+            let token = $parser.cur().clone();
+            let span = &$parser.tokens.spans[token.span_index.0];
+            return ParsingEvent::NonRecoverable(
+                ParsingError::InvalidSyntax(format!(
+                    "Expected {}, got {}",
+                    ($token::$pattern).name(),
+                    $parser.cur().token.name()
+                )),
+                span.file,
+                token.span_index,
             );
         }
     };
@@ -405,7 +462,13 @@ macro_rules! expect_token {
         if let $token::$pattern = $parser.cur().token {
             $parser.next();
         } else {
-            panic!($msg, $parser.cur().token.name());
+            let token = $parser.cur().clone();
+            let span = &$parser.tokens.spans[token.span_index.0];
+            return ParsingEvent::NonRecoverable(
+                ParsingError::InvalidSyntax(format!($msg, $parser.cur().token.name())),
+                span.file,
+                token.span_index,
+            );
         }
     };
 }
@@ -413,11 +476,20 @@ macro_rules! expect_token {
 macro_rules! expect_identifier {
     ($parser:expr, $role:expr) => {{
         let token = $parser.cur().clone();
+        let span = &$parser.tokens.spans[token.span_index.0];
         if let Token::Identifier(id) = token.token {
             $parser.next();
-            id.token_spanned(token.loc)
+            id.token_spanned(token.span_index)
         } else {
-            panic!("Expected {}, got {}", $role, $parser.cur().token.name());
+            return ParsingEvent::GrammarRuleFail(
+                ParsingError::InvalidSyntax(format!(
+                    "Expected {}, got {}",
+                    $role,
+                    $parser.cur().token.name()
+                )),
+                span.file,
+                token.span_index,
+            );
         }
     }};
 }
@@ -437,11 +509,35 @@ macro_rules! indented {
         returned
     }};
 }
+
 use Expr::*;
 
 use super::lexer::{TokenData, TokenSpanIndex, TokenTable};
+
+macro_rules! decl_macros {
+    ($parser:expr) => {
+        macro_rules! grammar_fail {
+            ($parsing_error:expr) => {{
+                let cur = $parser.cur();
+                let span = &$parser.tokens.spans[cur.span_index.0];
+                ParsingEvent::GrammarRuleFail($parsing_error, span.file, cur.span_index)
+            }};
+        }
+
+        macro_rules! non_recoverable {
+            ($parsing_error:expr) => {{
+                $parser.irrecoverable_error = true;
+                let cur = $parser.cur();
+                let span = &$parser.tokens.spans[cur.span_index.0];
+
+                ParsingEvent::NonRecoverable($parsing_error, span.file, cur.span_index)
+            }};
+        }
+    };
+}
+
 impl<'tok> Parser<'tok> {
-    pub fn new(tokens: &'tok TokenTable) -> Parser {
+    pub fn new(tokens: &'tok TokenTable) -> Parser<'tok> {
         Parser {
             parsing_state: vec![ParsingState {
                 index: 0,
@@ -450,7 +546,13 @@ impl<'tok> Parser<'tok> {
                 current_indent: 0,
             }],
             tokens,
+            errors: vec![],
+            irrecoverable_error: false,
         }
+    }
+
+    pub fn get_errors(&self) -> &[(ParsingError, FileTableIndex, TokenSpanIndex)] {
+        &self.errors
     }
 
     fn new_stack(&mut self) {
@@ -500,7 +602,7 @@ impl<'tok> Parser<'tok> {
     }
 
     fn loc(&self) -> TokenSpanIndex {
-        self.cur_offset(0).loc
+        self.cur_offset(0).span_index
     }
 
     fn prev_token(&self) -> Option<&TokenData> {
@@ -564,16 +666,17 @@ impl<'tok> Parser<'tok> {
         return &mut self.parsing_state.last_mut().unwrap().operator_stack;
     }
 
-    pub fn parse_assign(&mut self) -> Option<SpanAST> {
-        let mut path: Vec<SpannedString> = vec![];
+    pub fn parse_assign(&mut self) -> ParsingEvent {
+        decl_macros!(self);
+        let mut path: Vec<StringSpan> = vec![];
         while let TokenData {
             token: Token::Identifier(id),
-            loc,
+            span_index: loc,
         } = self.cur()
         {
             path.push(id.token_spanned(*loc));
             if self.is_last() {
-                return None;
+                return ParsingEvent::TryAnotherGrammarRule;
             }
 
             self.next();
@@ -583,58 +686,87 @@ impl<'tok> Parser<'tok> {
             }
         }
         if !self.can_go() {
-            return None;
+            return ParsingEvent::TryAnotherGrammarRule;
         }
-        if let Token::Assign = self.cur().token {
-            self.next();
 
-            let expr = self.parse_expr().expect("Expected expression after assign");
-            let span = path
-                .first()
-                .unwrap()
-                .get_span()
-                .range(&path.last().unwrap().get_span());
+        let Token::Assign = self.cur().token else {
+            return ParsingEvent::TryAnotherGrammarRule;
+        };
 
-            Some(
-                AST::Assign {
-                    path: (path.into(), span),
-                    expression: expr.resulting_expr,
-                }
-                .self_spanning(),
-            )
-        } else {
-            None
+        self.next();
+
+        let expr = self.parse_expr();
+
+        match expr {
+            Ok(e) => {
+                let span = path
+                    .first()
+                    .unwrap()
+                    .get_span()
+                    .range(&path.last().unwrap().get_span());
+
+                ParsingEvent::Success(
+                    AST::Assign {
+                        path: (path.into(), span),
+                        expression: e.resulting_expr,
+                    }
+                    .self_spanning(),
+                )
+            }
+            Err(e) => {
+                grammar_fail!(ParsingError::InvalidSyntax(
+                    "Expected expression after assign".to_string()
+                ))
+            }
         }
     }
 
-    pub fn parse_assign_typed(&mut self) -> Option<SpanAST> {
+    pub fn parse_assign_typed(&mut self) -> ParsingEvent {
+        decl_macros!(self);
         let decl = self.parse_type_bound_name();
 
-        let Ok(Some(typed_var_decl)) = decl else { return None; };
+        let Ok(Some(typed_var_decl)) = decl else { return ParsingEvent::TryAnotherGrammarRule; };
         //no need to do .next here, parse_type_bound_name already does a .next()
         self.next();
         let cur = self.cur();
-        // println!("{:?}", cur);
         if let Token::Assign = cur.token {
             self.next();
-            let expr = self.parse_expr().expect("Expected expression after assign");
-            Some(
-                AST::Declare {
-                    var: typed_var_decl,
-                    expression: expr.resulting_expr,
+            let expr = self.parse_expr(); //.expect("Expected expression after assign");
+            match expr {
+                Ok(expr) => ParsingEvent::Success(
+                    AST::Declare {
+                        var: typed_var_decl,
+                        expression: expr.resulting_expr,
+                    }
+                    .self_spanning(),
+                ),
+                Err(e) => {
+                    grammar_fail!(ParsingError::ContextForError(
+                        "Expected expression after assign".to_string(),
+                        e.into()
+                    ))
                 }
-                .self_spanning(),
-            )
+            }
         } else {
-            None
+            ParsingEvent::TryAnotherGrammarRule
         }
     }
 
-    pub fn parse_if_statement(&mut self) -> Option<SpanAST> {
-        let begin = self.cur().loc;
+    pub fn parse_if_statement(&mut self) -> ParsingEvent {
+        decl_macros!(self);
+
+        let begin = self.cur().span_index;
         parse_guard!(self, Token::IfKeyword);
 
-        let expr = self.parse_expr().expect("Expected expr").resulting_expr;
+        let expr = match self.parse_expr() {
+            Ok(result) => result.resulting_expr,
+            Err(e) => {
+                return grammar_fail!(ParsingError::ContextForError(
+                    "Expected expression for if statement".into(),
+                    e.into()
+                ))
+            }
+        };
 
         expect_colon_newline!(self);
 
@@ -659,7 +791,7 @@ impl<'tok> Parser<'tok> {
 
         if !self.can_go() || identation_else != cur_identation {
             self.pop_stack();
-            return Some(if_statement);
+            return ParsingEvent::Success(if_statement);
         }
 
         if let Token::ElseKeyword = self.cur().token {
@@ -677,17 +809,22 @@ impl<'tok> Parser<'tok> {
                         final_else: Some(ast),
                     }
                     .span_prefixed(begin),
-                    _ => panic!("Unrecognized ast on if else parsing"),
+                    _ => {
+                        return non_recoverable!(ParsingError::Fatal(
+                            "Unexpected AST during if parsing".to_string()
+                        ));
+                    }
                 }
             });
         } else {
             self.pop_stack();
         }
-        Some(if_statement)
+        ParsingEvent::Success(if_statement)
     }
 
-    pub fn parse_structdef(&mut self) -> Option<SpanAST> {
-        let begin = self.cur().loc;
+    pub fn parse_structdef(&mut self) -> ParsingEvent {
+        decl_macros!(self);
+        let begin = self.cur().span_index;
         parse_guard!(self, Token::StructDef);
 
         let struct_name = expect_identifier!(self, "struct name");
@@ -730,18 +867,27 @@ impl<'tok> Parser<'tok> {
             .span_prefixed(begin)
         });
 
-        Some(struct_def)
+        ParsingEvent::Success(struct_def)
     }
 
-    pub fn parse_while_statement(&mut self) -> Option<SpanAST> {
-        let begin = self.cur().loc;
+    pub fn parse_while_statement(&mut self) -> ParsingEvent {
+        decl_macros!(self);
+        let begin = self.cur().span_index;
         parse_guard!(self, Token::WhileKeyword);
 
-        let expr = self.parse_expr().expect("Expected expr").resulting_expr;
+        let expr = match self.parse_expr() {
+            Ok(result) => result.resulting_expr,
+            Err(e) => {
+                return grammar_fail!(ParsingError::ContextForError(
+                    "Expected expression for while statement".into(),
+                    e.into()
+                ))
+            }
+        };
 
         expect_colon_newline!(self);
 
-        Some(indented!(self, {
+        ParsingEvent::Success(indented!(self, {
             let ast = self.parse_ast();
             AST::WhileStatement {
                 expression: expr,
@@ -751,20 +897,26 @@ impl<'tok> Parser<'tok> {
         }))
     }
 
-    pub fn parse_for_statement(&mut self) -> Option<SpanAST> {
-        let begin = self.cur().loc;
+    pub fn parse_for_statement(&mut self) -> ParsingEvent {
+        decl_macros!(self);
+        let begin = self.cur().span_index;
         parse_guard!(self, Token::ForKeyword);
         let variable_name = expect_identifier!(self, "variable name in for loop");
         expect_token!(self, Token::InKeyword);
 
-        let expr = self
-            .parse_expr()
-            .expect("Expected expr after in keyword in for expression")
-            .resulting_expr;
+        let expr = match self.parse_expr() {
+            Ok(result) => result.resulting_expr,
+            Err(e) => {
+                return grammar_fail!(ParsingError::ContextForError(
+                    "Expected expression for iterable in for statement".into(),
+                    e.into()
+                ))
+            }
+        };
 
         expect_colon_newline!(self);
 
-        Some(indented!(self, {
+        ParsingEvent::Success(indented!(self, {
             let ast = self.parse_ast();
 
             AST::ForStatement {
@@ -777,7 +929,7 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_type_name(&mut self) -> Option<ASTType> {
-        let begin = self.cur().loc;
+        let begin = self.cur().span_index;
         let Token::Identifier(type_name) = self.cur().token else {
             return None;
         };
@@ -795,8 +947,9 @@ impl<'tok> Parser<'tok> {
         self.next(); //commits the peek_next
         self.next();
 
-        let generic_begin = self.cur().loc;
+        let generic_begin = self.cur().span_index;
         let Token::Identifier(generic_name) = self.cur().token else {
+
             panic!("For now we dont have proper error handling for mistakes in generic types, cur = {:?}", self.cur())
          };
         self.next();
@@ -814,7 +967,7 @@ impl<'tok> Parser<'tok> {
     //Tries to parse a bound name with its type, for instance var: i32
     //leaves cursor in the next token after the type
     pub fn parse_type_bound_name(&mut self) -> Result<Option<TypeBoundName>, ParsingError> {
-        let begin = self.cur().loc;
+        let begin = self.cur().span_index;
         let Token::Identifier(name) = self.cur().token else { return Ok(None); };
         self.next();
 
@@ -838,8 +991,9 @@ impl<'tok> Parser<'tok> {
         }
     }
 
-    pub fn parse_def_statement(&mut self) -> Option<SpanAST> {
-        let begin = self.cur().loc;
+    pub fn parse_def_statement(&mut self) -> ParsingEvent {
+        decl_macros!(self);
+        let begin = self.cur().span_index;
         parse_guard!(self, Token::DefKeyword);
         let function_name = expect_identifier!(self, "function name");
 
@@ -862,7 +1016,9 @@ impl<'tok> Parser<'tok> {
         if let Token::CloseParen = self.cur().token {
             self.next();
         } else {
-            panic!("Expected close paren after parameters in function declaration")
+            return non_recoverable!(ParsingError::Fatal(
+                "Expected close paren after parameters in function declaration".to_string()
+            ));
         }
 
         let mut return_type: Option<ASTType> = None;
@@ -871,10 +1027,12 @@ impl<'tok> Parser<'tok> {
             self.next();
 
             return_type = self.parse_type_name();
-            assert!(
-                return_type.is_some(),
-                "Expected type name after arrow right on function declaration"
-            );
+
+            if !return_type.is_some() {
+                return non_recoverable!(ParsingError::Fatal(
+                    "Expected type name after arrow right on function declaration".into()
+                ));
+            }
             self.next();
         }
 
@@ -884,7 +1042,7 @@ impl<'tok> Parser<'tok> {
             "Expected colon paren after parameters and return type in function declaration, got {}"
         );
 
-        Some(indented!(self, {
+        ParsingEvent::Success(indented!(self, {
             let ast = self.parse_ast();
 
             AST::DeclareFunction {
@@ -897,62 +1055,69 @@ impl<'tok> Parser<'tok> {
         }))
     }
 
-    pub fn parse_break(&mut self) -> Option<SpanAST> {
+    pub fn parse_break(&mut self) -> ParsingEvent {
         let tok = self.cur().clone();
         if let Token::BreakKeyword = tok.token {
             self.next();
 
-            return Some(AST::Break(tok.loc.get_span()).self_spanning());
+            return ParsingEvent::Success(AST::Break(tok.span_index.get_span()).self_spanning());
         }
 
-        None
+        ParsingEvent::TryAnotherGrammarRule
     }
 
-    pub fn parse_return(&mut self) -> Option<SpanAST> {
+    pub fn parse_return(&mut self) -> ParsingEvent {
+        decl_macros!(self);
         let tok = self.cur().clone();
         if let Token::ReturnKeyword = tok.token {
             self.next();
             if self.can_go() {
-                let expr = self.parse_expr().ok().unwrap();
-                return Some(
-                    AST::Return(tok.loc.get_span(), Some(expr.resulting_expr)).self_spanning(),
+                let expr = match self.parse_expr() {
+                    Ok(result) => result.resulting_expr,
+                    Err(e) => {
+                        return grammar_fail!(ParsingError::ContextForError(
+                            "Expected expression on return statement".into(),
+                            e.into()
+                        ))
+                    }
+                };
+
+                return ParsingEvent::Success(
+                    AST::Return(tok.span_index.get_span(), Some(expr)).self_spanning(),
                 );
             }
-            return Some(AST::Return(tok.loc.get_span(), None).span_prefixed(tok.loc));
+            return ParsingEvent::Success(
+                AST::Return(tok.span_index.get_span(), None).span_prefixed(tok.span_index),
+            );
         }
-        None
+        ParsingEvent::TryAnotherGrammarRule
     }
 
-    pub fn parse_intrinsic(&mut self) -> Option<SpanAST> {
+    pub fn parse_intrinsic(&mut self) -> ParsingEvent {
+        decl_macros!(self);
         let tok = self.cur().clone();
         if let Token::IntrinsicKeyword = tok.token {
             self.next();
             if !self.can_go() {
-                return Some(AST::Intrinsic(tok.loc.get_span()).self_spanning());
+                return ParsingEvent::Success(
+                    AST::Intrinsic(tok.span_index.get_span()).self_spanning(),
+                );
             } else {
-                panic!("Intrinsic must be the only content of the method if it's present")
+                return grammar_fail!(ParsingError::InvalidSyntax(
+                    "Intrinsic must be the only content of the method if it's present".to_string()
+                ));
             }
         }
-        None
+        ParsingEvent::TryAnotherGrammarRule
     }
 
-    pub fn parse_raise(&mut self) -> Option<SpanAST> {
-        let tok = self.cur().clone();
-        if let Token::RaiseKeyword = tok.token {
-            self.next();
-            if self.can_go() {
-                let expr = self.parse_expr().ok().unwrap();
-                return Some(AST::Raise(expr.resulting_expr).span_prefixed(tok.loc));
-            }
-            panic!("Must inform expression with raise keyword")
-        }
-        None
-    }
-
-    pub fn parse_standalone_expr(&mut self) -> Option<SpanAST> {
-        self.parse_expr()
-            .ok()
-            .map(|expr| AST::StandaloneExpr(expr.resulting_expr).self_spanning())
+    pub fn parse_standalone_expr(&mut self) -> ParsingEvent {
+        ParsingEvent::Success(
+            self.parse_expr()
+                .ok()
+                .map(|expr| AST::StandaloneExpr(expr.resulting_expr).self_spanning())
+                .unwrap(),
+        )
     }
 
     //returns the identation level until the first non-whitespace token
@@ -974,7 +1139,21 @@ impl<'tok> Parser<'tok> {
         identation_level
     }
 
+    //this skips tokens until the next line
+    fn skip_to_next_line(&mut self) {
+        while self.is_not_end() {
+            match self.cur().token {
+                Token::NewLine => {
+                    self.next();
+                    return;
+                }
+                _ => self.next(),
+            }
+        }
+    }
+
     pub fn parse_ast(&mut self) -> Vec<SpanAST> {
+        decl_macros!(self);
         let mut parsed_successfully: bool;
         let mut results: Vec<SpanAST> = vec![];
 
@@ -982,26 +1161,51 @@ impl<'tok> Parser<'tok> {
             ($name:expr, $parse_method:tt) => {
                 if !parsed_successfully {
                     self.new_stack();
-                    if let Some(parsed_result) = self.$parse_method() {
-                        results.push(parsed_result);
-                        parsed_successfully = true;
-                        let popped = self.pop_stack();
-                        //correct indentation found: commit
-                        self.set_cur(&popped);
-                        assert!(
-                            !self.is_not_end() || self.cur_is_newline(),
-                            "Newline or EOF expected after {}, got {:?}",
-                            $name,
-                            self.cur()
-                        );
-                    } else {
-                        self.pop_stack();
+
+                    let parsing_result = self.$parse_method();
+
+                    match parsing_result {
+                        ParsingEvent::Success(parsed_result) => {
+                            results.push(parsed_result);
+                            parsed_successfully = true;
+                            let popped = self.pop_stack();
+                            //correct indentation found: commit
+                            self.set_cur(&popped);
+
+                            if (!(!self.is_not_end() || self.cur_is_newline())) {
+                                let cur = self.cur();
+                                let span = &self.tokens.spans[cur.span_index.0];
+                                let file = span.file;
+                                let error_msg = format!(
+                                    "Newline or EOF expected after {}, got {:?}",
+                                    $name, cur.token
+                                );
+                                self.errors.push((
+                                    ParsingError::InvalidSyntax(error_msg),
+                                    file,
+                                    cur.span_index,
+                                ));
+                            }
+                        }
+                        ParsingEvent::GrammarRuleFail(error, file, token) => {
+                            self.skip_to_next_line();
+                            self.errors.push((error, file, token))
+                        }
+                        ParsingEvent::TryAnotherGrammarRule => {
+                            self.pop_stack();
+                        }
+                        ParsingEvent::NonRecoverable(err, file, token) => {
+                            self.errors.push((err, file, token));
+                        }
                     }
                 }
             };
         }
 
         loop {
+            if self.irrecoverable_error {
+                break;
+            }
             parsed_successfully = false;
             self.new_stack();
 
@@ -1030,10 +1234,13 @@ impl<'tok> Parser<'tok> {
             try_parse!("break", parse_break);
             try_parse!("return", parse_return);
             try_parse!("intrinsic", parse_intrinsic);
-            try_parse!("raise", parse_raise);
             try_parse!("standalone expression", parse_standalone_expr);
 
-            assert!(parsed_successfully, "Could not parse code");
+            if !parsed_successfully {
+                non_recoverable!(ParsingError::Fatal(
+                    "Unrecognized expression/statement".to_string()
+                ));
+            }
 
             let is_end = !self.is_not_end();
             if is_end {
@@ -1043,11 +1250,9 @@ impl<'tok> Parser<'tok> {
             if self.cur_is_newline() {
                 continue;
             };
-            panic!(
-                "is not end but is also not newline, cur = {:?}, parsed = {:?}",
-                self.cur(),
-                results
-            );
+            non_recoverable!(ParsingError::Fatal(
+                "Unrecognized expression/statement".to_string()
+            ));
         }
 
         results
@@ -1055,13 +1260,15 @@ impl<'tok> Parser<'tok> {
 
     fn index_access_helper(&mut self, indexable_expr: SpanExpr) -> Result<SpanExpr, ParsingError> {
         if let Token::CloseParen = self.cur().token {
-            panic!("Invalid syntax: must inform index value");
+            return Err(ParsingError::InvalidSyntax(
+                "Invalid syntax: must inform index value".to_string(),
+            ));
         }
 
         self.new_stack();
         let list_of_exprs = self.parse_comma_sep_list_expr();
 
-        let ending = self.cur().loc;
+        let ending = self.cur().span_index;
 
         match list_of_exprs {
             //try parse stuff
@@ -1069,10 +1276,11 @@ impl<'tok> Parser<'tok> {
                 //commit the result
                 let popped = self.pop_stack();
                 let mut resulting_exprs = expressions.resulting_expr_list;
-                assert!(
-                    resulting_exprs.len() <= 1,
-                    "Invalid syntax: must inform only one index"
-                );
+                if resulting_exprs.len() != 1 {
+                    return Err(ParsingError::InvalidSyntax(
+                        "Invalid syntax: must inform index value".to_string(),
+                    ));
+                }
 
                 let fcall = IndexAccess(
                     ExprBox::new(indexable_expr),
@@ -1085,10 +1293,7 @@ impl<'tok> Parser<'tok> {
 
                 Ok(fcall)
             }
-            Err(e) => {
-                eprintln!("Failed parsing exprssion: {:?}", e);
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 
@@ -1097,14 +1302,14 @@ impl<'tok> Parser<'tok> {
             return Ok(FunctionCall(
                 ExprBox::new(expr_callable),
                 vec![],
-                self.cur().loc.get_span(),
+                self.cur().span_index.get_span(),
             )
             .self_spanning());
         }
 
         self.new_stack();
         let list_of_exprs = self.parse_comma_sep_list_expr();
-        let ending = self.cur().loc;
+        let ending = self.cur().span_index;
 
         match list_of_exprs {
             //try parse stuff
@@ -1124,10 +1329,7 @@ impl<'tok> Parser<'tok> {
 
                 Ok(fcall)
             }
-            Err(e) => {
-                eprintln!("Failed parsing exprssion: {:?}", e);
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 
@@ -1228,7 +1430,6 @@ impl<'tok> Parser<'tok> {
                                     was_operand = true;
                                 }
                                 Err(e) => {
-                                    eprintln!("Failed parsing exprssion: {:?}", e);
                                     return Err(e);
                                 }
                             }
@@ -1292,7 +1493,7 @@ impl<'tok> Parser<'tok> {
                             self.next(); //move to the first token, out of the open array
                             if let Token::CloseArrayBracket = self.cur().token {
                                 self.push_operand(
-                                    Array(vec![], self.cur().loc.get_span()).self_spanning(),
+                                    Array(vec![], self.cur().span_index.get_span()).self_spanning(),
                                 );
                                 was_operand = true;
                             } else {
@@ -1305,13 +1506,15 @@ impl<'tok> Parser<'tok> {
                                         let popped = self.pop_stack();
                                         let resulting_exprs = expressions.resulting_expr_list;
                                         self.push_operand(
-                                            Array(resulting_exprs, self.cur().loc.get_span())
-                                                .self_spanning(),
+                                            Array(
+                                                resulting_exprs,
+                                                self.cur().span_index.get_span(),
+                                            )
+                                            .self_spanning(),
                                         );
                                         self.set_cur(&popped);
                                     }
                                     Err(e) => {
-                                        eprintln!("Failed parsing exprssion: {:?}", e);
                                         return Err(e);
                                     }
                                 }
@@ -1320,7 +1523,7 @@ impl<'tok> Parser<'tok> {
                     }
                     Token::Identifier(identifier_str) => {
                         self.push_operand(
-                            Variable(identifier_str.token_spanned(tok.loc)).self_spanning(),
+                            Variable(identifier_str.token_spanned(tok.span_index)).self_spanning(),
                         );
                         was_operand = true;
                     }
@@ -1333,7 +1536,7 @@ impl<'tok> Parser<'tok> {
                             let cur_expr = popped.unwrap();
                             let member_access_expr = MemberAccess(
                                 ExprBox::new(cur_expr),
-                                name.token_spanned(cur_token.loc),
+                                name.token_spanned(cur_token.span_index),
                             );
                             self.push_operand(member_access_expr.self_spanning());
                             was_operand = true;
@@ -1344,32 +1547,40 @@ impl<'tok> Parser<'tok> {
                         }
                     }
                     Token::LiteralInteger(i) => {
-                        self.push_operand(IntegerValue(i, tok.loc.get_span()).self_spanning());
+                        self.push_operand(
+                            IntegerValue(i, tok.span_index.get_span()).self_spanning(),
+                        );
                         was_operand = true;
                     }
                     Token::LiteralFloat(f) => {
-                        self.push_operand(FloatValue(f, tok.loc.get_span()).self_spanning());
+                        self.push_operand(FloatValue(f, tok.span_index.get_span()).self_spanning());
                         was_operand = true;
                     }
                     Token::LiteralString(s) => {
                         //@TODO cloneless: store the literals somewhere it can be fetched by ref?
-                        self.push_operand(StringValue(s.token_spanned(tok.loc)).self_spanning());
+                        self.push_operand(
+                            StringValue(s.token_spanned(tok.span_index)).self_spanning(),
+                        );
                         was_operand = true;
                     }
                     Token::None => {
-                        self.push_operand(NoneExpr(tok.loc.get_span()).self_spanning());
+                        self.push_operand(NoneExpr(tok.span_index.get_span()).self_spanning());
                         was_operand = true;
                     }
                     Token::True => {
-                        self.push_operand(BooleanValue(true, tok.loc.get_span()).self_spanning());
+                        self.push_operand(
+                            BooleanValue(true, tok.span_index.get_span()).self_spanning(),
+                        );
                         was_operand = true;
                     }
                     Token::False => {
-                        self.push_operand(BooleanValue(false, tok.loc.get_span()).self_spanning());
+                        self.push_operand(
+                            BooleanValue(false, tok.span_index.get_span()).self_spanning(),
+                        );
                         was_operand = true;
                     }
                     Token::Operator(o) => {
-                        self.push_operator(SpannedOperator(o, tok.loc.get_span()))
+                        self.push_operator(SpannedOperator(o, tok.span_index.get_span()))
                     }
                     _ => {
                         //close paren, close bracket are not part of expr, as in "they're just syntax"
@@ -1540,7 +1751,6 @@ impl<'tok> Parser<'tok> {
                     expressions.push(r.resulting_expr);
                 }
                 Err(e) => {
-                    eprintln!("Error on parse: {:?}", e);
                     break;
                 }
             }
@@ -1571,13 +1781,31 @@ struct ParseListExpressionResult {
 }
 
 pub struct ParseExpressionResult {
-    //remaining_tokens: Vec<&'a Token>,
     resulting_expr: SpanExpr,
 }
 
-pub fn parse_ast(tokens: TokenTable) -> Vec<SpanAST> {
-    let mut parser = Parser::new(&tokens);
-    parser.parse_ast()
+pub fn parse_ast<'a>(
+    tokens: &'a TokenTable,
+    file_table: &[FileTableEntry],
+) -> (Vec<SpanAST>, Parser<'a>) {
+    let mut parser = Parser::new(tokens);
+    let result = parser.parse_ast();
+
+    print_errors(&parser, file_table, tokens);
+
+    return (result, parser);
+}
+
+fn print_errors(parser: &Parser, file_table: &[FileTableEntry], tokens: &TokenTable) {
+    for (error, file, token) in parser.errors.iter() {
+        let err = error.to_string();
+        let file_name = &file_table[file.0].file_name;
+        let tok = tokens.tokens[token.0];
+        let span = tokens.spans[tok.span_index.0];
+        let line = span.start.line;
+        let column = span.start.column;
+        println!("{err}\nat {file_name}:{line}:{column}\n");
+    }
 }
 
 #[cfg(test)]
@@ -1596,6 +1824,15 @@ mod tests {
         }
     }
 
+    #[cfg(test)]
+    impl Deref for SpanAST {
+        type Target = AST;
+
+        fn deref(&self) -> &Self::Target {
+            &self.ast
+        }
+    }
+
     tls_interner!(INTERNER);
 
     fn tokenize(str: &str) -> Result<TokenTable, String> {
@@ -1604,17 +1841,13 @@ mod tests {
 
     impl TypeBoundName {
         //do not delete, used by tests!
-        pub fn simple(name: SpannedString, name_type: SpannedString) -> Self {
+        pub fn simple(name: StringSpan, name_type: StringSpan) -> Self {
             Self {
                 name,
                 name_type: ASTType::Simple(name_type),
             }
         }
-        pub fn generic_1(
-            name: SpannedString,
-            name_type: SpannedString,
-            generic: SpannedString,
-        ) -> Self {
+        pub fn generic_1(name: StringSpan, name_type: StringSpan, generic: StringSpan) -> Self {
             Self {
                 name,
                 name_type: ASTType::Generic(name_type, vec![ASTType::Simple(generic)]),
@@ -1625,6 +1858,7 @@ mod tests {
     use std::{assert_matches::assert_matches, ops::Deref};
 
     use crate::{
+        ast::ast_printer::print_ast,
         interner::StringInterner,
         semantic::context::{test_utils::tls_interner, FileTableIndex},
     };
@@ -1633,24 +1867,45 @@ mod tests {
 
     //Parses a single expression
     fn parse(tokens: TokenTable) -> SpanExpr {
+        let table = &[FileTableEntry {
+            ast: AST::Break(AstSpan {
+                start: TokenSpanIndex(0),
+                end: TokenSpanIndex(0),
+            }),
+            contents: "none",
+            file_name: "test".to_string(),
+        }];
         let mut parser = Parser::new(&tokens);
+        print_errors(&parser, table, &tokens);
         parser.parse_expr().unwrap().resulting_expr
     }
 
-    #[test]
-    fn none() {
-        let tokens = tokenize("None").unwrap();
-        let result = parse(tokens);
-        assert_matches!(result.expr, NoneExpr(_));
+    fn test_parse(tokens: TokenTable) -> Vec<SpanAST> {
+        let table = &[FileTableEntry {
+            ast: AST::Break(AstSpan {
+                start: TokenSpanIndex(0),
+                end: TokenSpanIndex(0),
+            }),
+            contents: "none",
+            file_name: "test".to_string(),
+        }];
+        let mut parser = Parser::new(&tokens);
+        let result = parser.parse_ast();
+        print_errors(&parser, table, &tokens);
+        if parser.get_errors().len() > 0 {
+            panic!("Deu ruim");
+        }
+        return result;
     }
 
+   
     #[test]
     fn just_an_identifier() {
-        let _some_id = istr!("some_identifier");
+        let _some_id = istr("some_identifier");
         let tokens = tokenize("some_identifier").unwrap();
         let result = parse(tokens);
 
-        assert_matches!(result.expr, Variable(SpannedString(_some_id, _)));
+        assert_matches!(result.expr, Variable(StringSpan(_some_id, _)));
     }
 
     use match_deref::match_deref;
@@ -1664,7 +1919,7 @@ mod tests {
     }
 
     #[cfg(test)]
-    impl Deref for SpannedString {
+    impl Deref for StringSpan {
         type Target = str;
 
         fn deref<'s>(&'s self) -> &'s Self::Target {
@@ -1711,1256 +1966,704 @@ mod tests {
         })
     }
 
-    /*
+    #[test]
+    fn function_call_with_many_args() {
+        let tokens = tokenize("some_identifier(1, 2, 3)").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                FunctionCall(
+                    Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [Deref @ IntegerValue(1, _), Deref @ IntegerValue(2, _), Deref @ IntegerValue(3, _)],
+                    _
+                ) => true,
+                _ => false
+            }
+        })
+    }
 
+    #[test]
+    fn function_call_with_expression() {
+        let tokens = tokenize("some_identifier(1 * 2)").unwrap();
+        let result = parse(tokens);
 
+        assert!(match_deref! {
+            match &result.expr {
+                FunctionCall (
+                    Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [Deref @ BinaryOperation(
+                        Deref @ IntegerValue(1, _),
+                        SpannedOperator(Operator::Multiply, _),
+                        Deref @ IntegerValue(2, _),
+                    )], _
+                )  => true,
+                 _ => false
+            }
+        });
+    }
 
-
-         #[test]
-         fn function_call_with_many_args() {
-             let tokens = tokenize("some_identifier(1, 2, 3)").unwrap();
-             let result = parse(tokens);
-             let expected = FunctionCall(
-                 Variable(istr!("some_identifier")).into(),
-                 vec![IntegerValue(1), IntegerValue(2), IntegerValue(3)],
-             );
-
-             assert_eq!(expected, result);
-         }
-
-         #[test]
-         fn function_call_with_expression() {
-             let tokens = tokenize("some_identifier(1 * 2)").unwrap();
-             let result = parse(tokens);
-             let expected = FunctionCall(
-                 Variable(istr!("some_identifier")).into(),
-                 vec![BinaryOperation(1.into(), Operator::Multiply, 2.into())],
-             );
-
-             assert_eq!(expected, result);
-         }
-
-         #[test]
-         fn function_call_with_list_of_expressions() {
-             let tokens = tokenize("some_identifier(1 * 2, 3 + 5, 88)").unwrap();
-             let result = parse(tokens);
-             let expected = FunctionCall(
-                 Variable(istr!("some_identifier")).into(),
-                 vec![
-                     BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                     BinaryOperation(3.into(), Operator::Plus, 5.into()),
-                     IntegerValue(88),
-                 ],
-             );
-             assert_eq!(expected, result);
-         }
-
-         #[test]
-         fn function_call_with_nested_call_with_no_args() {
-             let tokens = tokenize("some_identifier(nested())").unwrap();
-             let result = parse(tokens);
-             let expected = FunctionCall(
-                 Variable(istr!("some_identifier")).into(),
-                 vec![FunctionCall(Variable(istr!("nested")).into(), vec![])],
-             );
-             assert_eq!(expected, result);
-         }
-
-         #[test]
-         fn function_call_with_nested_call_with_single_arg() {
-             let tokens = tokenize("some_identifier(nested(1))").unwrap();
-             let result = parse(tokens);
-             let expected = FunctionCall(
-                 Variable(istr!("some_identifier")).into(),
-                 vec![FunctionCall(
-                     Variable(istr!("nested")).into(),
-                     vec![IntegerValue(1)],
-                 )],
-             );
-             assert_eq!(expected, result);
-         }
-
-         #[test]
-         fn function_call_with_nested_call_with_multiple_args() {
-             let tokens = tokenize("some_identifier(nested(1, 2))").unwrap();
-             let result = parse(tokens);
-             let expected = FunctionCall(
-                 Variable(istr!("some_identifier")).into(),
-                 vec![FunctionCall(
-                     Variable(istr!("nested")).into(),
-                     vec![IntegerValue(1), IntegerValue(2)],
-                 )],
-             );
-             assert_eq!(expected, result);
-         }
-
-         #[test]
-         fn function_call_with_nested_call_with_multiple_expr() {
-             let tokens = tokenize("some_identifier(nested(1 * 2, 2 / 3.4))").unwrap();
-             let result = parse(tokens);
-             let expected = FunctionCall(
-                 Variable(istr!("some_identifier")).into(),
-                 vec![FunctionCall(
-                     Variable(istr!("nested")).into(),
-                     vec![
-                         BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                         BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
-                     ],
-                 )],
-             );
-             assert_eq!(expected, result);
-         }
-
-         #[test]
-         fn function_call_with_nested_call_with_multiple_expr2() {
-             let tokens = tokenize("some_identifier(nested(1), 1)").unwrap();
-             let result = parse(tokens);
-             let expected = FunctionCall(
-                 Variable(istr!("some_identifier")).into(),
-                 vec![
-                     FunctionCall(Variable(istr!("nested")).into(), vec![IntegerValue(1)]),
-                     IntegerValue(1),
-                 ],
-             );
-             assert_eq!(expected, result);
-         }
-
-        #[test]
-        fn multiline_code() {
-            let tokens = tokenize(
-                "
-    x = 'abc' + 'cde'
-    y = x + str(True)",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![
-                Assign {
-                    path: vec![istr!("x")],
-                    expression: BinaryOperation(
-                        ExprBox::new(StringValue(istr!("abc").into())),
-                        Operator::Plus,
-                        Box::new(StringValue(istr!("cde").into())),
-                    ),
-                },
-                Assign {
-                    path: vec![istr!("y")],
-                    expression: BinaryOperation(
-                        Box::new(Variable(istr!("x"))),
-                        Operator::Plus,
-                        Box::new(FunctionCall(
-                            Box::new(Variable(istr!("str"))),
-                            vec![BooleanValue(true)],
-                        )),
-                    ),
-                },
-            ];
-
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn while_statement() {
-            let tokens = tokenize(
-                "
-    while True:
-        x = 1
-        break
-    ",
-            )
-            .unwrap();
-
-            let result = parse_ast(tokens);
-            let expected = vec![WhileStatement {
-                expression: BooleanValue(true),
-                body: vec![
-                    Assign {
-                        path: vec![istr!("x")],
-                        expression: IntegerValue(1),
-                    },
-                    Break,
-                ],
-            }];
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn while_statement_with_if_and_expr() {
-            let tokens = tokenize(
-                "while x < 1000000:
-        if x / 5 == 0:
-            break
-
-    ",
-            )
-            .unwrap();
-
-            let result = parse_ast(tokens);
-            let expected = vec![WhileStatement {
-                expression: BinaryOperation(
-                    Box::new(Variable(istr!("x"))),
-                    Operator::Less,
-                    Box::new(IntegerValue(1_000_000)),
-                ),
-                body: vec![IfStatement {
-                    true_branch: ASTIfStatement {
-                        expression: BinaryOperation(
-                            Box::new(BinaryOperation(
-                                Box::new(Variable(istr!("x"))),
-                                Operator::Divide,
-                                Box::new(IntegerValue(5)),
-                            )),
-                            Operator::Equals,
-                            Box::new(IntegerValue(0)),
+    #[test]
+    fn function_call_with_list_of_expressions() {
+        let tokens = tokenize("some_identifier(1 * 2, 3 + 5, 88)").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                FunctionCall (
+                    Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [
+                        Deref @ BinaryOperation(
+                            Deref @ IntegerValue(1, _),
+                            SpannedOperator(Operator::Multiply, _),
+                            Deref @ IntegerValue(2, _),
                         ),
-                        statements: vec![Break],
-                    },
-                    elifs: vec![],
-                    final_else: None,
-                }],
-            }];
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn if_statement_with_print_after_and_newlines_before_and_after() {
-            let tokens = tokenize(
-                "
-    if x == 0:
-        x = x + 1
-    else:
-        x = 999
-        if x == 1:
-            print(2)
-    print(x)
-    ",
-            )
-            .unwrap();
-
-            let result = parse_ast(tokens);
-            let expected = vec![
-                IfStatement {
-                    true_branch: ASTIfStatement {
-                        expression: BinaryOperation(
-                            Box::new(Variable(istr!("x"))),
-                            Operator::Equals,
-                            IntegerValue(0).into(),
+                        Deref @ BinaryOperation(
+                            Deref @ IntegerValue(3, _),
+                            SpannedOperator(Operator::Plus, _),
+                            Deref @ IntegerValue(5, _),
                         ),
-                        statements: vec![Assign {
-                            path: vec![istr!("x")],
-                            expression: BinaryOperation(
-                                Variable(istr!("x")).into(),
-                                Operator::Plus,
-                                IntegerValue(1).into(),
-                            ),
-                        }],
-                    },
-                    elifs: vec![],
-                    final_else: Some(vec![
-                        Assign {
-                            path: vec![istr!("x")],
-                            expression: IntegerValue(999),
-                        },
-                        IfStatement {
-                            true_branch: ASTIfStatement {
-                                expression: BinaryOperation(
-                                    Variable(istr!("x")).into(),
-                                    Operator::Equals,
-                                    IntegerValue(1).into(),
+                        Deref @ IntegerValue(88, _)
+                    ], _
+                )  => true,
+                 _ => false
+            }
+        });
+    }
+
+    #[test]
+    fn function_call_with_nested_call_with_no_args() {
+        let tokens = tokenize("some_identifier(nested())").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                FunctionCall (
+                    Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [
+                        Deref @ FunctionCall(
+                            Deref @ Variable(Deref @ "nested"),
+                            Deref @ [],
+                            _
+                        ),
+                    ], _
+                )  => true,
+                 _ => false
+            }
+        });
+    }
+
+    #[test]
+    fn function_call_with_nested_call_with_single_arg() {
+        let tokens = tokenize("some_identifier(nested(1))").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                FunctionCall (
+                    Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [
+                        Deref @ FunctionCall(
+                            Deref @ Variable(Deref @ "nested"),
+                            Deref @ [
+                                Deref @ IntegerValue(1, _)
+                            ],
+                            _
+                        ),
+                    ], _
+                )  => true,
+                 _ => false
+            }
+        });
+    }
+
+    #[test]
+    fn function_call_with_nested_call_with_multiple_args() {
+        let tokens = tokenize("some_identifier(nested(1, 2))").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                FunctionCall (
+                    Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [
+                        Deref @ FunctionCall(
+                            Deref @ Variable(Deref @ "nested"),
+                            Deref @ [
+                                Deref @ IntegerValue(1, _),
+                                Deref @ IntegerValue(2, _)
+                            ],
+                            _
+                        ),
+                    ], _
+                )  => true,
+                 _ => false
+            }
+        });
+    }
+
+    #[test]
+    fn function_call_with_nested_call_with_multiple_expr() {
+        let tokens = tokenize("some_identifier(nested(1 * 2, 2 / 3.4))").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                FunctionCall (
+                    Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [
+                        Deref @ FunctionCall(
+                            Deref @ Variable(Deref @ "nested"),
+                            Deref @ [
+                                Deref @ BinaryOperation (
+                                    Deref @ IntegerValue(1, _),
+                                    SpannedOperator(Operator::Multiply, _),
+                                    Deref @ IntegerValue(2, _)
                                 ),
-                                statements: vec![StandaloneExpr(FunctionCall(
-                                    Variable(istr!("print")).into(),
-                                    vec![IntegerValue(2)],
-                                ))],
-                            },
-                            elifs: vec![],
-                            final_else: None,
-                        },
-                    ]),
+                                Deref @ BinaryOperation (
+                                    Deref @ IntegerValue(2, _),
+                                    SpannedOperator(Operator::Divide, _),
+                                    Deref @ FloatValue(FloatLiteral(3.4), _)
+                                )
+
+                            ],
+                            _
+                        ),
+                    ], _
+                )  => true,
+                 _ => false
+            }
+        });
+    }
+
+    #[test]
+    fn function_call_with_nested_call_with_multiple_expr2() {
+        let tokens = tokenize("some_identifier(nested(1), 1)").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                FunctionCall (
+                    Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [
+                        Deref @ FunctionCall(
+                            Deref @ Variable(Deref @ "nested"),
+                            Deref @ [
+                                Deref @ IntegerValue(1, _),
+                            ],
+                            _
+                        ),
+                        Deref @ IntegerValue(1, _),
+                    ], _
+                )  => true,
+                 _ => false
+            }
+        });
+    }
+
+    #[test]
+    fn multiline_code() {
+        let tokens = tokenize(
+            "
+x = 'abc' + 'cde'
+y = x + str(True)",
+        )
+        .unwrap();
+        let result = test_parse(tokens);
+        assert!(match_deref! {
+            match &result {
+               Deref @ [
+                Deref @ AST::Assign {
+                    path: (Deref @ [ Deref @ "x" ], ..),
+                    expression: Deref @ BinaryOperation(
+                        Deref @ StringValue (Deref @ "abc"),
+                        SpannedOperator(Operator::Plus, _),
+                        Deref @ StringValue (Deref @ "cde"),
+                    )
                 },
-                StandaloneExpr(FunctionCall(
-                    Variable(istr!("print")).into(),
-                    vec![Variable(istr!("x"))],
-                )),
-            ];
-            assert_eq!(expected, result);
+                Deref @ AST::Assign {
+                    path: (Deref @ [ Deref @ "y" ], ..),
+                    expression: Deref @ BinaryOperation(
+                        Deref @ Variable (Deref @ "x"),
+                        SpannedOperator(Operator::Plus, _),
+                        Deref @ FunctionCall(
+                            Deref @ Variable(Deref @ "str"),
+                            Deref @ [
+                                Deref @ BooleanValue(true, _)
+                            ],
+                            _
+                        )
+                    )
+                }
+               ] => true,
+               _ => false
+            }
+        });
+    }
+
+    #[test]
+    fn while_statement() {
+        let tokens = tokenize(
+            "
+while True:
+    x = 1
+    break
+    ",
+        )
+        .unwrap();
+        let result = test_parse(tokens);
+        assert!(match_deref! {
+            match &result {
+               Deref @ [
+                Deref @ AST::WhileStatement {
+                    expression: Deref @ BooleanValue(true, _),
+                    body: Deref @ [
+                        Deref @ AST::Assign {
+                            path: (Deref @ [ Deref @ "x" ], ..),
+                            expression: Deref @ IntegerValue(1, _)
+                        },
+                        Deref @ AST::Break(_)
+                   ]
+                }
+               ] => true,
+               _ => false
+            }
+        });
+    }
+
+    #[test]
+    fn while_statement_with_if_and_expr() {
+        parse_and_print_back_to_original(
+            "
+            while x < 1000000:
+                if (x / 5) == 0:
+                    break
+",
+        );
+    }
+
+    #[test]
+    fn function_call_with_nested_call_with_multiple_expr_also_unnested() {
+        parse_and_print_back_to_original(
+            "some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())");
+    }
+
+    fn unindent(str: &str) -> String {
+        let mut indent = 0;
+        let lines = str.lines().collect::<Vec<_>>();
+        if lines.len() == 1 {
+            return str.to_string();
         }
 
-        #[test]
-        fn bunch_of_newlines() {
+        for c in str.lines().nth(1).unwrap().chars() {
+            if c == ' ' {
+                indent += 1;
+            } else {
+                break;
+            }
+        }
+
+        //create a string with the same number of spaces as the indentation
+        let indent_str = " ".repeat(indent);
+
+        return str
+            .lines()
+            .map(|line| {
+                if line.starts_with(&indent_str) {
+                    line[indent..].to_string()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+    }
+
+    fn parse_and_print_back_to_original(source: &str) {
+        let unindented = unindent(source);
+        dbg!(&unindented);
+        let tokens = tokenize(&unindent(source)).unwrap();
+        let result = test_parse(tokens);
+        let printed = INTERNER.with(|i| print_ast(&result, i));
+        pretty_assertions::assert_eq!(printed.trim(), unindented.trim());
+    }
+
+    fn parse_and_compare(source: &str, expected: &str) {
+        let unindented_src = unindent(source);
+        let tokens = tokenize(&unindented_src).unwrap();
+
+        let unindented_expected = unindent(expected);
+
+        let result = test_parse(tokens);
+        let printed = INTERNER.with(|i| print_ast(&result, i));
+        pretty_assertions::assert_eq!(printed.trim(), unindented_expected.trim());
+    }
+
+    #[test]
+    fn if_statement_with_print_after_and_newlines_before_and_after() {
+        parse_and_print_back_to_original(
+            "
+            if x == 0:
+                x = x + 1
+            else:
+                x = 999
+                if x == 1:
+                    print(2)
+            print(x)
+        ",
+        );
+    }
+
+    #[test]
+    fn if_statement() {
+        parse_and_print_back_to_original(
+            "
+        if x == 0:
+            x = x + 1
+        ",
+        );
+    }
+
+    #[test]
+    fn if_statement_with_print_after() {
+        parse_and_print_back_to_original(
+            "
+        if x == 0:
+            x = x + 1
+        print(x)
+        ",
+        );
+    }
+
+    #[test]
+    fn multiline_code2() {
+        parse_and_print_back_to_original(
+            "
+        x = \"abc\" + \"cde\"
+        y = x + str(True)
+        print(y)
+        ",
+        );
+    }
+
+    #[test]
+    fn integration_with_lexer() {
+        parse_and_print_back_to_original("(1 + 2) * 3");
+    }
+    
+    #[test]
+    fn complex_parenthesized_expr() {
+        parse_and_compare("(1 + 2) * (3 + 1 + (10 / 5))", "(1 + 2) * ((3 + 1) + (10 / 5))");
+    }
+
+    #[test]
+    fn tons_of_useless_parenthesis() {
+        parse_and_compare("(((((((((1)))))))))", "1");
+    }
+
+    #[test]
+    fn identifier_multiplied() {
+        parse_and_print_back_to_original("some_identifier * 5");
+    }
+
+    #[test]
+    fn multiply_fcall() {
+        parse_and_print_back_to_original("some_identifier(1) * 5");
+    }
+
+    #[test]
+    fn multiply_fcall_multiple_args() {
+        parse_and_print_back_to_original("some_identifier(1, 2) * 5");
+    }
+
+    #[test]
+    fn bunch_of_newlines() {
             let source_wacky = "
 
-    <tab><tab><tab><tab><tab><tab><tab>
+<tab><tab><tab><tab><tab><tab><tab>
 
-    if x == 0:
-    <tab><tab><tab><tab><tab><tab><tab>
-    <tab>x = x + 1<tab><tab><tab><tab><tab><tab>
-    <tab>
+if x == 0:
+<tab><tab><tab><tab><tab><tab><tab>
+<tab>x = x + 1<tab><tab><tab><tab><tab><tab>
+<tab>
 
-    <tab>if x == 1:
-    <tab><tab><tab><tab><tab>
-    <tab><tab>print(2)
+<tab>if x == 1:
+<tab><tab><tab><tab><tab>
+<tab><tab>print(2)
 
-    <tab>
-    print(x)
+<tab>
+print(x)
 
 
     ";
 
-            let source_replaced = source_wacky.replace("<tab>", "    ");
+    let source_replaced = source_wacky.replace("<tab>", "    ");
 
-            let tokens = tokenize(source_replaced.as_str()).unwrap();
 
-            let result = parse_ast(tokens);
-            let expected = vec![
-                IfStatement {
-                    true_branch: ASTIfStatement {
-                        expression: BinaryOperation(
-                            Variable(istr!("x")).into(),
-                            Operator::Equals,
-                            IntegerValue(0).into(),
-                        ),
-                        statements: vec![
-                            Assign {
-                                path: vec![istr!("x")],
-                                expression: BinaryOperation(
-                                    Variable(istr!("x")).into(),
-                                    Operator::Plus,
-                                    IntegerValue(1).into(),
-                                ),
-                            },
-                            IfStatement {
-                                true_branch: ASTIfStatement {
-                                    expression: BinaryOperation(
-                                        Variable(istr!("x")).into(),
-                                        Operator::Equals,
-                                        IntegerValue(1).into(),
-                                    ),
-                                    statements: vec![StandaloneExpr(FunctionCall(
-                                        Variable(istr!("print")).into(),
-                                        vec![IntegerValue(2)],
-                                    ))],
-                                },
-                                elifs: vec![],
-                                final_else: None,
-                            },
-                        ],
-                    },
-                    elifs: vec![],
-                    final_else: None,
-                },
-                StandaloneExpr(FunctionCall(
-                    Variable(istr!("print")).into(),
-                    vec![Variable(istr!("x"))],
-                )),
-            ];
-            assert_eq!(expected, result);
+    let tokens = tokenize(&unindent(&source_replaced)).unwrap();
+    let result = test_parse(tokens);
+    let printed = INTERNER.with(|i| print_ast(&result, i));
+    print!("{}", printed);
+    pretty_assertions::assert_eq!(printed.trim(), "
+if x == 0:
+    x = x + 1
+    if x == 1:
+        print(2)
+print(x)".trim());
+
         }
 
-        #[test]
-        fn if_statement() {
-            let tokens = tokenize(
-                "
-    if x == 0:
-        x = x + 1",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![IfStatement {
-                true_branch: ASTIfStatement {
-                    expression: BinaryOperation(
-                        Variable(istr!("x")).into(),
-                        Operator::Equals,
-                        IntegerValue(0).into(),
-                    ),
-                    statements: vec![Assign {
-                        path: vec![istr!("x")],
-                        expression: BinaryOperation(
-                            Variable(istr!("x")).into(),
-                            Operator::Plus,
-                            IntegerValue(1).into(),
-                        ),
-                    }],
-                },
-                elifs: vec![],
-                final_else: None,
-            }];
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn if_statement_with_print_after() {
-            let tokens = tokenize(
-                "if x == 0:
-        x = x + 1
-    print(x)",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![
-                IfStatement {
-                    true_branch: ASTIfStatement {
-                        expression: BinaryOperation(
-                            Variable(istr!("x")).into(),
-                            Operator::Equals,
-                            IntegerValue(0).into(),
-                        ),
-                        statements: vec![Assign {
-                            path: vec![istr!("x")],
-                            expression: BinaryOperation(
-                                Variable(istr!("x")).into(),
-                                Operator::Plus,
-                                IntegerValue(1).into(),
-                            ),
-                        }],
-                    },
-                    elifs: vec![],
-                    final_else: None,
-                },
-                StandaloneExpr(FunctionCall(
-                    Variable(istr!("print")).into(),
-                    vec![Variable(istr!("x"))],
-                )),
-            ];
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn multiline_code2() {
-            let tokens = tokenize(
-                "x = 'abc' + 'cde'
-    y = x + str(True)
-    print(y)",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![
-                Assign {
-                    path: vec![istr!("x")],
-                    expression: BinaryOperation(
-                        StringValue(istr!("abc").into()).into(),
-                        Operator::Plus,
-                        StringValue(istr!("cde").into()).into(),
-                    ),
-                },
-                Assign {
-                    path: vec![istr!("y")],
-                    expression: BinaryOperation(
-                        Variable(istr!("x")).into(),
-                        Operator::Plus,
-                        Box::new(FunctionCall(
-                            Variable(istr!("str")).into(),
-                            vec![BooleanValue(true)],
-                        )),
-                    ),
-                },
-                StandaloneExpr(FunctionCall(
-                    Variable(istr!("print")).into(),
-                    vec![Variable(istr!("y"))],
-                )),
-            ];
-
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn integration_with_lexer() {
-            let tokens = tokenize("(1 + 2) * 3").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                BinaryOperation(1.into(), Operator::Plus, 2.into()).into(),
-                Operator::Multiply,
-                3.into(),
-            );
-
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn complex_parenthesized_expr() {
-            let tokens = tokenize("(1 + 2) * (3 + 1 + (10 / 5))").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                BinaryOperation(1.into(), Operator::Plus, 2.into()).into(),
-                Operator::Multiply,
-                BinaryOperation(
-                    BinaryOperation(3.into(), Operator::Plus, 1.into()).into(),
-                    Operator::Plus,
-                    BinaryOperation(10.into(), Operator::Divide, 5.into()).into(),
-                )
-                .into(),
-            );
-
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn tons_of_useless_parenthesis() {
-            let tokens = tokenize("(((((((((1)))))))))").unwrap();
-            let result = parse(tokens);
-
-            let expected = IntegerValue(1);
-
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn identifier_multiplied() {
-            let tokens = tokenize("some_identifier * 5").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                Variable(istr!("some_identifier")).into(),
-                Operator::Multiply,
-                5.into(),
-            );
-
-            assert_eq!(expected, result);
-        }
-
-
-        #[test]
-        fn function_call_with_nested_call_with_multiple_expr_also_unnested() {
-            let tokens = tokenize("some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())").unwrap();
-            let result = parse(tokens);
-            let expected = FunctionCall(
-                Variable(istr!("some_identifier")).into(),
-                vec![
-                    FunctionCall(
-                        Variable(istr!("nested")).into(),
-                        vec![
-                            BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                            BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
-                        ],
-                    ),
-                    IntegerValue(3),
-                    FunctionCall(Variable(istr!("nested2")).into(), vec![]),
-                ],
-            );
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn multiply_fcall() {
-            let tokens = tokenize("some_identifier(1) * 5").unwrap();
-            let result = parse(tokens);
-            let call = FunctionCall(
-                Variable(istr!("some_identifier")).into(),
-                vec![IntegerValue(1)],
-            );
-            let expected = BinaryOperation(call.into(), Operator::Multiply, 5.into());
-            assert_eq!(expected, result);
-        }
-
-        #[test]
-        fn multiply_fcall_multiple_args() {
-            let tokens = tokenize("some_identifier(1, 2) * 5").unwrap();
-            let result = parse(tokens);
-            let call = FunctionCall(
-                Variable(istr!("some_identifier")).into(),
-                vec![IntegerValue(1), IntegerValue(2)],
-            );
-            let expected = BinaryOperation(call.into(), Operator::Multiply, 5.into());
-            assert_eq!(expected, result);
-        }
 
         #[test]
         fn multiply_fcall_nested_last() {
-            let tokens = tokenize("some_identifier(nested()) * 5").unwrap();
-            let result = parse(tokens);
-            let call = FunctionCall(
-                Box::new(Variable(istr!("some_identifier"))),
-                vec![FunctionCall(Box::new(Variable(istr!("nested"))), vec![])],
-            );
-            let expected = BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("some_identifier(nested()) * 5");
         }
 
         #[test]
         fn multiply_fcall_multiple_args_nested_last() {
-            let tokens = tokenize("some_identifier(1, nested()) * 5").unwrap();
-            let result = parse(tokens);
-            let call = FunctionCall(
-                Box::new(Variable(istr!("some_identifier"))),
-                vec![
-                    IntegerValue(1),
-                    FunctionCall(Box::new(Variable(istr!("nested"))), vec![]),
-                ],
-            );
-            let expected = BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("some_identifier(1, nested()) * 5");
         }
 
         #[test]
         fn function_call_with_nested_call_with_multiple_expr_also_unnested_used_in_expression_right() {
-            let tokens = tokenize("some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2()) * 5").unwrap();
-            let result = parse(tokens);
-            let call = FunctionCall(
-                Box::new(Variable(istr!("some_identifier"))),
-                vec![
-                    FunctionCall(
-                        Box::new(Variable(istr!("nested"))),
-                        vec![
-                            BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                            BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
-                        ],
-                    ),
-                    IntegerValue(3),
-                    FunctionCall(Box::new(Variable(istr!("nested2"))), vec![]),
-                ],
-            );
-            let expected = BinaryOperation(Box::new(call), Operator::Multiply, 5.into());
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2()) * 5");
         }
 
         #[test]
         fn function_call_with_nested_call_with_multiple_expr_also_unnested_used_in_expression_left() {
-            let tokens = tokenize("5 * some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())").unwrap();
-            let result = parse(tokens);
-            let call = FunctionCall(
-                Box::new(Variable(istr!("some_identifier"))),
-                vec![
-                    FunctionCall(
-                        Box::new(Variable(istr!("nested"))),
-                        vec![
-                            BinaryOperation(1.into(), Operator::Multiply, 2.into()),
-                            BinaryOperation(2.into(), Operator::Divide, (3.4).into()),
-                        ],
-                    ),
-                    IntegerValue(3),
-                    FunctionCall(Box::new(Variable(istr!("nested2"))), vec![]),
-                ],
-            );
-            let expected = BinaryOperation(5.into(), Operator::Multiply, Box::new(call));
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("5 * some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())");
         }
 
         #[test]
         fn function_call_with_a_bunch_of_useless_params() {
-            let tokens = tokenize("func((((((1))))))").unwrap();
-            let result = parse(tokens);
-            let expected = FunctionCall(Box::new(Variable(istr!("func"))), vec![IntegerValue(1)]);
-            assert_eq!(expected, result);
+            parse_and_compare("func((((((1))))))", "func(1)");
         }
 
         #[test]
         fn function_call_in_right_binop() {
-            let tokens = tokenize("2 * func(1)").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                (2).into(),
-                Operator::Multiply,
-                Box::new(FunctionCall(
-                    Box::new(Variable(istr!("func"))),
-                    vec![IntegerValue(1)],
-                )),
-            );
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("2 * func(1)");
         }
 
         #[test]
         fn unary_function_call() {
-            let tokens = tokenize("-func(1)").unwrap();
-            let result = parse(tokens);
-            let expected = UnaryExpression(
-                Operator::Minus,
-                Box::new(FunctionCall(
-                    Box::new(Variable(istr!("func"))),
-                    vec![IntegerValue(1)],
-                )),
-            );
-            assert_eq!(expected, result);
+            parse_and_compare("-func(1)", "- func(1)");
         }
 
         #[test]
         fn function_call_in_left_binop() {
-            let tokens = tokenize("func(1) * 2").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                Box::new(FunctionCall(
-                    Box::new(Variable(istr!("func"))),
-                    vec![IntegerValue(1)],
-                )),
-                Operator::Multiply,
-                (2).into(),
-            );
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("func(1) * 2");
         }
 
         #[test]
         fn function_call_in_both_sides_binop() {
-            let tokens = tokenize("func(1) * func(2)").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                Box::new(FunctionCall(
-                    Box::new(Variable(istr!("func"))),
-                    vec![IntegerValue(1)],
-                )),
-                Operator::Multiply,
-                Box::new(FunctionCall(
-                    Box::new(Variable(istr!("func"))),
-                    vec![IntegerValue(2)],
-                )),
-            );
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("func(1) * func(2)");
         }
 
         #[test]
         fn minus_one() {
-            let tokens = tokenize("-1").unwrap();
-            let result = parse(tokens);
-            let expected = UnaryExpression(Operator::Minus, Box::new(IntegerValue(1)));
-            assert_eq!(expected, result);
+            parse_and_compare("-1", "- 1");
         }
 
         #[test]
         fn minus_expr() {
-            let tokens = tokenize("-(5.0 / 9.0)").unwrap();
-            let result = parse(tokens);
-            let expected = UnaryExpression(
-                Operator::Minus,
-                Box::new(BinaryOperation(
-                    (5.0).into(),
-                    Operator::Divide,
-                    (9.0).into(),
-                )),
-            );
-            assert_eq!(expected, result);
+            parse_and_compare("-(5.0 / 9.0)", "- (5 / 9)");
         }
 
         #[test]
         fn two_times_minus_one() {
-            let tokens = tokenize("2 * -1").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                (2).into(),
-                Operator::Multiply,
-                Box::new(UnaryExpression(Operator::Minus, 1.into())),
-            );
-            assert_eq!(expected, result);
+            parse_and_compare("2 * -1", "2 * - 1");
         }
 
         #[test]
         fn two_times_minus_repeated_one() {
-            let tokens = tokenize("2 * --1").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                (2).into(),
-                Operator::Multiply,
-                Box::new(UnaryExpression(
-                    Operator::Minus,
-                    Box::new(UnaryExpression(Operator::Minus, 1.into())),
-                )),
-            );
-            assert_eq!(expected, result);
+            parse_and_compare("2 * --1", "2 * - - 1");
         }
 
         #[test]
         fn two_times_minus_plus_minus_one() {
-            let tokens = tokenize("2 * -+-1").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                (2).into(),
-                Operator::Multiply,
-                Box::new(UnaryExpression(
-                    Operator::Minus,
-                    Box::new(UnaryExpression(
-                        Operator::Plus,
-                        Box::new(UnaryExpression(Operator::Minus, 1.into())),
-                    )),
-                )),
-            );
-            assert_eq!(expected, result);
+            parse_and_compare("2 * -+-1", "2 * - + - 1");
         }
 
         #[test]
         fn two_times_minus_plus_minus_one_parenthesized() {
-            let tokens = tokenize("2 * (-+-1)").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                (2).into(),
-                Operator::Multiply,
-                Box::new(UnaryExpression(
-                    Operator::Minus,
-                    Box::new(UnaryExpression(
-                        Operator::Plus,
-                        Box::new(UnaryExpression(Operator::Minus, 1.into())),
-                    )),
-                )),
-            );
-            assert_eq!(expected, result);
+            parse_and_compare("2 * (-+-1)", "2 * - + - 1");
         }
 
         #[test]
         fn two_times_minus_plus_minus_one_in_function_call() {
-            let tokens = tokenize("2 * func(-+-1)").unwrap();
-            let result = parse(tokens);
-            let expected = BinaryOperation(
-                (2).into(),
-                Operator::Multiply,
-                Box::new(FunctionCall(
-                    Box::new(Variable(istr!("func"))),
-                    vec![UnaryExpression(
-                        Operator::Minus,
-                        Box::new(UnaryExpression(
-                            Operator::Plus,
-                            Box::new(UnaryExpression(Operator::Minus, 1.into())),
-                        )),
-                    )],
-                )),
-            );
-            assert_eq!(expected, result);
+            parse_and_compare("2 * func(-+-1)", "2 * func(- + - 1)");
         }
 
         #[test]
         fn fahrenheit_1_expr() {
-            let tokens = tokenize("-(5.0 / 9.0) * 32").unwrap();
-            let result = parse(tokens);
-
-            let dividend = BinaryOperation(
-                Box::new(UnaryExpression(
-                    Operator::Minus,
-                    Box::new(BinaryOperation(
-                        (5.0).into(),
-                        Operator::Divide,
-                        (9.0).into(),
-                    )),
-                )),
-                Operator::Multiply,
-                (32).into(),
-            );
-
-            assert_eq!(dividend, result);
+            parse_and_compare("-(5.0 / 9.0) * 32", "- (5 / 9) * 32");
         }
 
         #[test]
         fn fahrenheit_expr() {
-            let tokens = tokenize("(-(5.0 / 9.0) * 32) / (1 - (5.0 / 9.0))").unwrap();
-            let result = parse(tokens);
-
-            let dividend = BinaryOperation(
-                Box::new(UnaryExpression(
-                    Operator::Minus,
-                    Box::new(BinaryOperation(
-                        (5.0).into(),
-                        Operator::Divide,
-                        (9.0).into(),
-                    )),
-                )),
-                Operator::Multiply,
-                (32).into(),
-            );
-
-            let divisor = BinaryOperation(
-                1.into(),
-                Operator::Minus,
-                Box::new(BinaryOperation(
-                    (5.0).into(),
-                    Operator::Divide,
-                    (9.0).into(),
-                )),
-            );
-
-            let fahrenheit = BinaryOperation(Box::new(dividend), Operator::Divide, Box::new(divisor));
-
-            assert_eq!(fahrenheit, result);
+            parse_and_compare("(-(5.0 / 9.0) * 32) / (1 - (5.0 / 9.0))", "(- (5 / 9) * 32) / (1 - (5 / 9))");
         }
 
         #[test]
         fn test_assign() {
-            let tokens = tokenize("x = 1").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![Assign {
-                path: vec![istr!("x")],
-                expression: IntegerValue(1),
-            }];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("x = 1");
         }
 
         #[test]
         fn test_parse_ast_first_token_is_identifier() {
-            let tokens = tokenize("x * 1").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(BinaryOperation(
-                Box::new(Variable(istr!("x"))),
-                Operator::Multiply,
-                1.into(),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("x * 1");
         }
 
         #[test]
         fn test_parse_assign_expr() {
-            let tokens = tokenize("x = x * 1").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![Assign {
-                path: vec![istr!("x")],
-                expression: BinaryOperation(
-                    Box::new(Variable(istr!("x"))),
-                    Operator::Multiply,
-                    1.into(),
-                ),
-            }];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("x = x * 1");
         }
 
         #[test]
         fn test_parse_just_id_ast() {
-            let tokens = tokenize("x").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(Variable(istr!("x")))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("x");
         }
 
         #[test]
         fn not_operator() {
-            let tokens = tokenize("not True").unwrap();
-            let result = parse(tokens);
-            let expected = UnaryExpression(Operator::Not, Box::new(BooleanValue(true)));
-
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("not True");
         }
 
         #[test]
         fn none() {
-            let tokens = tokenize("None").unwrap();
-            let result = parse(tokens);
-            let expected = NoneExpr;
-
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("None");
         }
 
         #[test]
         fn not_true_and_false() {
-            let tokens = tokenize("not (True and False)").unwrap();
-            let result = parse(tokens);
-            let expected = UnaryExpression(
-                Operator::Not,
-                Box::new(BinaryOperation(
-                    Box::new(BooleanValue(true)),
-                    Operator::And,
-                    Box::new(BooleanValue(false)),
-                )),
-            );
-
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("not (True and False)");
         }
 
         #[test]
         fn two_expressions_binary_that_needs_inverting_operands_no_information_is_lost() {
-            let tokens = tokenize("(1 + 2 * 3) + (4 + 5 * 6)").unwrap();
-            let result = parse(tokens);
-
-            let expected = "BinaryOperation(BinaryOperation(IntegerValue(1), Plus, BinaryOperation(IntegerValue(2), Multiply, IntegerValue(3))), Plus, BinaryOperation(IntegerValue(4), Plus, BinaryOperation(IntegerValue(5), Multiply, IntegerValue(6))))";
-            println!("{:#?}", result);
-            assert_eq!(expected, format!("{:?}", result));
+            parse_and_compare("(1 + 2 * 3) + (4 + 5 * 6)", "(1 + (2 * 3)) + (4 + (5 * 6))");
         }
 
         #[test]
         fn assign_boolean_expr() {
-            let tokens = tokenize("x = not (True and False) or (False)").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![Assign {
-                path: vec![istr!("x")],
-                expression: BinaryOperation(
-                    Box::new(UnaryExpression(
-                        Operator::Not,
-                        Box::new(BinaryOperation(
-                            Box::new(BooleanValue(true)),
-                            Operator::And,
-                            Box::new(BooleanValue(false)),
-                        )),
-                    )),
-                    Operator::Or,
-                    Box::new(BooleanValue(false)),
-                ),
-            }];
-
-            assert_eq!(expected, result);
+            parse_and_compare("x = not (True and False) or (False)", "x = not (True and False) or False");
         }
 
         #[test]
         fn assign_string_expr() {
-            let tokens = tokenize("x = 'abc'").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![Assign {
-                path: vec![istr!("x")],
-                expression: StringValue(istr!("abc").into()),
-            }];
-
-            assert_eq!(expected, result);
+            parse_and_compare("x = 'abc'", "x = \"abc\"");
         }
 
         #[test]
         fn declare_typed() {
-            let tokens = tokenize("x: str = 'abc'").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![Declare {
-                var: TypeBoundName::simple(istr!("x"), istr!("str")),
-                expression: StringValue(istr!("abc").into()),
-            }];
-
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("x: str = \"abc\"");
         }
 
         #[test]
         fn assign_string_concat_expr() {
-            let tokens = tokenize("x = 'abc' + 'cde'").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![Assign {
-                path: vec![istr!("x")],
-                expression: BinaryOperation(
-                    Box::new(StringValue(istr!("abc").into())),
-                    Operator::Plus,
-                    Box::new(StringValue(istr!("cde").into())),
-                ),
-            }];
-
-            assert_eq!(expected, result);
+            parse_and_compare("x = 'abc' + 'cde'", "x = \"abc\" + \"cde\"");
         }
 
         #[test]
         fn array_of_ints() {
-            let tokens = tokenize("[1,2,3]").unwrap();
-            let result = parse(tokens);
-            let expected = Array(vec![IntegerValue(1), IntegerValue(2), IntegerValue(3)]);
-
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("[1, 2, 3]");
         }
 
         #[test]
         fn array_of_strings() {
-            let tokens = tokenize("[\"one\",\"two\",\"3\"]").unwrap();
-            let result = parse(tokens);
-            let expected = Array(vec![
-                StringValue(istr!("one")),
-                StringValue(istr!("two")),
-                StringValue(istr!("3")),
-            ]);
-
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("[\"one\", \"two\", \"3\"]");
         }
 
         #[test]
         fn array_of_stuff() {
-            let tokens = tokenize("[1, 'two', True, 4.565]").unwrap();
-            let result = parse(tokens);
-            let expected = Array(vec![
-                IntegerValue(1),
-                StringValue(istr!("two")),
-                BooleanValue(true),
-                FloatValue(4.565.into()),
-            ]);
-
-            assert_eq!(expected, result);
+            parse_and_compare("[1, 'two', True, 4.565]", "[1, \"two\", True, 4.565]");
         }
 
         #[test]
         fn assign_array() {
-            let tokens = tokenize("x = [1, 2]").unwrap();
-            let result = parse_ast(tokens);
-            let expr = Array(vec![IntegerValue(1), IntegerValue(2)]);
-            let expected = vec![Assign {
-                path: vec![istr!("x")],
-                expression: expr,
-            }];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("x = [1, 2]");
         }
 
         #[test]
         fn member_acessor() {
-            let tokens = tokenize("obj.prop").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(MemberAccess(
-                Box::new(Variable(istr!("obj").into())),
-                istr!("prop").into(),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("obj.prop");
         }
 
         #[test]
         fn assign_member() {
-            let tokens = tokenize("obj.prop = 1").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![Assign {
-                path: vec![istr!("obj").into(), istr!("prop").into()],
-                expression: IntegerValue(1),
-            }];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("obj.prop = 1");
         }
 
         #[test]
         fn member_compare() {
-            let tokens = tokenize("self.current >= self.max").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(BinaryOperation(
-                Box::new(MemberAccess(
-                    Box::new(Variable(istr!("self").into())),
-                    istr!("current").into(),
-                )),
-                Operator::GreaterEquals,
-                Box::new(MemberAccess(
-                    Box::new(Variable(istr!("self").into())),
-                    istr!("max").into(),
-                )),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("self.current >= self.max");
         }
 
         #[test]
         fn for_item_in_list_print() {
-            let tokens = tokenize(
+            parse_and_print_back_to_original(
                 "
     for item in list:
         print(item)
     ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![ForStatement {
-                item_name: istr!("item").into(),
-                list_expression: Variable(istr!("list").into()),
-                body: vec![StandaloneExpr(FunctionCall(
-                    Box::new(Variable(istr!("print").into())),
-                    vec![Variable(istr!("item").into())],
-                ))],
-            }];
-            assert_eq!(expected, result);
+            );
         }
 
         #[test]
         fn function_decl() {
-            let tokens = tokenize(
+            parse_and_print_back_to_original(
                 "
     def function(x: i32):
         print(x)
     ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![DeclareFunction {
-                function_name: istr!("function").into(),
-                parameters: vec![TypeBoundName::simple(istr!("x"), istr!("i32"))],
-                body: vec![StandaloneExpr(FunctionCall(
-                    Box::new(Variable(istr!("print").into())),
-                    vec![Variable(istr!("x").into())],
-                ))],
-                return_type: None,
-            }];
-            assert_eq!(expected, result);
+            );
         }
 
         #[test]
         fn function_decl_noparams() {
-            let tokens = tokenize(
+            parse_and_print_back_to_original(
                 "
     def function():
         print(x)
     ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![DeclareFunction {
-                function_name: istr!("function").into(),
-                parameters: vec![],
-                body: vec![StandaloneExpr(FunctionCall(
-                    Box::new(Variable(istr!("print").into())),
-                    vec![Variable(istr!("x").into())],
-                ))],
-                return_type: None,
-            }];
-            assert_eq!(expected, result);
+            );
         }
 
         #[test]
         fn function_decl_manyparams() {
-            let tokens = tokenize(
+            parse_and_print_back_to_original(
                 "
-    def function(x: i32,y: u32,z: MyType):
+    def function(x: i32, y: u32, z: MyType):
         print(x)
     ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![DeclareFunction {
-                function_name: istr!("function").into(),
-                parameters: vec![
-                    TypeBoundName::simple(istr!("x"), istr!("i32")),
-                    TypeBoundName::simple(istr!("y"), istr!("u32")),
-                    TypeBoundName::simple(istr!("z"), istr!("MyType")),
-                ],
-                body: vec![StandaloneExpr(FunctionCall(
-                    Box::new(Variable(istr!("print").into())),
-                    vec![Variable(istr!("x").into())],
-                ))],
-                return_type: None,
-            }];
-            assert_eq!(expected, result);
+            );
         }
 
         #[test]
         fn return_nothing() {
-            let tokens = tokenize(
+            parse_and_print_back_to_original(
                 "
     def function(x: i32):
         return
     ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![DeclareFunction {
-                function_name: istr!("function").into(),
-                parameters: vec![TypeBoundName::simple(istr!("x"), istr!("i32"))],
-                body: vec![Return(None)],
-                return_type: None,
-            }];
-            assert_eq!(expected, result);
+            );
         }
 
         #[test]
         fn return_expr() {
-            let tokens = tokenize(
+            parse_and_print_back_to_original(
                 "
     def function(x: i32) -> i32:
         return x + 1
     ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![DeclareFunction {
-                function_name: istr!("function").into(),
-                parameters: vec![TypeBoundName::simple(istr!("x"), istr!("i32"))],
-                body: vec![Return(Some(BinaryOperation(
-                    Box::new(Variable(istr!("x").into())),
-                    Operator::Plus,
-                    Box::new(IntegerValue(1)),
-                )))],
-                return_type: Some(ASTType::Simple(istr!("i32").into())),
-            }];
-            assert_eq!(expected, result);
+            );
         }
 
         #[test]
         fn generic_type() {
-            let tokens = tokenize(
+            parse_and_print_back_to_original(
                 "
-    some_var : List<i32> = [1, 2]
+    some_var: List<i32> = [1, 2]
     ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-
-            assert_eq!(
-                result,
-                vec![Declare {
-                    var: TypeBoundName::generic_1(istr!("some_var"), istr!("List"), istr!("i32")),
-                    expression: Array(vec![IntegerValue(1), IntegerValue(2)])
-                }]
             );
         }
 
         #[test]
         fn struct_definition_and_then_method() {
-            let tokens = tokenize(
+            parse_and_compare(
                 "
     struct Struct1:
         field1: i32
@@ -2968,204 +2671,76 @@ mod tests {
 
     def my_function(param1: i32, param2: i32) -> i32:
         return param1 * param2 / (param2 - param1)
-    ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-
-            assert_eq!(
-                result,
-                vec![
-                    StructDeclaration {
-                        struct_name: istr!("Struct1").into(),
-                        type_parameters: vec![],
-                        body: vec![
-                            TypeBoundName::simple(istr!("field1"), istr!("i32")),
-                            TypeBoundName::simple(istr!("field2"), istr!("i64"))
-                        ]
-                    },
-                    DeclareFunction {
-                        function_name: istr!("my_function").into(),
-                        parameters: vec![
-                            TypeBoundName::simple(istr!("param1"), istr!("i32")),
-                            TypeBoundName::simple(istr!("param2"), istr!("i32"))
-                        ],
-                        body: vec![Return(Some(BinaryOperation(
-                            Box::new(BinaryOperation(
-                                Box::new(Variable(istr!("param1").into())),
-                                Operator::Multiply,
-                                Box::new(Variable(istr!("param2").into()))
-                            )),
-                            Operator::Divide,
-                            Box::new(BinaryOperation(
-                                Box::new(Variable(istr!("param2").into())),
-                                Operator::Minus,
-                                Box::new(Variable(istr!("param1").into()))
-                            ))
-                        )))],
-                        return_type: Some(ASTType::Simple(istr!("i32").into()))
-                    }
-                ]
+    ", "
+    struct Struct1:
+        field1: i32
+        field2: i64
+    def my_function(param1: i32, param2: i32) -> i32:
+        return (param1 * param2) / (param2 - param1)"
             );
         }
 
         #[test]
         fn struct_definition() {
-            let tokens = tokenize(
+            parse_and_print_back_to_original(
                 "
     struct SomeStruct:
         field: i32
         otherfield: str
     ",
-            )
-            .unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StructDeclaration {
-                struct_name: istr!("SomeStruct").into(),
-                type_parameters: vec![],
-                body: vec![
-                    TypeBoundName::simple(istr!("field"), istr!("i32")),
-                    TypeBoundName::simple(istr!("otherfield"), istr!("str")),
-                ],
-            }];
-            assert_eq!(expected, result);
+            );
         }
 
         #[test]
         fn access_at_index() {
-            let tokens = tokenize("list[1]").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(IndexAccess(
-                Box::new(Variable(istr!("list").into())),
-                Box::new(IntegerValue(1)),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("list[1]");
         }
 
         #[test]
         fn access_at_string() {
-            let tokens = tokenize("a_map[\"value\"]").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(IndexAccess(
-                Box::new(Variable(istr!("a_map").into())),
-                Box::new(StringValue(istr!("value").into())),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("a_map[\"value\"]");
         }
 
         #[test]
         fn access_at_list() {
             //this is crazy
-            let tokens = tokenize("a_map[[]]").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(IndexAccess(
-                Box::new(Variable(istr!("a_map").into())),
-                Box::new(Array(vec![])),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("a_map[[]]");
         }
 
         #[test]
         fn function_return_indexed() {
-            let tokens = tokenize("some_call()[1]").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(IndexAccess(
-                Box::new(FunctionCall(
-                    Box::new(Variable(istr!("some_call").into())),
-                    vec![],
-                )),
-                Box::new(IntegerValue(1)),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("some_call()[1]");
         }
 
         #[test]
         fn function_argument_is_indexed() {
-            let tokens = tokenize("some_call(var[1])").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(FunctionCall(
-                Box::new(Variable(istr!("some_call").into())),
-                vec![IndexAccess(
-                    Box::new(Variable(istr!("var").into())),
-                    Box::new(IntegerValue(1)),
-                )],
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("some_call(var[1])");
         }
 
         #[test]
         fn index_expression_lhs_in_binary_op() {
             //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
-            let tokens = tokenize("args[1] + 1").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(BinaryOperation(
-                IndexAccess(
-                    Variable(istr!("args").into()).into(),
-                    IntegerValue(1).into(),
-                )
-                .into(),
-                Operator::Plus,
-                IntegerValue(1).into(),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("args[1] + 1");
         }
 
         #[test]
         fn index_expression_rhs_in_binary_op() {
             //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
-            let tokens = tokenize("1 + args[1]").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(BinaryOperation(
-                IntegerValue(1).into(),
-                Operator::Plus,
-                IndexAccess(
-                    Variable(istr!("args").into()).into(),
-                    IntegerValue(1).into(),
-                )
-                .into(),
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("1 + args[1]");
         }
 
         #[test]
         fn method_call_empty() {
-            let tokens = tokenize("method.call()").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(FunctionCall(
-                Box::new(MemberAccess(
-                    Box::new(Variable(istr!("method").into())),
-                    istr!("call").into(),
-                )),
-                vec![],
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("method.call()");
         }
         #[test]
         fn method_call_oneparam() {
-            let tokens = tokenize("method.call(1)").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(FunctionCall(
-                Box::new(MemberAccess(
-                    Box::new(Variable(istr!("method").into())),
-                    istr!("call").into(),
-                )),
-                vec![IntegerValue(1)],
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("method.call(1)");
         }
 
         #[test]
         fn method_call_manyargs() {
-            let tokens = tokenize("method.call(1, 2)").unwrap();
-            let result = parse_ast(tokens);
-            let expected = vec![StandaloneExpr(FunctionCall(
-                Box::new(MemberAccess(
-                    Box::new(Variable(istr!("method").into())),
-                    istr!("call").into(),
-                )),
-                vec![IntegerValue(1), IntegerValue(2)],
-            ))];
-            assert_eq!(expected, result);
+            parse_and_print_back_to_original("method.call(1, 2)");
         }
-        */
+
 }

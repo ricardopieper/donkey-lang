@@ -673,18 +673,25 @@ mod tests {
     tls_interner!(INTERNER);
     use super::*;
 
-    use crate::ast::parser::parse_ast;
+    use crate::ast::lexer::{TokenSpan, TokenSpanIndex};
+    use crate::ast::parser::{parse_ast, AstSpan};
     use crate::semantic::context::test_utils::tls_interner;
-    use crate::semantic::context::FileTableIndex;
+    use crate::semantic::context::{FileTableIndex, FileTableEntry};
     use crate::semantic::hir;
 
     use crate::semantic::hir_printer::HIRPrinter;
     use crate::types::type_instance_db::TypeInstanceManager;
 
     //Parses a single expression
-    fn parse<'source>(source: &str) -> AST {
+    fn parse<'source>(source: &'static str) -> AST {
         let tokens = INTERNER.with(|x| crate::ast::lexer::tokenize(FileTableIndex(0), source, x));
-        let ast = parse_ast(tokens.unwrap());
+        let (ast, _) = parse_ast(&tokens.unwrap(), &[
+            FileTableEntry{
+                ast: AST::Break(AstSpan{ start: TokenSpanIndex(0), end: TokenSpanIndex(0) }),
+                contents: source,
+                file_name: "hir_test".to_string()
+            }
+        ]);
         return AST::Root(ast);
     }
 

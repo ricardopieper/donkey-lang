@@ -114,15 +114,7 @@ impl InternedString {
     }
 }
 
-macro_rules! interner {
-    ($interner:expr) => {
-        macro_rules! istr {
-            ($str:expr) => {
-                $interner.get($str)
-            };
-        }
-    };
-}
+
 use std::{
     cell::{RefCell},
     collections::HashMap,

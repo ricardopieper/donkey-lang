@@ -312,15 +312,17 @@ impl<'interner> TypeConstructorDatabase<'interner> {
 
     #[allow(clippy::similar_names)]
     fn init_builtin(&mut self) {
-        //ptr + len
-        interner!(self.interner);
+
+        let istr = |s| {
+            self.interner.get(s)
+        };
 
         let void_type = self.add(
             TypeKind::Primitive {
                 size: Bytes::size_of::<()>(),
             },
             TypeSign::Unsigned,
-            self.interner.get("Void"),
+            istr("Void"),
         );
         self.common_types.void = void_type;
 
@@ -330,20 +332,20 @@ impl<'interner> TypeConstructorDatabase<'interner> {
                 size: Bytes::size_of::<usize>(),
             },
             TypeSign::Unsigned,
-            self.interner.get("None"),
+            istr("None"),
         );
         self.common_types.bool = self.add(
             TypeKind::Primitive {
                 size: Bytes::size_of::<()>(),
             },
             TypeSign::Unsigned,
-            istr!("bool"),
+            istr("bool"),
         );
 
         let i32_type =
-            self.register_primitive_number(istr!("i32"), Bytes::size_of::<i32>(), TypeSign::Signed);
+            self.register_primitive_number(istr("i32"), Bytes::size_of::<i32>(), TypeSign::Signed);
         let u32_type = self.register_primitive_number(
-            istr!("u32"),
+            istr("u32"),
             Bytes::size_of::<u32>(),
             TypeSign::Unsigned,
         );
@@ -351,27 +353,27 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.common_types.u32 = u32_type;
 
         self.common_types.i64 =
-            self.register_primitive_number(istr!("i64"), Bytes::size_of::<i64>(), TypeSign::Signed);
+            self.register_primitive_number(istr("i64"), Bytes::size_of::<i64>(), TypeSign::Signed);
         self.common_types.u64 = self.register_primitive_number(
-            istr!("u64"),
+            istr("u64"),
             Bytes::size_of::<u64>(),
             TypeSign::Unsigned,
         );
         self.common_types.f32 =
-            self.register_primitive_number(istr!("f32"), Bytes::size_of::<f32>(), TypeSign::Signed);
+            self.register_primitive_number(istr("f32"), Bytes::size_of::<f32>(), TypeSign::Signed);
         self.common_types.f64 =
-            self.register_primitive_number(istr!("f64"), Bytes::size_of::<f64>(), TypeSign::Signed);
+            self.register_primitive_number(istr("f64"), Bytes::size_of::<f64>(), TypeSign::Signed);
 
         self.common_types.u8 =
-            self.register_primitive_number(istr!("u8"), Bytes::size_of::<u8>(), TypeSign::Unsigned);
+            self.register_primitive_number(istr("u8"), Bytes::size_of::<u8>(), TypeSign::Unsigned);
 
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
         let ptr_type = self.add_generic(
             TypeKind::Primitive {
                 size: Bytes::size_of::<usize>(),
             },
-            istr!("ptr"),
-            vec![GenericParameter(istr!("TPtr"))],
+            istr("ptr"),
+            vec![GenericParameter(istr("TPtr"))],
             Some(Bytes::size_of::<usize>()),
         );
         self.common_types.ptr = ptr_type;
@@ -379,8 +381,8 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         //ptr + num items
         let arr_type = self.add_generic(
             TypeKind::Struct,
-            istr!("array"),
-            vec![GenericParameter(istr!("TItem").into())],
+            istr("array"),
+            vec![GenericParameter(istr("TItem").into())],
             Some(Bytes::size_of::<usize>() + Bytes::size_of::<u32>()),
         );
 
@@ -389,19 +391,19 @@ impl<'interner> TypeConstructorDatabase<'interner> {
                 size: Bytes::size_of::<()>(),
             },
             TypeSign::Unsigned,
-            istr!("function"),
+            istr("function"),
         );
         self.add_method(
             arr_type,
             TypeConstructorFunctionDeclaration {
-                name: istr!("__index__"),
+                name: istr("__index__"),
                 args: vec![TypeUsage::Given(u32_type)],
-                return_type: TypeUsage::Generic(GenericParameter(istr!("TItem"))),
+                return_type: TypeUsage::Generic(GenericParameter(istr("TItem"))),
             },
         );
 
         //u32_type
-        self.add_simple_field(arr_type, istr!("length"), u32_type);
+        self.add_simple_field(arr_type, istr("length"), u32_type);
 
         self.common_types.array = arr_type;
     }

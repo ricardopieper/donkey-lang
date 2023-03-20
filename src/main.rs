@@ -54,7 +54,7 @@ fn main() {
     source.load_stdlib();
     source.load_file(&args[1]);
 
-    let mut ctx = crate::semantic::context::Analyzer::new(&source.interner);
+    let mut ctx = crate::semantic::context::Analyzer::new(&source);
     ctx.analyze(&source);
 
     if args.contains(&"print_mir".to_string()) {

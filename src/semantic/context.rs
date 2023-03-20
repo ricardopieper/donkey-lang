@@ -4,6 +4,7 @@ use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotChecked};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 use super::type_checker::typecheck;
+use crate::ast::ast_printer::print_ast;
 use crate::ast::lexer::TokenSpanIndex;
 use crate::ast::parser::AstSpan;
 use crate::ast::{lexer, parser};
@@ -16,7 +17,7 @@ use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
 pub struct FileTableIndex(pub usize);
 
-pub struct LoadedFile {
+pub struct FileTableEntry {
     pub file_name: String,
     pub ast: AST,
     pub contents: &'static str,
@@ -24,14 +25,14 @@ pub struct LoadedFile {
 
 pub struct Source {
     pub interner: StringInterner,
-    pub loaded_files: Vec<LoadedFile>,
+    pub file_table: Vec<FileTableEntry>,
 }
 
 impl Source {
     pub fn new() -> Source {
         Source {
             interner: StringInterner::new(),
-            loaded_files: vec![],
+            file_table: vec![],
         }
     }
 }
@@ -42,7 +43,8 @@ impl Source {
     }
 
     pub fn load(self: &mut Source, file_name: String, source: String) {
-        self.loaded_files.push(LoadedFile {
+        let prev_count = self.file_table.len();
+        self.file_table.push(FileTableEntry {
             file_name,
             ast: AST::Break(AstSpan {
                 start: TokenSpanIndex(0),
@@ -51,13 +53,14 @@ impl Source {
             contents: source.leak(),
         });
         let tokens = lexer::tokenize(
-            FileTableIndex(self.loaded_files.len()),
-            self.loaded_files.last().unwrap().contents.as_ref(),
+            FileTableIndex(prev_count),
+            self.file_table.last().unwrap().contents.as_ref(),
             &self.interner,
         );
-        let ast = parser::parse_ast(tokens.unwrap());
+        let (ast, _) = parser::parse_ast(&tokens.unwrap(), &self.file_table);
+        println!("{}", print_ast(&ast, &self.interner));
         let root = parser::AST::Root(ast);
-        self.loaded_files.last_mut().unwrap().ast = root;
+        self.file_table.last_mut().unwrap().ast = root;
     }
 
     pub fn load_file(&mut self, file_location: &str) {
@@ -78,19 +81,19 @@ pub struct Analyzer<'source, 'interner> {
     pub globals: NameRegistry,
     pub type_errors: TypeErrors<'source>,
     pub hir: Vec<Vec<InferredTypeHIRRoot<'source>>>,
-    interner: &'interner StringInterner,
+    source: &'interner Source,
 }
 
 impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
-    pub fn new(interner: &'interner StringInterner) -> Analyzer<'source, 'interner> {
+    pub fn new(source: &'interner Source) -> Analyzer<'source, 'interner> {
         Analyzer {
-            type_db: TypeInstanceManager::new(interner),
+            type_db: TypeInstanceManager::new(&source.interner),
             globals: NameRegistry::new(),
             type_errors: TypeErrors::new(),
             mir: vec![],
             hir: vec![],
             unchecked_mir: vec![],
-            interner,
+            source,
         }
     }
 
@@ -98,7 +101,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
     pub fn print_errors(&self) {
         println!(
             "{}",
-            TypeErrorPrinter::new(&self.type_errors, &self.type_db, &self.interner)
+            TypeErrorPrinter::new(&self.type_errors, &self.type_db, &self.source.interner)
         )
     }
 
@@ -110,7 +113,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
         self.generate_mir_and_typecheck(source, true);
     }
     pub fn generate_mir_and_typecheck(&mut self, source: &'source Source, do_typecheck: bool) {
-        for file in source.loaded_files.iter() {
+        for file in source.file_table.iter() {
             let ast_hir = ast_globals_to_hir(&file.ast, &source.interner);
             let inferred_globals_hir =
                 match name_registry::build_name_registry_and_resolve_signatures(
@@ -195,26 +198,11 @@ pub mod test_utils {
 
     macro_rules! tls_interner {
         ($interner:expr) => {
-            #[allow(unused_macros)] //This IS being used!
-            macro_rules! istr {
-                ($str:expr) => {
-                    $interner.with(|i| i.get($str))
-                };
+            fn istr(str: &'static str) -> InternedString {
+                $interner.with(|i| i.get(str))
             }
         };
     }
-
-    macro_rules! tls_interner_static {
-        ($interner:expr) => {
-            #[allow(unused_macros)] //This IS being used!
-            macro_rules! istr {
-                ($str:expr) => {
-                    $interner.get($str)
-                };
-            }
-        };
-    }
-
     pub(crate) use tls_interner;
 
     pub struct AnalysisWithoutTypecheckResult<'source, 'interner> {
@@ -237,7 +225,7 @@ pub mod test_utils {
     }
 
     pub fn do_analysis<'s>(source: &'s Source) -> Analyzer<'s, 's> {
-        let mut ctx = Analyzer::new(&source.interner);
+        let mut ctx = Analyzer::new(source);
         ctx.analyze(source);
         return ctx;
     }
@@ -245,7 +233,7 @@ pub mod test_utils {
     pub fn do_analysis_no_typecheck<'s>(
         source: &'s Source,
     ) -> AnalysisWithoutTypecheckResult<'s, 's> {
-        let mut ctx = Analyzer::new(&source.interner);
+        let mut ctx = Analyzer::new(&source);
         ctx.generate_mir(source);
         return AnalysisWithoutTypecheckResult {
             mir: ctx.unchecked_mir,
@@ -273,7 +261,7 @@ mod tests {
     use super::*;
 
     fn print_hir<'source>(hir: &[InferredTypeHIRRoot<'source>], analyzer: &Analyzer) -> String {
-        HIRPrinter::new(&analyzer.type_db, &analyzer.interner).print_hir(hir)
+        HIRPrinter::new(&analyzer.type_db, &analyzer.source.interner).print_hir(hir)
     }
 
     #[test]
@@ -582,7 +570,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         let err = &analyzed.type_errors.variable_not_found[0];
-        assert_eq!(err.variable_name, analyzed.interner.get("y"));
+        assert_eq!(err.variable_name, analyzed.source.interner.get("y"));
     }
 
     #[test]
@@ -597,7 +585,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         let err = &analyzed.type_errors.variable_not_found[0];
-        assert_eq!(err.variable_name, analyzed.interner.get("y"));
+        assert_eq!(err.variable_name, analyzed.source.interner.get("y"));
     }
 
     #[test]
@@ -821,7 +809,7 @@ def my_function():
 
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0].field_or_method,
-            analyzed.interner.get("sizee")
+            analyzed.source.interner.get("sizee")
         );
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
@@ -832,7 +820,7 @@ def my_function():
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
                 .on_element
-                .get_name(analyzed.interner),
+                .get_name(&analyzed.source.interner),
             "my_function"
         );
     }
@@ -852,7 +840,7 @@ def my_function():
 
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0].field_or_method,
-            analyzed.interner.get("reevert")
+            analyzed.source.interner.get("reevert")
         );
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
@@ -863,7 +851,7 @@ def my_function():
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
                 .on_element
-                .get_name(analyzed.interner),
+                .get_name(&analyzed.source.interner),
             "my_function"
         );
     }
@@ -883,14 +871,14 @@ def my_function():
 
         let printer = HIRTypeDisplayer::new(
             &analyzed.type_errors.type_not_found[0].type_name,
-            analyzed.interner,
+            &analyzed.source.interner,
         );
 
         assert_eq!(printer.to_string(), "i65");
         assert_eq!(
             analyzed.type_errors.type_not_found[0]
                 .on_element
-                .get_name(analyzed.interner),
+                .get_name(&analyzed.source.interner),
             "my_function"
         );
     }
@@ -910,7 +898,7 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0].field_or_method,
-            analyzed.interner.get("as_i32")
+            analyzed.source.interner.get("as_i32")
         );
     }
 
@@ -927,7 +915,7 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0].field_or_method,
-            analyzed.interner.get("as_i32")
+            analyzed.source.interner.get("as_i32")
         );
     }
 
@@ -957,7 +945,7 @@ def my_function():
         assert_eq!(
             analyzed.type_errors.unary_op_not_found[0]
                 .on_element
-                .get_name(analyzed.interner),
+                .get_name(&analyzed.source.interner),
             "my_function"
         );
     }
@@ -977,7 +965,7 @@ def my_function():
         assert_eq!(
             analyzed.type_errors.insufficient_array_type_info[0]
                 .on_element
-                .get_name(analyzed.interner),
+                .get_name(&analyzed.source.interner),
             "my_function"
         );
     }

@@ -10,7 +10,7 @@ pub struct TokenSpanIndex(pub usize);
 #[derive(Eq, PartialEq, Debug, Clone, Copy)]
 pub struct TokenData {
     pub token: Token,
-    pub loc: TokenSpanIndex,
+    pub span_index: TokenSpanIndex,
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
@@ -49,7 +49,7 @@ impl TokenTable {
         let cur_len = self.spans.len();
         self.spans.push(TokenSpan { file, start, end });
         self.tokens.push(TokenData {
-            loc: TokenSpanIndex(cur_len),
+            span_index: TokenSpanIndex(cur_len),
             token,
         });
     }
@@ -75,6 +75,28 @@ pub enum Operator {
     Less,
     LessEquals,
 }
+impl ToString for Operator {
+    fn to_string(&self) -> String {
+        match self {
+            Operator::Plus => "+".into(),
+            Operator::Minus => "-".into(),
+            Operator::Multiply => "*".into(),
+            Operator::Divide => "/".into(),
+            Operator::Equals => "==".into(),
+            Operator::NotEquals => "!=".into(),
+            Operator::Greater => ">".into(),
+            Operator::GreaterEquals => ">=".into(),
+            Operator::LessEquals => "<=".into(),
+            Operator::Less => "<".into(),
+            Operator::Mod => "%".into(),
+            Operator::And => "and".into(),
+            Operator::Or => "or".into(),
+            Operator::Not => "not".into(),
+            _ => "operator_str doesn't implement this operator".into(),
+        }
+    }
+}
+
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Token {
@@ -93,7 +115,6 @@ pub enum Token {
     StructDef,
     IfKeyword,
     ForKeyword,
-    RaiseKeyword,
     ReturnKeyword,
     InKeyword,
     WhileKeyword,
@@ -129,7 +150,6 @@ impl Token {
             Token::IfKeyword => "if keyword",
             Token::ForKeyword => "for keyword",
             Token::IntrinsicKeyword => "intrinsic keyword",
-            Token::RaiseKeyword => "raise keyword",
             Token::ReturnKeyword => "return keyword",
             Token::InKeyword => "in keyword",
             Token::WhileKeyword => "while keyword",
@@ -174,7 +194,6 @@ impl PartialToken {
                 "for" => Token::ForKeyword,
                 "def" => Token::DefKeyword,
                 "intrinsic" => Token::IntrinsicKeyword,
-                "raise" => Token::RaiseKeyword,
                 "return" => Token::ReturnKeyword,
                 "in" => Token::InKeyword,
                 "while" => Token::WhileKeyword,
@@ -242,9 +261,9 @@ impl<'interner> Tokenizer<'interner> {
         let mut line_indices: Vec<LineIndex> = vec![];
 
         let mut line = LineIndex {
-            start: 0,
-            end: 0,
-            line: 0,
+            start: 1,
+            end: 1,
+            line: 1, //lines start at 1
         };
         let mut last_line_needs_push = true;
         for c in chars.iter() {
@@ -287,7 +306,7 @@ impl<'interner> Tokenizer<'interner> {
             if line.end >= index {
                 return SourceLocation {
                     line: line.line,
-                    column: (index - line.start) as u32,
+                    column: (index - (line.start - 1)) as u32,
                 };
             }
         }
@@ -395,6 +414,8 @@ impl<'interner> Tokenizer<'interner> {
                     self.eater_buf.push('"');
                 } else if cur == '\\' {
                     self.eater_buf.push('\\');
+                } else if cur == '0' {
+                    self.eater_buf.push('\0');
                 } else {
                     panic!("cannot escape char {}", cur);
                 }
@@ -798,7 +819,7 @@ mod tests {
     #[test]
     fn tokenizer_identifier() -> Result<(), String> {
         let result = tokenize("some_identifier")?;
-        assert_eq!(result, [Token::Identifier(istr!("some_identifier"))]);
+        assert_eq!(result, [Token::Identifier(istr("some_identifier"))]);
         Ok(())
     }
 
@@ -808,7 +829,7 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("some_identifier")),
+                Token::Identifier(istr("some_identifier")),
                 Token::OpenParen,
                 Token::LiteralInteger(1),
                 Token::CloseParen
@@ -823,7 +844,7 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("x").into()),
+                Token::Identifier(istr("x").into()),
                 Token::Assign,
                 Token::LiteralInteger(1)
             ]
@@ -858,28 +879,28 @@ mod tests {
     #[test]
     fn string_literal() -> Result<(), String> {
         let result = tokenize("'abc'")?;
-        assert_eq!(result, [Token::LiteralString(istr!("abc"))]);
+        assert_eq!(result, [Token::LiteralString(istr("abc"))]);
         Ok(())
     }
 
     #[test]
     fn string_literal_doublequotes() -> Result<(), String> {
         let result = tokenize("\"abc\"")?;
-        assert_eq!(result, [Token::LiteralString(istr!("abc"))]);
+        assert_eq!(result, [Token::LiteralString(istr("abc"))]);
         Ok(())
     }
 
     #[test]
     fn string_literal_escapedouble() -> Result<(), String> {
         let result = tokenize("\"a\\\"b\\\"c\"")?;
-        assert_eq!(result, [Token::LiteralString(istr!("a\"b\"c"))]);
+        assert_eq!(result, [Token::LiteralString(istr("a\"b\"c"))]);
         Ok(())
     }
 
     #[test]
     fn string_literal_escapesingle() -> Result<(), String> {
         let result = tokenize("\'a\\'b\\'c\'")?;
-        assert_eq!(result, [Token::LiteralString(istr!("a'b'c"))]);
+        assert_eq!(result, [Token::LiteralString(istr("a'b'c"))]);
         Ok(())
     }
 
@@ -893,15 +914,15 @@ mod tests {
             result,
             [
                 Token::IfKeyword,
-                Token::Identifier(istr!("x").into()),
+                Token::Identifier(istr("x").into()),
                 Token::Operator(Operator::Equals),
                 Token::LiteralInteger(0),
                 Token::Colon,
                 Token::NewLine,
                 Token::Indentation,
-                Token::Identifier(istr!("x").into()),
+                Token::Identifier(istr("x").into()),
                 Token::Assign,
-                Token::Identifier(istr!("x").into()),
+                Token::Identifier(istr("x").into()),
                 Token::Operator(Operator::Plus),
                 Token::LiteralInteger(1)
             ]
@@ -915,9 +936,9 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("obj").into()),
+                Token::Identifier(istr("obj").into()),
                 Token::MemberAccessor,
-                Token::Identifier(istr!("method").into()),
+                Token::Identifier(istr("method").into()),
             ]
         );
         Ok(())
@@ -929,9 +950,9 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("obj").into()),
+                Token::Identifier(istr("obj").into()),
                 Token::MemberAccessor,
-                Token::Identifier(istr!("method").into()),
+                Token::Identifier(istr("method").into()),
             ]
         );
         Ok(())
@@ -944,9 +965,9 @@ mod tests {
             result,
             [
                 Token::ForKeyword,
-                Token::Identifier(istr!("item").into()),
+                Token::Identifier(istr("item").into()),
                 Token::InKeyword,
-                Token::Identifier(istr!("ls").into()),
+                Token::Identifier(istr("ls").into()),
                 Token::Colon,
             ]
         );
@@ -960,11 +981,11 @@ mod tests {
             result,
             [
                 Token::DefKeyword,
-                Token::Identifier(istr!("function").into()),
+                Token::Identifier(istr("function").into()),
                 Token::OpenParen,
-                Token::Identifier(istr!("x").into()),
+                Token::Identifier(istr("x").into()),
                 Token::Colon,
-                Token::Identifier(istr!("i32").into()),
+                Token::Identifier(istr("i32").into()),
                 Token::CloseParen,
                 Token::Colon,
             ]
@@ -979,14 +1000,14 @@ mod tests {
             result,
             [
                 Token::DefKeyword,
-                Token::Identifier(istr!("function").into()),
+                Token::Identifier(istr("function").into()),
                 Token::OpenParen,
-                Token::Identifier(istr!("x").into()),
+                Token::Identifier(istr("x").into()),
                 Token::Colon,
-                Token::Identifier(istr!("i32").into()),
+                Token::Identifier(istr("i32").into()),
                 Token::CloseParen,
                 Token::ArrowRight,
-                Token::Identifier(istr!("i32").into()),
+                Token::Identifier(istr("i32").into()),
                 Token::Colon,
             ]
         );
@@ -1001,25 +1022,12 @@ mod tests {
     }
 
     #[test]
-    fn raise_exception_expr() -> Result<(), String> {
-        let result = tokenize("raise SomeError")?;
-        assert_eq!(
-            result,
-            [
-                Token::RaiseKeyword,
-                Token::Identifier(istr!("SomeError").into())
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn array_access() -> Result<(), String> {
         let result = tokenize("array[0]")?;
         assert_eq!(
             result,
             [
-                Token::Identifier(istr!("array").into()),
+                Token::Identifier(istr("array").into()),
                 Token::OpenArrayBracket,
                 Token::LiteralInteger(0),
                 Token::CloseArrayBracket
@@ -1035,7 +1043,7 @@ mod tests {
             result,
             [
                 Token::StructDef,
-                Token::Identifier(istr!("Test").into()),
+                Token::Identifier(istr("Test").into()),
                 Token::Colon
             ]
         );

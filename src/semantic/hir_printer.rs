@@ -9,20 +9,7 @@ use super::hir::HIRRoot;
 use super::type_name_printer::TypeNamePrinter;
 
 pub fn operator_str(op: Operator) -> String {
-    match op {
-        Operator::Plus => "+".into(),
-        Operator::Minus => "-".into(),
-        Operator::Multiply => "*".into(),
-        Operator::Divide => "/".into(),
-        Operator::Equals => "==".into(),
-        Operator::NotEquals => "!=".into(),
-        Operator::Greater => ">".into(),
-        Operator::GreaterEquals => ">=".into(),
-        Operator::LessEquals => "<=".into(),
-        Operator::Less => "<".into(),
-        Operator::Mod => "%".into(),
-        _ => "operator_str doesn't implement this operator".into(),
-    }
+    op.to_string()
 }
 
 pub struct HIRExprPrinter<'interner> {
