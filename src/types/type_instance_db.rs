@@ -232,7 +232,20 @@ impl<'interner> TypeInstanceManager<'interner> {
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
+    /*
+    
+    struct ptr<TPtr>:
+        intrinsic
 
+    struct array<TItem>:
+        data: ptr<TItem>
+        length: u32
+    
+    impl array<TItem>:
+        def __index__(i: u32): TItem
+        def __index_ptr__(i: u32): ptr<TItem>
+    
+    */
     pub fn construct_usage_generic(
         &mut self,
         usage: &TypeUsage,
@@ -245,10 +258,12 @@ impl<'interner> TypeInstanceManager<'interner> {
                 .ok_or_else(|| TypeConstructionError::TypeNotFound { name: param.0 })
                 .map(|op| *op),
             TypeUsage::Parameterized(constructor_id, params) => {
+                println!("Constructing type: {:?} with params: {:?}", constructor_id, params);
                 let mut constructed = vec![];
 
                 for item in params.iter() {
-                    let type_id = self.construct_usage_generic(item, &HashMap::new())?;
+                    println!("Constructing param: {:?}", item);
+                    let type_id = self.construct_usage_generic(item, type_args)?;
                     constructed.push(type_id);
                 }
                 self.construct_type(*constructor_id, &constructed)
@@ -262,7 +277,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         positional_args: &[TypeInstanceId],
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         let c = self.constructors.find(constructor_id);
-
+        
         for existing_type in &self.types {
             if existing_type.base == constructor_id && existing_type.type_args == positional_args {
                 return Ok(existing_type.id);

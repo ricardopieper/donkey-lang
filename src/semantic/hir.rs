@@ -4,6 +4,7 @@ use std::fmt::Write;
 use crate::ast::lexer::Operator;
 use crate::ast::parser::ASTIfStatement;
 use crate::ast::parser::SpanAST;
+use crate::ast::parser::SpannedOperator;
 use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
@@ -25,7 +26,7 @@ pub enum LiteralHIRExpr {
 
 /**
  * The HIR is a lowered form of the original AST, so it may lose some data. For instance, an indexing access
- * is just a call to __index__. If we don't add metadata to the tree, the compiler will report an incorrect call
+ * is just a call to __index__, or __index_ptr__ in assignments. If we don't add metadata to the tree, the compiler will report an incorrect call
  * to __index__ instead of an incorrect indexing operation, thus the error message is entirely unusable.
  *
  * Therefore, we will add some metadata to the HIR nodes referring to the raw AST and expr nodes. They will carry the context in which
@@ -90,7 +91,7 @@ pub enum HIRExpr<'source, TExprType, TTypechecked = NotChecked> {
     ),
     BinaryOperation(
         Box<HIRExpr<'source, TExprType, TTypechecked>>,
-        Operator,
+        SpannedOperator,
         Box<HIRExpr<'source, TExprType, TTypechecked>>,
         TExprType,
         HIRExprMetadata<'source>,
@@ -111,7 +112,7 @@ pub enum HIRExpr<'source, TExprType, TTypechecked = NotChecked> {
         HIRExprMetadata<'source>,
     ),
     UnaryExpression(
-        Operator,
+        SpannedOperator,
         Box<HIRExpr<'source, TExprType, TTypechecked>>,
         TExprType,
         HIRExprMetadata<'source>,
@@ -238,7 +239,7 @@ pub enum HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIR<'source, TVariableDeclType, TExprType> {
     Assign {
-        path: Vec<InternedString>,
+        path: TExprType,
         expression: TExprType,
         meta_ast: HIRAstMetadata<'source>,
         meta_expr: HIRExprMetadata<'source>,
@@ -271,7 +272,7 @@ pub enum HIR<'source, TVariableDeclType, TExprType> {
         HIRAstMetadata<'source>,
     ),
     Return(TExprType, HIRAstMetadata<'source>),
-    EmptyReturn,
+    EmptyReturn(HIRAstMetadata<'source>),
 }
 
 struct IfTreeNode<'source, TDeclType, TExprType> {
@@ -280,9 +281,17 @@ struct IfTreeNode<'source, TDeclType, TExprType> {
     body_meta: &'source AST,
 }
 
-fn expr_to_hir_expr<'source, 'interner>(
+fn convert_expr_to_hir<'source, 'interner>(
+    expr: &'source Expr,
+    interner: &'interner StringInterner
+) -> HIRExpr<'source, (), NotChecked> {
+    expr_to_hir(expr, interner, false)
+}
+
+fn expr_to_hir<'source, 'interner>(
     expr: &'source Expr,
     interner: &'interner StringInterner,
+    is_in_assignment_lhs: bool,
 ) -> HIRExpr<'source, (), NotChecked> {
     match expr {
         Expr::IntegerValue(i, _) => HIRExpr::Literal(LiteralHIRExpr::Integer(*i), (), expr),
@@ -293,18 +302,18 @@ fn expr_to_hir_expr<'source, 'interner>(
         Expr::Variable(name) => HIRExpr::Variable(name.0, (), expr),
         Expr::FunctionCall(fun_expr, args, _) => match &fun_expr.expr.expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
-                expr_to_hir_expr(var, interner).into(),
+                expr_to_hir(var, interner, false).into(),
                 args.iter()
-                    .map(|x| expr_to_hir_expr(&x.expr, interner))
+                    .map(|x| expr_to_hir(&x.expr, interner, false))
                     .collect(),
                 (),
                 expr,
             ),
             Expr::MemberAccess(obj, var_name) => HIRExpr::MethodCall(
-                expr_to_hir_expr(&obj.expr.expr, interner).into(),
+                expr_to_hir(&obj.expr.expr, interner, false).into(),
                 var_name.0,
                 args.iter()
-                    .map(|arg| expr_to_hir_expr(&arg.expr, interner))
+                    .map(|arg| expr_to_hir(&arg.expr, interner, false))
                     .collect(),
                 (),
                 expr,
@@ -312,33 +321,33 @@ fn expr_to_hir_expr<'source, 'interner>(
             _ => panic!("Cannot lower function call to HIR: not variable or member access"),
         },
         Expr::IndexAccess(object, index, _) => {
-            let idx = interner.get("__index__");
+            let idx = interner.get( if is_in_assignment_lhs { "__index_ptr__" } else { "__index__"});
             HIRExpr::MethodCall(
-                Box::new(expr_to_hir_expr(&object.expr.expr, interner)),
+                Box::new(expr_to_hir(&object.expr.expr, interner, false)),
                 idx,
-                vec![expr_to_hir_expr(&index.expr.expr, interner)],
+                vec![expr_to_hir(&index.expr.expr, interner, false)],
                 (),
                 expr,
             )
         }
         Expr::BinaryOperation(lhs, op, rhs) => {
-            let lhs = expr_to_hir_expr(&lhs.expr.expr, interner);
-            let rhs = expr_to_hir_expr(&rhs.expr.expr, interner);
-            HIRExpr::BinaryOperation(lhs.into(), op.0, rhs.into(), (), expr)
+            let lhs = expr_to_hir(&lhs.expr.expr, interner, false);
+            let rhs = expr_to_hir(&rhs.expr.expr, interner, false);
+            HIRExpr::BinaryOperation(lhs.into(), *op, rhs.into(), (), expr)
         }
         Expr::Parenthesized(_) => panic!("parenthesized not expected"),
         Expr::UnaryExpression(op, rhs) => {
-            let rhs = expr_to_hir_expr(&rhs.expr.expr, interner);
-            HIRExpr::UnaryExpression(op.0, rhs.into(), (), expr)
+            let rhs = expr_to_hir(&rhs.expr.expr, interner, false);
+            HIRExpr::UnaryExpression(*op, rhs.into(), (), expr)
         }
         Expr::MemberAccess(object, member) => {
-            let object = expr_to_hir_expr(&object.expr.expr, interner);
+            let object = expr_to_hir(&object.expr.expr, interner, false);
             HIRExpr::MemberAccess(object.into(), member.0, (), expr)
         }
         Expr::Array(items, _) => {
             let items = items
                 .iter()
-                .map(|item| expr_to_hir_expr(&item.expr, interner))
+                .map(|item| expr_to_hir(&item.expr, interner, false))
                 .collect();
             HIRExpr::Array(items, (), expr)
         }
@@ -360,7 +369,7 @@ fn ast_to_hir<'source, 'interner>(
             //maybe a way to do it is by calling reduce_expr_to_hir_declarations, and the function
             //itself returns a HIRExpr. It will also add to the HIR any declarations needed
             //for the decomposition.
-            let result_expr = expr_to_hir_expr(&expression.expr, interner);
+            let result_expr = convert_expr_to_hir(&expression.expr, interner);
 
             let typedef: HIRType = (&var.name_type).into();
             let decl_hir = HIR::Declare {
@@ -374,10 +383,11 @@ fn ast_to_hir<'source, 'interner>(
             accum.push(decl_hir);
         }
         AST::Assign { path, expression } => {
-            let result_expr = expr_to_hir_expr(&expression.expr, interner);
+            let path_expr = convert_expr_to_hir(&path.expr, interner);
+            let result_expr = convert_expr_to_hir(&expression.expr, interner);
 
             let decl_hir = HIR::Assign {
-                path: path.0.iter().map(|x| x.0).collect::<Vec<_>>(),
+                path: path_expr,
                 expression: result_expr,
                 meta_ast: ast,
                 meta_expr: &expression.expr,
@@ -387,10 +397,10 @@ fn ast_to_hir<'source, 'interner>(
         }
         AST::Return(_, expr) => match expr {
             None => {
-                accum.push(HIR::EmptyReturn);
+                accum.push(HIR::EmptyReturn(ast));
             }
             Some(e) => {
-                let result_expr = expr_to_hir_expr(&e.expr, interner);
+                let result_expr = convert_expr_to_hir(&e.expr, interner);
                 accum.push(HIR::Return(result_expr, ast));
             }
         },
@@ -399,7 +409,7 @@ fn ast_to_hir<'source, 'interner>(
                 panic!("Can only lower function call standalone expr: {:#?}", expr);
             };
 
-            let result_expr = expr_to_hir_expr(&expr.expr, interner);
+            let result_expr = convert_expr_to_hir(&expr.expr, interner);
             let HIRExpr::FunctionCall(function, args, ..) = result_expr else {
                 panic!("Lowering of function call returned invalid result: {:?}", result_expr);
             };
@@ -494,7 +504,7 @@ fn ast_if_to_hir<'source, 'interner>(
     ast: &'source AST,
     interner: &'interner StringInterner,
 ) {
-    let true_branch_result_expr = expr_to_hir_expr(&true_branch.expression.expr, interner);
+    let true_branch_result_expr = convert_expr_to_hir(&true_branch.expression.expr, interner);
 
     let mut true_body_hir = vec![];
     for node in &true_branch.statements {
@@ -548,7 +558,7 @@ fn ast_if_to_hir<'source, 'interner>(
         nodes.push(root_node);
 
         for item in elifs {
-            let elif_true_branch_result_expr = expr_to_hir_expr(&item.expression.expr, interner);
+            let elif_true_branch_result_expr = convert_expr_to_hir(&item.expression.expr, interner);
 
             let mut if_node = IfTreeNode {
                 condition: elif_true_branch_result_expr,
@@ -605,7 +615,7 @@ fn ast_while_to_hir<'source, 'interner>(
     ast: &'source AST,
     interner: &'interner StringInterner,
 ) {
-    let expr = expr_to_hir_expr(expression, interner);
+    let expr = convert_expr_to_hir(expression, interner);
 
     let mut true_body_hir = vec![];
     for node in body {
@@ -685,13 +695,19 @@ mod tests {
     //Parses a single expression
     fn parse<'source>(source: &'static str) -> AST {
         let tokens = INTERNER.with(|x| crate::ast::lexer::tokenize(FileTableIndex(0), source, x));
-        let (ast, _) = parse_ast(&tokens.unwrap(), &[
+        let tokens_lexed = tokens.unwrap();
+
+        let file_table = &[
             FileTableEntry{
                 ast: AST::Break(AstSpan{ start: TokenSpanIndex(0), end: TokenSpanIndex(0) }),
                 contents: source,
-                file_name: "hir_test".to_string()
+                path: "hir_test".to_string(),
+                index: FileTableIndex(0),
+                token_table: tokens_lexed
             }
-        ]);
+        ];
+
+        let (ast, _) = parse_ast(&file_table[0].token_table, file_table);
         return AST::Root(ast);
     }
 

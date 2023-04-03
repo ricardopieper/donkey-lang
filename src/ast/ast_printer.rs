@@ -73,17 +73,17 @@ fn print_ast_internal(ast: &AST, interner: &StringInterner, indent: &str) -> Str
     let indent_block = format!("{indent}    ");
 
     match ast {
-        AST::StandaloneExpr(e) => format!("{indent}{e}\n", e = print_expr(&e.expr, interner)),
+        AST::StandaloneExpr(e) => format!("{indent}{e}", e = print_expr(&e.expr, interner)),
         AST::Assign { path, expression } => {
-            let path = path.0.iter().map(|x| interner.borrow(x.0)).collect::<Vec<_>>().join(".");
+            let lhs_expr = print_expr(&path.expr, interner);
             let expr = print_expr(&expression.expr, interner);
-            format!("{indent}{path} = {expr}\n")
+            format!("{indent}{lhs_expr} = {expr}")
         }
         AST::Declare { var, expression } => {
             let var_name = interner.borrow(var.name.0);
             let type_name = var.name_type.to_string(interner);
             let expr = print_expr(&expression.expr, interner);
-            format!("{var_name}: {type_name} = {expr}\n")
+            format!("{var_name}: {type_name} = {expr}")
         },
         AST::IfStatement {
             true_branch,
@@ -95,18 +95,18 @@ fn print_ast_internal(ast: &AST, interner: &StringInterner, indent: &str) -> Str
             let if_expr = print_expr(&true_branch.expression.expr, interner);
             buf.push_str(&format!("{indent}if {if_expr}:\n"));
            
-            let body = true_branch.statements.iter().map(|x| print_ast_internal(&x.ast, interner, &indent_block)).collect::<Vec<_>>().join("");
+            let body = true_branch.statements.iter().map(|x| print_ast_internal(&x.ast, interner, &indent_block)).collect::<Vec<_>>().join("\n");
             buf.push_str(&body);
 
             for ASTIfStatement {expression, statements} in elifs.iter() {
                 let expr = print_expr(&expression.expr, interner);
                 buf.push_str(&format!("{indent}elif {expr}:\n"));
-                let body = statements.iter().map(|x| print_ast_internal(&x.ast, interner, &indent_block)).collect::<Vec<_>>().join("");
+                let body = statements.iter().map(|x| print_ast_internal(&x.ast, interner, &indent_block)).collect::<Vec<_>>().join("\n");
                 buf.push_str(&body);
             }
             if let Some(final_else_statements) = final_else {
-                buf.push_str(&format!("{indent}else:\n"));
-                let body = final_else_statements.iter().map(|x| print_ast_internal(&x.ast, interner, &indent_block)).collect::<Vec<_>>().join("");
+                buf.push_str(&format!("{indent}\nelse:\n"));
+                let body = final_else_statements.iter().map(|x| print_ast_internal(&x.ast, interner, &indent_block)).collect::<Vec<_>>().join("\n");
                 buf.push_str(&body);
             }
 
@@ -193,7 +193,7 @@ fn print_ast_internal(ast: &AST, interner: &StringInterner, indent: &str) -> Str
         
         },
         AST::Break(_) => format!("{indent}break"),
-        AST::Intrinsic(_) =>  format!("{indent}break"),
+        AST::Intrinsic(_) =>  format!("{indent}intrinsic"),
         AST::Return(_, ret_expr) => {
             match ret_expr {
                 Some(x) => {
@@ -210,5 +210,5 @@ fn print_ast_internal(ast: &AST, interner: &StringInterner, indent: &str) -> Str
 }
 
 pub fn print_ast(ast: &[SpanAST], interner: &StringInterner) -> String {
-    return ast.iter().map(|x| print_ast_internal(&x.ast, interner, "")).collect::<Vec<_>>().join("");
+    return ast.iter().map(|x| print_ast_internal(&x.ast, interner, "")).collect::<Vec<_>>().join("\n");
 }

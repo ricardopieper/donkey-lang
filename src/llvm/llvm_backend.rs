@@ -293,16 +293,12 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     let basic_block = llvm_basic_blocks[i];
                     self.builder.position_at_end(basic_block);
                     for node in block.nodes.iter() {
-                        //@TODO make basic block
-                        //@TODO
                         match node {
                             MIRBlockNode::Assign {
-                                path, expression, ..
+                                path: HIRExpr::Variable(var, ..), expression, ..
                             } => {
-                                if path.len() > 1 {
-                                    panic!("Assignment to path with len > 1")
-                                }
-                                let ptr = *symbol_table.get(&(path[0], block.scope)).unwrap();
+                               
+                                let ptr = *symbol_table.get(&(*var, block.scope)).unwrap();
 
                                 let expr_compiled = self
                                     .compile_expr_load(block.scope, &symbol_table, expression)
@@ -310,6 +306,11 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                                     .get_raw();
 
                                 self.builder.build_store(ptr, expr_compiled);
+                            }
+                            MIRBlockNode::Assign {
+                                ..
+                            } => {
+                                todo!("Assign to arbitrary expressions in left side in llvm backend")
                             }
                             MIRBlockNode::FunctionCall { function, args, .. } => {
                                 //TODO deduplicate this code
@@ -358,7 +359,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                                 .get_raw();
                             self.builder.build_return(Some(&expr_compiled));
                         }
-                        MIRBlockFinal::EmptyReturn => {
+                        MIRBlockFinal::EmptyReturn(..) => {
                             self.builder.build_return(None);
                         }
                     }
@@ -504,7 +505,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     };
                 }
 
-                let val = match *op {
+                let val = match op.0 {
                     Operator::Plus => make_op!(add),
                     Operator::Minus => make_op!(sub),
                     Operator::Multiply => make_op!(mul),
@@ -873,7 +874,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     .compile_expr_load(current_scope, symbol_table, expr)
                     .load(self.builder)
                     .get_raw();
-                let expr = match op {
+                let expr = match op.0 {
                     Operator::Plus => compiled,
                     Operator::Minus => {
                         if lhs_type.is_integer(self.type_db) || lhs_type == types.bool {

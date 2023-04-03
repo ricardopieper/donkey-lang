@@ -312,10 +312,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
 
     #[allow(clippy::similar_names)]
     fn init_builtin(&mut self) {
-
-        let istr = |s| {
-            self.interner.get(s)
-        };
+        let istr = |s| self.interner.get(s);
 
         let void_type = self.add(
             TypeKind::Primitive {
@@ -401,6 +398,19 @@ impl<'interner> TypeConstructorDatabase<'interner> {
                 return_type: TypeUsage::Generic(GenericParameter(istr("TItem"))),
             },
         );
+        
+        self.add_method(
+            arr_type,
+            TypeConstructorFunctionDeclaration {
+                name: istr("__index_ptr__"),
+                args: vec![TypeUsage::Given(u32_type)],
+                return_type: TypeUsage::Parameterized(
+                    ptr_type,
+                    vec![TypeUsage::Generic(GenericParameter(istr("TItem")))],
+                ),
+            },
+        );
+        
 
         //u32_type
         self.add_simple_field(arr_type, istr("length"), u32_type);

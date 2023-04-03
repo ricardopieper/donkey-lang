@@ -55,7 +55,7 @@ a scope and a block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockNode<'source, TTypecheckState> {
     Assign {
-        path: Vec<InternedString>,
+        path: HIRExpr<'source, TypeInstanceId, TTypecheckState>,
         expression: HIRExpr<'source, TypeInstanceId, TTypecheckState>,
         meta_ast: &'source AST,
         meta_expr: &'source Expr,
@@ -109,7 +109,7 @@ pub enum MIRBlockFinal<'source, TTypecheckState> {
         HIRExpr<'source, TypeInstanceId, TTypecheckState>,
         HIRAstMetadata<'source>,
     ),
-    EmptyReturn,
+    EmptyReturn(HIRAstMetadata<'source>),
 }
 
 /*MIRBlock is the definition of an executable chunk of code.
@@ -230,8 +230,8 @@ impl<'source> MIRFunctionEmitter<'source> {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, meta_ast));
     }
 
-    fn finish_with_empty_return(&mut self) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::EmptyReturn);
+    fn finish_with_empty_return(&mut self, meta_ast: HIRAstMetadata<'source>) {
+        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::EmptyReturn(meta_ast));
     }
 
     fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<'source, NotChecked>>) {
@@ -320,7 +320,7 @@ fn process_body<'source>(
                 emitter.set_current_block(new_block);
                 //and *finally* assign the variable
                 emitter.emit(MIRBlockNode::Assign {
-                    path: vec![var],
+                    path: HIRExpr::Variable(var, expression.get_type(), meta_expr),
                     expression,
                     meta_ast,
                     meta_expr,
@@ -504,8 +504,8 @@ fn process_body<'source>(
             HIR::Return(expr, meta_ast) => {
                 emitter.finish_with_return(expr, meta_ast);
             }
-            HIR::EmptyReturn => {
-                emitter.finish_with_empty_return();
+            HIR::EmptyReturn(meta_ast) => {
+                emitter.finish_with_empty_return(meta_ast);
             }
         }
     }
@@ -531,6 +531,7 @@ pub fn process_hir_funcdecl<'source>(
     body: Vec<InferredTypeHIR<'source>>,
     return_type: TypeInstanceId,
     is_intrinsic: bool,
+    root: HIRAstMetadata<'source>
 ) -> MIRTopLevelNode<'source, NotChecked> {
     if is_intrinsic {
         return MIRTopLevelNode::IntrinsicFunction {
@@ -564,7 +565,7 @@ pub fn process_hir_funcdecl<'source>(
         let block = &emitter.blocks[block_id];
         if block.finish.is_none() {
             emitter.set_current_block(BlockId(block.index));
-            emitter.finish_with_empty_return();
+            emitter.finish_with_empty_return(root);
         }
     }
 
@@ -595,7 +596,7 @@ pub fn hir_to_mir<'source>(
                 parameters,
                 body,
                 return_type,
-                meta: _,
+                meta,
                 is_intrinsic,
             } => {
                 let fdecl = process_hir_funcdecl(
@@ -604,6 +605,7 @@ pub fn hir_to_mir<'source>(
                     body,
                     return_type,
                     is_intrinsic,
+                    meta
                 );
                 top_levels.push(fdecl);
             }

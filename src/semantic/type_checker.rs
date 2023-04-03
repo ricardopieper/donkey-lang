@@ -1,16 +1,17 @@
 use std::collections::HashSet;
 
 use super::compiler_errors::CompilerError;
+use super::context::FileTableIndex;
 use super::hir::{Checked, HIRAstMetadata, HIRExpr, HIRExprMetadata, LiteralHIRExpr, NotChecked};
 use super::hir_printer::HIRExprPrinter;
 use super::hir_type_resolution::RootElementType;
 use crate::ast::lexer::Operator;
-use crate::ast::parser::Expr;
+use crate::ast::parser::{Expr, SpannedOperator};
 use crate::interner::{InternedString, StringInterner};
 use crate::types::type_errors::{
     ArrayExpressionsNotAllTheSameType, AssignContext, FunctionCallArgumentCountMismatch,
     FunctionCallContext, ReturnTypeContext, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
-    UnexpectedTypeInferenceMismatch,
+    UnexpectedTypeInferenceMismatch, TypeErrorAtLocation,
 };
 use crate::types::type_errors::{
     BinaryOperatorNotFound, FieldOrMethodNotFound, IfStatementNotBoolean, InvalidCast,
@@ -48,6 +49,7 @@ pub struct TypeCheckContext<'compiler_context, 'source, 'interner> {
     errors: &'compiler_context mut TypeErrors<'source>,
     interner: &'interner StringInterner,
     on_element: RootElementType,
+    on_file: FileTableIndex,
 }
 
 impl<'compiler_context, 'source, 'interner>
@@ -108,7 +110,7 @@ impl<'compiler_context, 'source, 'interner>
         let interned = self.interner.get(&printer.print(&function_expr));
         let checked_func = self.typecheck(function_expr)?;
         let checked_args =
-            self.function_call_check(function_type_id, FunctionName::Function(interned), args)?;
+            self.function_call_check(function_type_id, FunctionName::Function(interned), args, meta)?;
         Ok(HIRExpr::FunctionCall(
             checked_func.into(),
             checked_args,
@@ -155,9 +157,8 @@ impl<'compiler_context, 'source, 'interner>
         } else {
             self.errors.array_expressions_not_all_the_same_type.push(
                 ArrayExpressionsNotAllTheSameType {
-                    on_element: self.on_element,
                     expected_type: all_array_exprs_checked[0].get_type(),
-                },
+                }.at_spanned(self.on_element, self.on_file, meta),
             );
             Err(CompilerError::TypeCheckError)
         }
@@ -182,10 +183,9 @@ impl<'compiler_context, 'source, 'interner>
                 self.errors
                     .field_or_method_not_found
                     .push(FieldOrMethodNotFound {
-                        on_element: self.on_element,
                         object_type: obj_type,
                         field_or_method: member,
-                    });
+                    }.at_spanned(self.on_element, self.on_file, meta));
                 return Err(CompilerError::TypeCheckError);
             }
         };
@@ -194,11 +194,10 @@ impl<'compiler_context, 'source, 'interner>
             self.errors
                 .type_inference_check_mismatch
                 .push(UnexpectedTypeInferenceMismatch {
-                    on_element: self.on_element,
                     inferred: inferred_type,
                     checked: checked_obj.get_type(),
                     expr: checked_obj,
-                });
+                }.at_spanned(self.on_element, self.on_file, meta));
             return Err(CompilerError::TypeCheckError);
         }
         Ok(HIRExpr::MemberAccess(
@@ -212,7 +211,7 @@ impl<'compiler_context, 'source, 'interner>
     fn check_expr_unary(
         &mut self,
         rhs: TypecheckPendingExpression<'source>,
-        op: Operator,
+        op: SpannedOperator,
         inferred_type: TypeInstanceId,
         meta: HIRExprMetadata<'source>,
     ) -> Result<TypecheckedExpression<'source>, CompilerError> {
@@ -222,7 +221,7 @@ impl<'compiler_context, 'source, 'interner>
             .rhs_binary_ops
             .iter()
             .find(|(rhs_op, rhs_type, result_type)| {
-                *rhs_op == op
+                *rhs_op == op.0
                     && *rhs_type == checked_rhs.get_type()
                     && *result_type == inferred_type
             });
@@ -235,10 +234,9 @@ impl<'compiler_context, 'source, 'interner>
             ))
         } else {
             self.errors.unary_op_not_found.push(UnaryOperatorNotFound {
-                on_element: self.on_element,
                 rhs: checked_rhs.get_type(),
-                operator: op,
-            });
+                operator: op.0,
+            }.at_spanned(self.on_element, self.on_file, &op.1));
             Err(CompilerError::TypeCheckError)
         }
     }
@@ -247,7 +245,7 @@ impl<'compiler_context, 'source, 'interner>
         &mut self,
         lhs: TypecheckPendingExpression<'source>,
         rhs: TypecheckPendingExpression<'source>,
-        op: Operator,
+        op: SpannedOperator,
         expr_type: TypeInstanceId,
         meta: HIRExprMetadata<'source>,
     ) -> Result<TypecheckedExpression<'source>, CompilerError> {
@@ -258,7 +256,7 @@ impl<'compiler_context, 'source, 'interner>
             .rhs_binary_ops
             .iter()
             .find(|(rhs_op, rhs_type, result_type)| {
-                *rhs_op == op && *rhs_type == checked_rhs.get_type() && *result_type == expr_type
+                *rhs_op == op.0 && *rhs_type == checked_rhs.get_type() && *result_type == expr_type
             })
         {
             Ok(HIRExpr::BinaryOperation(
@@ -272,11 +270,10 @@ impl<'compiler_context, 'source, 'interner>
             self.errors
                 .binary_op_not_found
                 .push(BinaryOperatorNotFound {
-                    on_element: self.on_element,
                     lhs: checked_lhs.get_type(),
                     rhs: checked_rhs.get_type(),
-                    operator: op,
-                });
+                    operator: op.0,
+                }.at_spanned(self.on_element, self.on_file, &op.1));
             Err(CompilerError::TypeCheckError)
         }
     }
@@ -294,10 +291,9 @@ impl<'compiler_context, 'source, 'interner>
             Ok(HIRExpr::Cast(checked.into(), cast_to, meta))
         } else {
             self.errors.invalid_casts.push(InvalidCast {
-                on_element: self.on_element,
                 expr: checked,
                 cast_to,
-            });
+            }.at_spanned(self.on_element, self.on_file, meta));
             Err(CompilerError::TypeCheckError)
         }
     }
@@ -307,7 +303,7 @@ impl<'compiler_context, 'source, 'interner>
         literal: LiteralHIRExpr,
         type_id: TypeInstanceId,
         common_types: &CommonTypeInstances,
-        expr: HIRExprMetadata<'source>,
+        meta: HIRExprMetadata<'source>,
     ) -> Result<TypecheckedExpression<'source>, CompilerError> {
         let is_properly_typed = match literal {
             LiteralHIRExpr::Integer(i) => {
@@ -321,19 +317,17 @@ impl<'compiler_context, 'source, 'interner>
                     i >= i128::from(u64::MIN) && i <= i128::from(u64::MAX)
                 } else {
                     self.errors.unexpected_types.push(UnexpectedTypeFound {
-                        on_element: self.on_element,
                         type_def: type_id,
-                    });
+                    }.at_spanned(self.on_element, self.on_file, meta));
                     return Err(CompilerError::TypeCheckError);
                 };
                 if is_within_bounds {
                     true
                 } else {
                     self.errors.out_of_bounds.push(OutOfTypeBounds {
-                        on_element: self.on_element,
                         typ: type_id,
-                        expr,
-                    });
+                        expr: meta,
+                    }.at_spanned(self.on_element, self.on_file, meta));
                     false
                 }
             }
@@ -345,26 +339,24 @@ impl<'compiler_context, 'source, 'interner>
                     true
                 } else {
                     self.errors.unexpected_types.push(UnexpectedTypeFound {
-                        on_element: self.on_element,
                         type_def: type_id,
-                    });
+                    }.at_spanned(self.on_element, self.on_file, meta));
                     return Err(CompilerError::TypeCheckError);
                 };
                 if is_within_bounds {
                     true
                 } else {
                     self.errors.out_of_bounds.push(OutOfTypeBounds {
-                        on_element: self.on_element,
-                        expr,
+                        expr: meta,
                         typ: type_id,
-                    });
+                    }.at_spanned(self.on_element, self.on_file, meta));
                     false
                 }
             } //these are all ok, though None is not really implemented right now...
             LiteralHIRExpr::String(_) | LiteralHIRExpr::Boolean(_) | LiteralHIRExpr::None => true,
         };
         if is_properly_typed {
-            Ok(HIRExpr::Literal(literal, type_id, expr))
+            Ok(HIRExpr::Literal(literal, type_id, meta))
         } else {
             Err(CompilerError::TypeCheckError)
         }
@@ -392,10 +384,9 @@ impl<'compiler_context, 'source, 'interner>
             self.errors
                 .field_or_method_not_found
                 .push(FieldOrMethodNotFound {
-                    on_element: self.on_element,
                     object_type: checked_method.get_type(),
                     field_or_method: name,
-                });
+                }.at_spanned(self.on_element, self.on_file, meta));
             return Err(CompilerError::TypeCheckError);
         };
 
@@ -408,7 +399,6 @@ impl<'compiler_context, 'source, 'interner>
             self.errors
                 .function_call_argument_count
                 .push(FunctionCallArgumentCountMismatch {
-                    on_element: self.on_element,
                     called_function_name: make_method_name_or_index(
                         name,
                         &obj_type.name,
@@ -417,7 +407,7 @@ impl<'compiler_context, 'source, 'interner>
                     ),
                     expected_count: function_type.function_args.len(),
                     passed_count: checked_args.len(),
-                });
+                }.at_spanned(self.on_element, self.on_file, meta));
             return Err(CompilerError::TypeCheckError);
         };
 
@@ -433,7 +423,6 @@ impl<'compiler_context, 'source, 'interner>
 
         if let Some((arg_pos, types)) = has_invalid_arg {
             self.errors.function_call_mismatches.push(TypeMismatch {
-                on_element: self.on_element,
                 context: FunctionCallContext {
                     called_function_name: make_method_name_or_index(
                         name,
@@ -445,7 +434,7 @@ impl<'compiler_context, 'source, 'interner>
                 },
                 expected: *types.0,
                 actual: types.1,
-            });
+            }.at_spanned(self.on_element, self.on_file, meta));
             return Err(CompilerError::TypeCheckError);
         }
         Ok((checked_method, checked_args))
@@ -456,6 +445,7 @@ impl<'compiler_context, 'source, 'interner>
         function_type: TypeInstanceId,
         function_name: FunctionName,
         args: Vec<TypecheckPendingExpression<'source>>,
+        meta: HIRExprMetadata<'source>,
     ) -> Result<Vec<TypecheckedExpression<'source>>, CompilerError> {
         let function_type = self.type_db.get_instance(function_type);
         let checked_args = args
@@ -467,11 +457,10 @@ impl<'compiler_context, 'source, 'interner>
             self.errors
                 .function_call_argument_count
                 .push(FunctionCallArgumentCountMismatch {
-                    on_element: self.on_element,
                     called_function_name: function_name,
                     expected_count: function_type.function_args.len(),
                     passed_count: checked_args.len(),
-                });
+                }.at_spanned(self.on_element, self.on_file, meta));
             return Err(CompilerError::TypeCheckError);
         };
 
@@ -484,14 +473,13 @@ impl<'compiler_context, 'source, 'interner>
         for (index, (expected, actual)) in arg_pairs.enumerate() {
             if *expected != actual {
                 self.errors.function_call_mismatches.push(TypeMismatch {
-                    on_element: self.on_element,
                     context: FunctionCallContext {
                         called_function_name: function_name.clone(),
                         argument_position: index,
                     },
                     expected: *expected,
                     actual,
-                });
+                }.at_spanned(self.on_element, self.on_file, meta));
                 has_errors = true;
             }
         }
@@ -527,23 +515,21 @@ impl<'compiler_context, 'source, 'interner>
                     } else {
                         self.errors.return_type_mismatches.push(TypeMismatch {
                             context: ReturnTypeContext(),
-                            on_element: self.on_element,
                             expected: return_type,
                             actual: expr_type,
-                        });
+                        }.at_spanned(self.on_element, self.on_file, ast_meta));
                         return Err(CompilerError::TypeCheckError);
                     }
                 }
-                MIRBlockFinal::EmptyReturn => {
+                MIRBlockFinal::EmptyReturn(ast_meta) => {
                     if return_type == self.type_db.common_types.void {
-                        MIRBlockFinal::EmptyReturn
+                        MIRBlockFinal::EmptyReturn(ast_meta)
                     } else {
                         self.errors.return_type_mismatches.push(TypeMismatch {
                             context: ReturnTypeContext(),
-                            on_element: self.on_element,
                             expected: return_type,
                             actual: self.type_db.common_types.void,
-                        });
+                        }.at_spanned(self.on_element, self.on_file, ast_meta));
                         return Err(CompilerError::TypeCheckError);
                     }
                 }
@@ -584,34 +570,35 @@ impl<'compiler_context, 'source, 'interner>
                 expression,
                 meta_ast,
                 meta_expr,
-            } if path.len() == 1 => {
-                let var = path.first().unwrap();
+            } => {
+               
+                let HIRExpr::Variable(var_name, ..) = path else {
+                    todo!("assign to non-variable")
+                };
+
                 //find variable
-                let variable_type = self.find_variable_and_get_type(*var, scope, scopes);
+                let variable_type = self.find_variable_and_get_type(var_name, scope, scopes);
                 let expr_type = expression.get_type();
 
                 if variable_type == expr_type {
+                    let typechecked_lhs = self.typecheck(path)?;
                     let typechecked_value = self.typecheck(expression)?;
                     Ok(MIRBlockNode::Assign {
-                        path,
+                        path: typechecked_lhs,
                         expression: typechecked_value,
                         meta_ast,
                         meta_expr,
                     })
                 } else {
                     self.errors.assign_mismatches.push(TypeMismatch {
-                        on_element: self.on_element,
                         context: AssignContext {
-                            target_variable_name: *var,
+                            target_variable_name: var_name,
                         },
                         expected: variable_type,
                         actual: expr_type,
-                    });
+                    }.at_spanned(self.on_element, self.on_file, meta_ast));
                     Err(CompilerError::TypeCheckError)
                 }
-            }
-            MIRBlockNode::Assign { .. } => {
-                todo!("Typecheck for path assignments of length > 1 not implemented yet")
             }
             MIRBlockNode::FunctionCall {
                 function,
@@ -625,6 +612,7 @@ impl<'compiler_context, 'source, 'interner>
                     function_type,
                     FunctionName::Function(function),
                     args,
+                    meta_expr
                 ) {
                     Ok(checked_args) => Ok(MIRBlockNode::FunctionCall {
                         function,
@@ -677,9 +665,8 @@ impl<'compiler_context, 'source, 'interner>
             self.errors
                 .if_statement_unexpected_type
                 .push(IfStatementNotBoolean {
-                    on_element: self.on_element,
                     actual_type: expr_type,
-                });
+                }.at_spanned(self.on_element, self.on_file, ast));
             return Err(CompilerError::TypeCheckError);
         })
     }
@@ -707,6 +694,7 @@ pub fn typecheck<'source, 'interner>(
     names: &NameRegistry,
     errors: &mut TypeErrors<'source>,
     interner: &StringInterner,
+    file: FileTableIndex
 ) -> Result<Vec<MIRTopLevelNode<'source, Checked>>, CompilerError> {
     let mut new_mir = vec![];
     for node in top_nodes {
@@ -735,6 +723,7 @@ pub fn typecheck<'source, 'interner>(
                     errors,
                     on_element: RootElementType::Function(function_name),
                     interner,
+                    on_file: file
                 };
 
                 let checked_body = context.type_check_function(body, &scopes, return_type)?;
@@ -788,7 +777,8 @@ mod tests {
                 TypeErrorPrinter::new(
                     &analysis_result.type_errors,
                     &analysis_result.type_db,
-                    &src.interner
+                    &src.interner,
+                    &src.file_table
                 )
             );
         } else {
@@ -823,8 +813,8 @@ def main():
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
-        assert_eq!(err.return_type_mismatches[0].expected, db.common_types.void);
-        assert_eq!(err.return_type_mismatches[0].actual, db.common_types.i32);
+        assert_eq!(err.return_type_mismatches[0].error.expected, db.common_types.void);
+        assert_eq!(err.return_type_mismatches[0].error.actual, db.common_types.i32);
     }
 
     #[test]
@@ -850,8 +840,8 @@ def main() -> i32:
         let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
         assert_eq!(1, err.return_type_mismatches.len());
-        assert_eq!(err.return_type_mismatches[0].actual, db.common_types.void);
-        assert_eq!(err.return_type_mismatches[0].expected, db.common_types.i32);
+        assert_eq!(err.return_type_mismatches[0].error.actual, db.common_types.void);
+        assert_eq!(err.return_type_mismatches[0].error.expected, db.common_types.i32);
     }
 
     #[test]
@@ -867,10 +857,10 @@ def main():
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
         assert_eq!(
-            err.assign_mismatches[0].actual,
+            err.assign_mismatches[0].error.actual,
             db.find_by_name("str").unwrap().id
         );
-        assert_eq!(err.assign_mismatches[0].expected, db.common_types.i32);
+        assert_eq!(err.assign_mismatches[0].error.expected, db.common_types.i32);
     }
 
     #[test]
@@ -904,8 +894,8 @@ def main():
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
-        assert_eq!(err.assign_mismatches[0].actual, db.common_types.i32);
-        assert_eq!(err.assign_mismatches[0].expected, db.common_types.f32);
+        assert_eq!(err.assign_mismatches[0].error.actual, db.common_types.i32);
+        assert_eq!(err.assign_mismatches[0].error.expected, db.common_types.f32);
     }
 
     #[test]
@@ -924,8 +914,8 @@ def main():
 
         assert_eq!(1, err.count());
         assert_eq!(1, err.assign_mismatches.len());
-        assert_eq!(err.assign_mismatches[0].actual, db.common_types.i32);
-        assert_eq!(err.assign_mismatches[0].expected, db.common_types.f32);
+        assert_eq!(err.assign_mismatches[0].error.actual, db.common_types.i32);
+        assert_eq!(err.assign_mismatches[0].error.expected, db.common_types.f32);
     }
 
     #[test]
@@ -997,11 +987,11 @@ def main():
         assert_eq!(1, err.count());
         assert_eq!(1, err.function_call_mismatches.len());
         assert_eq!(
-            err.function_call_mismatches[0].actual,
+            err.function_call_mismatches[0].error.actual,
             db.find_by_name("str").unwrap().id
         );
         assert_eq!(
-            err.function_call_mismatches[0].expected,
+            err.function_call_mismatches[0].error.expected,
             db.common_types.i32
         );
     }
@@ -1025,17 +1015,17 @@ def main():
         assert_eq!(2, err.count());
         assert_eq!(2, err.function_call_mismatches.len());
         assert_eq!(
-            err.function_call_mismatches[0].actual,
+            err.function_call_mismatches[0].error.actual,
             db.find_by_name("str").unwrap().id
         );
         assert_eq!(
-            err.function_call_mismatches[0].expected,
+            err.function_call_mismatches[0].error.expected,
             db.common_types.i32
         );
 
-        assert_eq!(err.function_call_mismatches[1].actual, db.common_types.i32);
+        assert_eq!(err.function_call_mismatches[1].error.actual, db.common_types.i32);
         assert_eq!(
-            err.function_call_mismatches[1].expected,
+            err.function_call_mismatches[1].error.expected,
             db.common_types.f32
         );
     }
@@ -1049,8 +1039,8 @@ def main():
 ",
         );
         let (err, db) = run_test(&ast);
-        let error_msg = print_error(&err, &db, &ast.interner);
-        let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
+        let error_msg = print_error(&err, &db, &ast);
+        let expected = "test:3:4: Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
     }
 
@@ -1064,8 +1054,8 @@ def main():
 ",
         );
         let (err, db) = run_test(&ast);
-        let error_msg = print_error(&err, &db, &ast.interner);
-        let expected = "Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
+        let error_msg = print_error(&err, &db, &ast);
+        let expected = "test:4:4: Assigned type mismatch: In function main, assignment to variable x: variable has type i32 but got assigned a value of type str\n";
         assert_eq!(error_msg, expected);
     }
 
@@ -1079,17 +1069,17 @@ def main(args: array<str>):
         );
 
         let (err, db) = run_test(&ast);
-        let error_msg = print_error(&err, &db, &ast.interner);
-        let expected = "Function argument type mismatch: In function main, on index operator, parameter on position 0 has incorrect type: Expected u32 but passed str\n";
+        let error_msg = print_error(&err, &db, &ast);
+        let expected = "test:3:14: Function argument type mismatch: In function main, on index operator, parameter on position 0 has incorrect type: Expected u32 but passed str\n";
         assert_eq!(error_msg, expected);
     }
 
     fn print_error(
         err: &TypeErrors,
         db: &TypeInstanceManager,
-        interner: &StringInterner,
+        source: &Source
     ) -> String {
-        let printer = TypeErrorPrinter::new(err, db, interner);
+        let printer = TypeErrorPrinter::new(err, db, &source.interner, &source.file_table);
         let error_msg = format!("{}", printer);
         error_msg
     }
@@ -1106,8 +1096,8 @@ def main():
         let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
 
-        let error_msg = print_error(&err, &db, &ast.interner);
-        let expected = "In function main, binary operator + not found for types: i32 + f32\n";
+        let error_msg = print_error(&err, &db, &ast);
+        let expected = "test:3:10: In function main, binary operator + not found for types: i32 + f32\n";
         assert_eq!(error_msg, expected);
     }
 
@@ -1123,8 +1113,8 @@ def main():
         let (err, db) = run_test(&ast);
         assert_eq!(1, err.count());
 
-        let error_msg = print_error(&err, &db, &ast.interner);
-        let expected = "In function main, binary operator * not found for types: i32 * f32\n";
+        let error_msg = print_error(&err, &db, &ast);
+        let expected = "test:3:10: In function main, binary operator * not found for types: i32 * f32\n";
         assert_eq!(error_msg, expected);
     }
 

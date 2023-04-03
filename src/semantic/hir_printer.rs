@@ -50,7 +50,7 @@ impl<'interner> HIRExprPrinter<'interner> {
             HIRExpr::BinaryOperation(var, op, var2, ..) => format!(
                 "{} {} {}",
                 self.print(var),
-                operator_str(*op),
+                operator_str(op.0),
                 self.print(var2)
             )
             .into(),
@@ -63,7 +63,7 @@ impl<'interner> HIRExprPrinter<'interner> {
                 format!("[{}]", array_items_str).into()
             }
             HIRExpr::UnaryExpression(op, expr, ..) => {
-                format!("{}{}", operator_str(*op), self.print(expr)).into()
+                format!("{}{}", operator_str(op.0), self.print(expr)).into()
             }
             HIRExpr::MemberAccess(obj, elem, ..) => {
                 format!("{}.{}", self.print(obj), elem.to_string(self.interner)).into()
@@ -113,11 +113,11 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
             HIR::Assign {
                 path, expression, ..
             } => {
-                let p = path.join_interned(self.interner, ".");
+                let lhs = self.expr_printer.print(path);
                 format!(
                     "{}{} = {}\n",
                     indent,
-                    p,
+                    lhs,
                     self.expr_printer.print(expression)
                 )
             }
@@ -138,7 +138,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
             HIR::Return(expr, ..) => {
                 format!("{}return {}\n", indent, self.expr_printer.print(expr))
             }
-            HIR::EmptyReturn => {
+            HIR::EmptyReturn(..) => {
                 format!("{}return\n", indent)
             }
 

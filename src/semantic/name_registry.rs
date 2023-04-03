@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
+use crate::ast::parser::Spanned;
 use crate::interner::InternedString;
 use crate::types::type_constructor_db::{TypeKind, TypeSign};
-use crate::types::type_errors::{TypeConstructionFailure, TypeErrors};
+use crate::types::type_errors::{TypeConstructionFailure, TypeErrorAtLocation, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::compiler_errors::CompilerError;
+use super::context::FileTableIndex;
 use super::hir::{GlobalsInferredMIRRoot, HIRRoot, HIRType, HIRTypedBoundName, StartingHIRRoot};
 use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 
@@ -89,6 +91,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
     registry: &'a mut NameRegistry,
     errors: &'a mut TypeErrors<'source>,
     mir: Vec<StartingHIRRoot<'source>>,
+    file: FileTableIndex,
 ) -> Result<Vec<GlobalsInferredMIRRoot<'source>>, CompilerError> {
     //register_builtins(type_db, registry);
     let mut new_mir = vec![];
@@ -104,6 +107,10 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                 meta,
                 is_intrinsic,
             } => {
+                //print signature
+                if function_name == InternedString(38) {
+                    println!("Function: {:?}, args: {:?}, return: {:?}", function_name, parameters, return_type);
+                }
                 let mut param_types = vec![];
                 let mut resolved_params = vec![];
 
@@ -113,16 +120,21 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                         &type_def.typename,
                         type_db,
                         errors,
+                        meta.get_span().start,
+                        file,
                     )?;
-
+                    println!("Usage: {:#?}", usage);
+                    
                     let constructed = type_db.construct_usage(&usage);
                     if let Err(e) = constructed {
-                        errors
-                            .type_construction_failure
-                            .push(TypeConstructionFailure {
-                                on_element: RootElementType::Function(function_name),
-                                error: e,
-                            });
+                        println!("Name registry failed: {:#?}", e);
+                        errors.type_construction_failure.push(
+                            TypeConstructionFailure { error: e }.at_spanned(
+                                RootElementType::Function(function_name),
+                                file,
+                                meta,
+                            ),
+                        );
                         return Err(CompilerError::TypeInferenceError);
                     }
                     let type_id = constructed.unwrap();
@@ -138,6 +150,8 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                     &return_type,
                     type_db,
                     errors,
+                    meta.get_span().start,
+                    file,
                 )?;
 
                 let constructed = type_db.construct_usage(&usage);
@@ -145,9 +159,12 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                     errors
                         .type_construction_failure
                         .push(TypeConstructionFailure {
-                            on_element: RootElementType::Function(function_name),
                             error: e,
-                        });
+                        }.at_spanned(
+                            RootElementType::Function(function_name),
+                            file,
+                            meta,
+                        ));
                     return Err(CompilerError::TypeInferenceError);
                 }
                 let return_type = constructed.unwrap();
@@ -168,6 +185,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
             HIRRoot::StructDeclaration {
                 struct_name,
                 fields,
+                meta,
                 ..
             } => {
                 let type_id =
@@ -180,6 +198,8 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                         &field.typename,
                         type_db,
                         errors,
+                        meta.get_span().start,
+                        file,
                     )?;
                     type_db
                         .constructors

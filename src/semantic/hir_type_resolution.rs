@@ -1,5 +1,8 @@
+use super::context::FileTableIndex;
 use super::{compiler_errors::CompilerError, hir::HIRType};
+use crate::ast::lexer::TokenSpanIndex;
 use crate::interner::{InternedString, StringInterner};
+use crate::types::type_errors::TypeErrorAtLocation;
 use crate::types::{
     type_constructor_db::TypeUsage,
     type_errors::{TypeErrors, TypeNotFound},
@@ -35,6 +38,8 @@ pub fn hir_type_to_usage<'source, 'interner>(
     typedef: &HIRType,
     type_db: &TypeInstanceManager<'interner>,
     errors: &mut TypeErrors<'source>,
+    location: TokenSpanIndex,
+    file: FileTableIndex
 ) -> Result<TypeUsage, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
@@ -42,9 +47,8 @@ pub fn hir_type_to_usage<'source, 'interner>(
                 Ok(TypeUsage::Given(type_id.id))
             } else {
                 errors.type_not_found.push(TypeNotFound {
-                    on_element: on_code_element,
                     type_name: HIRType::Simple(*name),
-                });
+                }.at(on_code_element, file, location));
                 Err(CompilerError::TypeInferenceError)
             }
         }
@@ -53,16 +57,15 @@ pub fn hir_type_to_usage<'source, 'interner>(
                 let base_id = type_id.id;
                 let mut generics = vec![];
                 for arg in args.iter() {
-                    let usage = hir_type_to_usage(on_code_element, arg, type_db, errors)?;
+                    let usage = hir_type_to_usage(on_code_element, arg, type_db, errors, location, file)?;
                     generics.push(usage);
                 }
 
                 Ok(TypeUsage::Parameterized(base_id, generics))
             } else {
                 errors.type_not_found.push(TypeNotFound {
-                    on_element: on_code_element,
                     type_name: HIRType::Simple(*base),
-                });
+                }.at(on_code_element, file, location));
                 Err(CompilerError::TypeInferenceError)
             }
         }

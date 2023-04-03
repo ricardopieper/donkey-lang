@@ -5,7 +5,7 @@ use super::mir::{hir_to_mir, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 use super::type_checker::typecheck;
 use crate::ast::ast_printer::print_ast;
-use crate::ast::lexer::TokenSpanIndex;
+use crate::ast::lexer::{TokenSpanIndex, TokenTable};
 use crate::ast::parser::AstSpan;
 use crate::ast::{lexer, parser};
 use crate::interner::StringInterner;
@@ -18,9 +18,11 @@ use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 pub struct FileTableIndex(pub usize);
 
 pub struct FileTableEntry {
-    pub file_name: String,
+    pub path: String,
+    pub index: FileTableIndex,
     pub ast: AST,
     pub contents: &'static str,
+    pub token_table: TokenTable,
 }
 
 pub struct Source {
@@ -44,21 +46,30 @@ impl Source {
 
     pub fn load(self: &mut Source, file_name: String, source: String) {
         let prev_count = self.file_table.len();
-        self.file_table.push(FileTableEntry {
-            file_name,
+        let mut file_table_entry = FileTableEntry {
+            path: file_name,
+            index: FileTableIndex(prev_count),
             ast: AST::Break(AstSpan {
                 start: TokenSpanIndex(0),
                 end: TokenSpanIndex(0),
             }),
             contents: source.leak(),
-        });
-        let tokens = lexer::tokenize(
+            token_table: TokenTable {
+                tokens: vec![],
+                spans: vec![],
+            },
+        };
+        file_table_entry.token_table = lexer::tokenize(
             FileTableIndex(prev_count),
-            self.file_table.last().unwrap().contents.as_ref(),
+            file_table_entry.contents.as_ref(),
             &self.interner,
-        );
-        let (ast, _) = parser::parse_ast(&tokens.unwrap(), &self.file_table);
-        println!("{}", print_ast(&ast, &self.interner));
+        ).unwrap();
+
+        self.file_table.push(file_table_entry);
+
+
+        let (ast, _) = parser::parse_ast(&self.file_table[prev_count].token_table, &self.file_table);
+        println!("{}\n", print_ast(&ast, &self.interner));
         let root = parser::AST::Root(ast);
         self.file_table.last_mut().unwrap().ast = root;
     }
@@ -101,7 +112,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
     pub fn print_errors(&self) {
         println!(
             "{}",
-            TypeErrorPrinter::new(&self.type_errors, &self.type_db, &self.source.interner)
+            TypeErrorPrinter::new(&self.type_errors, &self.type_db, &self.source.interner, &self.source.file_table)
         )
     }
 
@@ -121,16 +132,19 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                     &mut self.globals,
                     &mut self.type_errors,
                     ast_hir,
+                    file.index
                 ) {
                     Ok(hir) => hir,
-                    Err(_e) => {
+                    Err(e) => {
                         let printer = TypeErrorPrinter::new(
                             &self.type_errors,
                             &self.type_db,
                             &source.interner,
+                            &source.file_table,
                         );
                         panic!(
-                            "build_name_registry_and_resolve_signatures Err\n{}",
+                            "build_name_registry_and_resolve_signatures {:?}\n{}",
+                            e,
                             printer
                         );
                     }
@@ -146,6 +160,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                 &first_assignment_hir,
                 &mut self.type_errors,
                 &source.interner,
+                file.index
             ) {
                 panic!("detect_undeclared_vars_and_redeclarations Err: {e:#?}");
             }
@@ -156,10 +171,11 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                 first_assignment_hir,
                 &mut self.type_errors,
                 &source.interner,
+                file.index
             ) {
                 Ok(_) if self.type_errors.count() > 0 => {
                     let printer =
-                        TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.interner);
+                        TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.interner, &source.file_table);
                     panic!("{}", printer);
                 }
                 Ok(final_hir) => {
@@ -172,6 +188,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                             &self.globals,
                             &mut self.type_errors,
                             &source.interner,
+                            file.index
                         );
                         if self.type_errors.count() == 0 {
                             self.mir.extend(typechecked.unwrap());
@@ -191,7 +208,7 @@ pub mod test_utils {
     use crate::{
         interner::StringInterner,
         semantic::{hir::NotChecked, mir::MIRTopLevelNode},
-        types::type_instance_db::TypeInstanceManager,
+        types::{type_errors::TypeErrorPrinter, type_instance_db::TypeInstanceManager},
     };
 
     use super::{Analyzer, Source};
@@ -227,6 +244,12 @@ pub mod test_utils {
     pub fn do_analysis<'s>(source: &'s Source) -> Analyzer<'s, 's> {
         let mut ctx = Analyzer::new(source);
         ctx.analyze(source);
+
+        if ctx.type_errors.count() > 0 {
+            let printer = TypeErrorPrinter::new(&ctx.type_errors, &ctx.type_db, &source.interner, &source.file_table);
+            println!("\nTest failed with type errors:\n{}", printer);
+        }
+
         return ctx;
     }
 
@@ -526,10 +549,14 @@ def main():
     my_array_length = my_array.length
     print_uint(my_array_length)",
         );
+        println!("Doing analysis");
+
         let analyzed = do_analysis(&parsed);
+
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+
+        println!("HIR printed:\n{}", final_result);
         let expected = "
 def main() -> Void:
     my_array : array<i32> = [1, 2, 3]
@@ -570,7 +597,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         let err = &analyzed.type_errors.variable_not_found[0];
-        assert_eq!(err.variable_name, analyzed.source.interner.get("y"));
+        assert_eq!(err.error.variable_name, analyzed.source.interner.get("y"));
     }
 
     #[test]
@@ -585,7 +612,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         let err = &analyzed.type_errors.variable_not_found[0];
-        assert_eq!(err.variable_name, analyzed.source.interner.get("y"));
+        assert_eq!(err.error.variable_name, analyzed.source.interner.get("y"));
     }
 
     #[test]
@@ -773,6 +800,7 @@ def my_function():
 
         assert_eq!(
             analyzed.type_errors.binary_op_not_found[0]
+                .error
                 .lhs
                 .as_string(&analyzed.type_db),
             "i32"
@@ -780,13 +808,14 @@ def my_function():
 
         assert_eq!(
             analyzed.type_errors.binary_op_not_found[0]
+                .error
                 .rhs
                 .as_string(&analyzed.type_db),
             "str"
         );
 
         assert_eq!(
-            analyzed.type_errors.binary_op_not_found[0].operator,
+            analyzed.type_errors.binary_op_not_found[0].error.operator,
             Operator::Plus
         );
     }
@@ -808,11 +837,14 @@ def my_function():
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            analyzed.type_errors.field_or_method_not_found[0]
+                .error
+                .field_or_method,
             analyzed.source.interner.get("sizee")
         );
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
+                .error
                 .object_type
                 .as_string(&analyzed.type_db),
             "array<i32>"
@@ -839,11 +871,14 @@ def my_function():
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            analyzed.type_errors.field_or_method_not_found[0]
+                .error
+                .field_or_method,
             analyzed.source.interner.get("reevert")
         );
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
+                .error
                 .object_type
                 .as_string(&analyzed.type_db),
             "array<i32>"
@@ -870,7 +905,7 @@ def my_function():
         assert_eq!(analyzed.type_errors.type_not_found.len(), 1);
 
         let printer = HIRTypeDisplayer::new(
-            &analyzed.type_errors.type_not_found[0].type_name,
+            &analyzed.type_errors.type_not_found[0].error.type_name,
             &analyzed.source.interner,
         );
 
@@ -897,7 +932,9 @@ def my_function():
         println!("{}", result);
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            analyzed.type_errors.field_or_method_not_found[0]
+                .error
+                .field_or_method,
             analyzed.source.interner.get("as_i32")
         );
     }
@@ -914,7 +951,9 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            analyzed.type_errors.field_or_method_not_found[0]
+                .error
+                .field_or_method,
             analyzed.source.interner.get("as_i32")
         );
     }
@@ -934,12 +973,13 @@ def my_function():
 
         assert_eq!(
             analyzed.type_errors.unary_op_not_found[0]
+                .error
                 .rhs
                 .as_string(&analyzed.type_db),
             "str"
         );
         assert_eq!(
-            analyzed.type_errors.unary_op_not_found[0].operator,
+            analyzed.type_errors.unary_op_not_found[0].error.operator,
             Operator::Plus
         );
         assert_eq!(
@@ -985,11 +1025,12 @@ def my_function():
         assert_eq!(analyzed.type_errors.call_non_callable.len(), 1);
         println!(
             "{:?}",
-            analyzed.type_errors.call_non_callable[0].actual_type
+            analyzed.type_errors.call_non_callable[0].error.actual_type
         );
 
         assert_eq!(
             analyzed.type_errors.call_non_callable[0]
+                .error
                 .actual_type
                 .as_string(&analyzed.type_db),
             "array<i32>"

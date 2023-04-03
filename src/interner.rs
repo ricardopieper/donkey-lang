@@ -1,5 +1,5 @@
 #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
-pub struct InternedString(usize);
+pub struct InternedString(pub usize);
 
 //The string interner uses RefCell so that we can share it freely
 pub struct StringInterner {
@@ -45,6 +45,9 @@ impl StringInterner {
     }
 
     pub fn get_string<'intern>(&'intern self, string: InternedString) -> String {
+        
+        
+
         return self.strings.borrow()[string.0].to_string();
     }
 

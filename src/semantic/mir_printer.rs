@@ -18,9 +18,10 @@ fn print_mir_block<T>(block: &MIRBlock<T>, interner: &StringInterner) -> String 
             MIRBlockNode::Assign {
                 path, expression, ..
             } => {
+
                 buffer.push_str(&format!(
                     "        {} = {}\n",
-                    path.join_interned(interner, "."),
+                    expr_printer.print(path),
                     expr_printer.print(expression)
                 ));
             }
@@ -58,7 +59,7 @@ fn print_mir_block<T>(block: &MIRBlock<T>, interner: &StringInterner) -> String 
         MIRBlockFinal::Return(expr, ..) => {
             buffer.push_str(&format!("        return {}\n", expr_printer.print(expr)));
         }
-        MIRBlockFinal::EmptyReturn => {
+        MIRBlockFinal::EmptyReturn(..) => {
             buffer.push_str("        return\n");
         }
     }

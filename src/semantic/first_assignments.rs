@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use super::hir::{
     FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, GlobalsInferredMIRRoot, HIRRoot,
-    HIRTypeDef, UninferredHIR,
+    HIRTypeDef, UninferredHIR, HIRExpr,
 };
 
 fn make_first_assignments_in_body<'source>(
@@ -39,27 +39,29 @@ fn make_first_assignments_in_body<'source>(
                 expression,
                 meta_ast,
                 meta_expr,
-            } if path.len() == 1 => {
-                let var = &path[0];
-                if declarations_found.contains(var) {
-                    HIR::Assign {
-                        path,
-                        expression,
-                        meta_ast,
-                        meta_expr,
+            }  => {
+                if let HIRExpr::Variable(var_name, ..) = path {
+                    if declarations_found.contains(&var_name) {
+                        HIR::Assign {
+                            path,
+                            expression,
+                            meta_ast,
+                            meta_expr,
+                        }
+                    } else {
+                        declarations_found.insert(var_name);
+                        HIR::Declare {
+                            var: var_name,
+                            typedef: HIRTypeDef::PendingInference,
+                            expression,
+                            meta_ast,
+                            meta_expr,
+                        }
                     }
                 } else {
-                    declarations_found.insert(*var);
-                    HIR::Declare {
-                        var: *var,
-                        typedef: HIRTypeDef::PendingInference,
-                        expression,
-                        meta_ast,
-                        meta_expr,
-                    }
+                    todo!("Unsupported assign to expression")
                 }
             }
-            HIR::Assign { .. } => todo!("Unsupported assign to path len > 1"),
             HIR::If(condition, true_branch, false_branch, meta) => {
                 //create 2 copies of the decls found, so that 2 copies of the scope are created
                 //cloneless: these clones are intentional
@@ -91,7 +93,7 @@ fn make_first_assignments_in_body<'source>(
                 meta_expr,
             },
             HIR::Return(expr, meta_ast) => HIR::Return(expr, meta_ast),
-            HIR::EmptyReturn => HIR::EmptyReturn,
+            HIR::EmptyReturn(meta_ast) => HIR::EmptyReturn(meta_ast),
         };
         new_mir.push(mir_node);
     }
