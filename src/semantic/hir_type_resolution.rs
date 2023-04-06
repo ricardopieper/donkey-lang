@@ -15,12 +15,12 @@ pub enum RootElementType {
     Function(InternedString),
 }
 
-impl<'s> RootElementType {
+impl RootElementType {
     #[allow(dead_code)]
     pub fn get_name(&self, interner: &StringInterner) -> String {
         match self {
             RootElementType::Struct(s) | RootElementType::Function(s) => {
-                interner.get_string(*s).to_string()
+                interner.get_string(*s)
             }
         }
     }
@@ -33,11 +33,11 @@ impl<'s> RootElementType {
     }
 }
 
-pub fn hir_type_to_usage<'source, 'interner>(
+pub fn hir_type_to_usage(
     on_code_element: RootElementType,
     typedef: &HIRType,
-    type_db: &TypeInstanceManager<'interner>,
-    errors: &mut TypeErrors<'source>,
+    type_db: &TypeInstanceManager,
+    errors: &mut TypeErrors,
     location: TokenSpanIndex,
     file: FileTableIndex
 ) -> Result<TypeUsage, CompilerError> {

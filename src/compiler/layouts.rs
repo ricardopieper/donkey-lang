@@ -52,10 +52,10 @@ impl TryInto<u8> for Bytes {
     }
 }
 
-impl Into<u32> for Bytes {
+impl From<Bytes> for u32 {
     #[inline(always)]
-    fn into(self) -> u32 {
-        self.0
+    fn from(val: Bytes) -> Self {
+        val.0
     }
 }
 
@@ -105,7 +105,7 @@ macro_rules! impl_bytes_traits {
 
             #[inline(always)]
             fn sub(self, rhs: $type) -> Self::Output {
-                Bytes(self.0 + rhs as u32)
+                Bytes(self.0 - rhs as u32)
             }
         }
 
@@ -137,7 +137,7 @@ macro_rules! impl_bytes_traits {
 
             #[inline(always)]
             fn sub(self, rhs: &$type) -> Self::Output {
-                Bytes(self.0 + *rhs as u32)
+                Bytes(self.0 - *rhs as u32)
             }
         }
 
@@ -186,7 +186,7 @@ impl Sum<Bytes> for Bytes {
         for b in iter {
             sum += b;
         }
-        return sum;
+        sum
     }
 }
 
@@ -209,10 +209,10 @@ impl ByteRange {
     }
 }
 
-fn build_write_scope_byte_layout<'interner>(
+fn build_write_scope_byte_layout(
     scope: &MIRScope,
     all_scopes: &[MIRScope],
-    type_db: &TypeInstanceManager<'interner>,
+    type_db: &TypeInstanceManager,
 ) -> HashMap<InternedString, (ByteRange, ScopeId)> {
     let mut current_index = scope.id;
     let mut found_var = vec![];
@@ -259,9 +259,9 @@ pub struct FunctionLayout {
     pub largest_scope_size: Bytes,
 }
 
-pub fn generate_function_layout<'interner>(
+pub fn generate_function_layout(
     scopes: &[MIRScope],
-    type_db: &TypeInstanceManager<'interner>,
+    type_db: &TypeInstanceManager,
 ) -> FunctionLayout {
     let scope_byte_layout = scopes
         .iter()

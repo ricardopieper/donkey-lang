@@ -1,4 +1,4 @@
-use std::fmt::format;
+
 
 use crate::{interner::StringInterner, ast::parser::ASTIfStatement};
 
@@ -34,10 +34,10 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner) -> String {
             let rhs_is_binary = matches!(rhs.expr.expr, Expr::BinaryOperation(_, _, _));
 
             if lhs_is_binary {
-                lhs_str = format!("({})", lhs_str);
+                lhs_str = format!("({lhs_str})");
             }
             if rhs_is_binary {
-                rhs_str = format!("({})", rhs_str);
+                rhs_str = format!("({rhs_str})");
             }
 
             format!("{lhs_str} {op_str} {rhs_str}")
@@ -48,7 +48,7 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner) -> String {
             let expr_is_binary = matches!(expr.expr.expr, Expr::BinaryOperation(_, _, _));
 
             if expr_is_binary {
-                expr_str = format!("({})", expr_str);
+                expr_str = format!("({expr_str})");
             }
             let op_str = op.0.to_string();
             format!("{op_str} {expr_str}")
@@ -145,7 +145,7 @@ fn print_ast_internal(ast: &AST, interner: &StringInterner, indent: &str) -> Str
         } => {
             let mut buf = "".to_string();
             let struct_name = interner.borrow(struct_name.0);
-            if type_parameters.len() > 0 {
+            if !type_parameters.is_empty() {
                 let generic_args = type_parameters.iter().map(|x| interner.borrow(x.0)).collect::<Vec<_>>().join(", ");
                 buf.push_str(&format!("{indent}struct {struct_name}<{generic_args}>:"));
             } else {

@@ -86,8 +86,8 @@ fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegis
 }*/
 
 /*Builds a name registry and resolves the top level declarations*/
-pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
-    type_db: &'a mut TypeInstanceManager<'interner>,
+pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
+    type_db: &'a mut TypeInstanceManager,
     registry: &'a mut NameRegistry,
     errors: &'a mut TypeErrors<'source>,
     mir: Vec<StartingHIRRoot<'source>>,
@@ -109,7 +109,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
             } => {
                 //print signature
                 if function_name == InternedString(38) {
-                    println!("Function: {:?}, args: {:?}, return: {:?}", function_name, parameters, return_type);
+                    println!("Function: {function_name:?}, args: {parameters:?}, return: {return_type:?}");
                 }
                 let mut param_types = vec![];
                 let mut resolved_params = vec![];
@@ -123,11 +123,11 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                         meta.get_span().start,
                         file,
                     )?;
-                    println!("Usage: {:#?}", usage);
+                    println!("Usage: {usage:#?}");
                     
                     let constructed = type_db.construct_usage(&usage);
                     if let Err(e) = constructed {
-                        println!("Name registry failed: {:#?}", e);
+                        println!("Name registry failed: {e:#?}");
                         errors.type_construction_failure.push(
                             TypeConstructionFailure { error: e }.at_spanned(
                                 RootElementType::Function(function_name),

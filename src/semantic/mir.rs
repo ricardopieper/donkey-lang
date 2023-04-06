@@ -241,7 +241,7 @@ impl<'source> MIRFunctionEmitter<'source> {
             .map(|x| {
                 let finisher = match x.finish {
                     Some(f) => f,
-                    None => panic!("Found unfinished MIR block! {:#?}", x),
+                    None => panic!("Found unfinished MIR block! {x:#?}"),
                 };
                 MIRBlock {
                     index: x.index,
@@ -353,7 +353,7 @@ fn process_body<'source>(
                             return_type: *function_type,
                         });
                     }
-                    other => panic!("{:?} is not a function!", other),
+                    other => panic!("{other:?} is not a function!"),
                 };
             }
             HIR::While(expr, body, meta_ast) => {
@@ -511,8 +511,8 @@ fn process_body<'source>(
     }
 }
 
-fn generate_or_get_fallback_block<'source>(
-    emitter: &mut MIRFunctionEmitter<'source>,
+fn generate_or_get_fallback_block(
+    emitter: &mut MIRFunctionEmitter,
     current_scope: ScopeId,
 ) -> BlockId {
     let fallback_block = if let Some(block) = emitter.peek_goto_block() {
@@ -585,9 +585,9 @@ pub fn process_hir_funcdecl<'source>(
     };
 }
 
-pub fn hir_to_mir<'source>(
-    hir_nodes: Vec<InferredTypeHIRRoot<'source>>,
-) -> Vec<MIRTopLevelNode<'source, NotChecked>> {
+pub fn hir_to_mir(
+    hir_nodes: Vec<InferredTypeHIRRoot>,
+) -> Vec<MIRTopLevelNode<NotChecked>> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
@@ -640,8 +640,8 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &result.interner);
-        println!("{}", final_result);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, result.interner);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
@@ -664,7 +664,7 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> Void:
     defscope 0:
@@ -698,7 +698,7 @@ def main(x: i32) -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     defscope 0:
@@ -722,7 +722,7 @@ def main(x: i32, y: i64, z: f64, name: str) -> i32:
         let result = do_analysis_no_typecheck(&src);
         let final_result =
             mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32, y: i64, z: f64, name: str) -> i32:
     defscope 0:
@@ -748,7 +748,7 @@ def main(x: i32) -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     defscope 0:
@@ -773,7 +773,7 @@ def main(x: i32) -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     defscope 0:
@@ -810,7 +810,7 @@ def main(x: i32) -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     defscope 0:
@@ -861,7 +861,7 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
@@ -900,7 +900,7 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> Void:
     defscope 0:
@@ -949,7 +949,7 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> Void:
     defscope 0:
@@ -1004,7 +1004,7 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> Void:
@@ -1051,7 +1051,7 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
@@ -1095,7 +1095,7 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
@@ -1173,7 +1173,7 @@ def main() -> i32:
         );
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> i32:
@@ -1231,7 +1231,7 @@ def main() -> i32:
         );
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> i32:
@@ -1293,7 +1293,7 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> i32:
@@ -1361,7 +1361,7 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> i32:
@@ -1449,7 +1449,7 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
@@ -1555,11 +1555,11 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir_node(
-            &result.mir.last().unwrap(),
+            result.mir.last().unwrap(),
             &result.type_db,
             &src.interner,
         );
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
@@ -1664,7 +1664,7 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> Void:
     defscope 0:

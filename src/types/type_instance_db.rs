@@ -130,11 +130,11 @@ impl<'interner> TypeInstanceManager<'interner> {
         &self.types[id.0]
     }
 
-    pub fn find_struct_member<'this>(
-        &'this self,
+    pub fn find_struct_member(
+        &self,
         id: TypeInstanceId,
         name: InternedString,
-    ) -> StructMember<'this> {
+    ) -> StructMember {
         let instance = self.get_instance(id);
         if let Some((index, field)) = instance
             .fields
@@ -255,14 +255,12 @@ impl<'interner> TypeInstanceManager<'interner> {
             TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
             TypeUsage::Generic(param) => type_args
                 .get(&param.0)
-                .ok_or_else(|| TypeConstructionError::TypeNotFound { name: param.0 })
+                .ok_or(TypeConstructionError::TypeNotFound { name: param.0 })
                 .map(|op| *op),
             TypeUsage::Parameterized(constructor_id, params) => {
-                println!("Constructing type: {:?} with params: {:?}", constructor_id, params);
                 let mut constructed = vec![];
 
                 for item in params.iter() {
-                    println!("Constructing param: {:?}", item);
                     let type_id = self.construct_usage_generic(item, type_args)?;
                     constructed.push(type_id);
                 }
@@ -289,7 +287,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             id,
             c,
             positional_args,
-            &self.constructors.interner,
+            self.constructors.interner,
         ));
 
         //build a map of argname => type id
@@ -319,7 +317,6 @@ impl<'interner> TypeInstanceManager<'interner> {
             self.constructors
                 .interner
                 .get_string(constructor.name)
-                .to_string()
         } else {
             let constructor = self.constructors.find(constructor_id);
             let generics = positional_args
@@ -357,7 +354,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
             for type_usage in constructor.allowed_casts.clone().iter() {
-                let constructed = self.construct_usage(&type_usage)?;
+                let constructed = self.construct_usage(type_usage)?;
                 result.push(constructed);
             }
             result
@@ -502,7 +499,7 @@ fn make_base_instance(
         id,
         base: constructor.id,
         size: Bytes(0),
-        name: interner.get_string(constructor.name).to_string(),
+        name: interner.get_string(constructor.name),
         allowed_casts: vec![],
         rhs_binary_ops: vec![],
         unary_ops: vec![],

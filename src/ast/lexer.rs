@@ -60,6 +60,7 @@ pub enum Operator {
     Plus,
     Minus,
     Multiply,
+    Ampersand,
     Divide,
     Mod,
     BitShiftLeft,
@@ -89,6 +90,7 @@ impl ToString for Operator {
             Operator::LessEquals => "<=".into(),
             Operator::Less => "<".into(),
             Operator::Mod => "%".into(),
+            Operator::Ampersand => "&".into(),
             Operator::And => "and".into(),
             Operator::Or => "or".into(),
             Operator::Not => "not".into(),
@@ -176,7 +178,7 @@ pub enum PartialToken {
 }
 
 impl PartialToken {
-    fn to_token(self, interner: &StringInterner) -> Token {
+    fn to_token(&self, interner: &StringInterner) -> Token {
         match self {
             Self::UndefinedOrWhitespace => {
                 panic!("Unexpected undefined token. This is a tokenizer bug.")
@@ -199,7 +201,7 @@ impl PartialToken {
                 "while" => Token::WhileKeyword,
                 "break" => Token::BreakKeyword,
                 "struct" => Token::StructDef,
-                _ => Token::Identifier(interner.get(&s)),
+                _ => Token::Identifier(interner.get(s)),
             },
             Self::Operator(s) => match s.as_ref() {
                 "+" => Token::Operator(Operator::Plus),
@@ -213,6 +215,7 @@ impl PartialToken {
                 "==" => Token::Operator(Operator::Equals),
                 "->" => Token::ArrowRight,
                 "=" => Token::Assign,
+                "&" => Token::Operator(Operator::Ampersand),
                 "!=" => Token::Operator(Operator::NotEquals),
                 "(" => Token::OpenParen,
                 ")" => Token::CloseParen,
@@ -220,7 +223,7 @@ impl PartialToken {
                 "<" => Token::Operator(Operator::Less),
                 ">=" => Token::Operator(Operator::GreaterEquals),
                 "<=" => Token::Operator(Operator::LessEquals),
-                _ => panic!("Unimplemented operator {}", s),
+                _ => panic!("Unimplemented operator {s}"),
             },
         }
     }
@@ -335,7 +338,7 @@ impl<'interner> Tokenizer<'interner> {
     }
 
     fn advance(&mut self, offset: usize) {
-        self.index = self.index + offset;
+        self.index += offset;
     }
 
     fn cur(&self) -> char {
@@ -417,7 +420,7 @@ impl<'interner> Tokenizer<'interner> {
                 } else if cur == '0' {
                     self.eater_buf.push('\0');
                 } else {
-                    panic!("cannot escape char {}", cur);
+                    panic!("cannot escape char {cur}");
                 }
                 is_escaping = false;
                 self.next();
@@ -482,7 +485,7 @@ impl<'interner> Tokenizer<'interner> {
 
         let operators = &[
             "+", "->", "-", "*", "%", "/", "<<", ">>", "<=", ">=", ">", "<", "!=", "==", "=", "^",
-            "(", ")",
+            "(", ")", "&"
         ];
         while self.can_go() {
             self.commit_current_token(&mut token_table);
@@ -508,7 +511,7 @@ impl<'interner> Tokenizer<'interner> {
                     self.eater_buf
                         .parse::<i128>()
                         .map_err(|_| "Error parsing integer value")
-                        .map(|i| Token::LiteralInteger(i))
+                        .map(Token::LiteralInteger)
                 }?;
 
                 token_table.add(token, self.file, self.start_token, self.end_token);
@@ -589,10 +592,10 @@ impl<'interner> Tokenizer<'interner> {
     }
 }
 
-pub fn tokenize<'interner>(
+pub fn tokenize(
     file: FileTableIndex,
     source: &str,
-    interner: &'interner StringInterner,
+    interner: &StringInterner,
 ) -> Result<TokenTable, String> {
     Tokenizer::new(file, source.to_string(), interner).tokenize()
 }
@@ -844,7 +847,7 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(istr("x").into()),
+                Token::Identifier(istr("x")),
                 Token::Assign,
                 Token::LiteralInteger(1)
             ]
@@ -914,15 +917,15 @@ mod tests {
             result,
             [
                 Token::IfKeyword,
-                Token::Identifier(istr("x").into()),
+                Token::Identifier(istr("x")),
                 Token::Operator(Operator::Equals),
                 Token::LiteralInteger(0),
                 Token::Colon,
                 Token::NewLine,
                 Token::Indentation,
-                Token::Identifier(istr("x").into()),
+                Token::Identifier(istr("x")),
                 Token::Assign,
-                Token::Identifier(istr("x").into()),
+                Token::Identifier(istr("x")),
                 Token::Operator(Operator::Plus),
                 Token::LiteralInteger(1)
             ]
@@ -936,9 +939,9 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(istr("obj").into()),
+                Token::Identifier(istr("obj")),
                 Token::MemberAccessor,
-                Token::Identifier(istr("method").into()),
+                Token::Identifier(istr("method")),
             ]
         );
         Ok(())
@@ -950,9 +953,9 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(istr("obj").into()),
+                Token::Identifier(istr("obj")),
                 Token::MemberAccessor,
-                Token::Identifier(istr("method").into()),
+                Token::Identifier(istr("method")),
             ]
         );
         Ok(())
@@ -965,9 +968,9 @@ mod tests {
             result,
             [
                 Token::ForKeyword,
-                Token::Identifier(istr("item").into()),
+                Token::Identifier(istr("item")),
                 Token::InKeyword,
-                Token::Identifier(istr("ls").into()),
+                Token::Identifier(istr("ls")),
                 Token::Colon,
             ]
         );
@@ -981,11 +984,11 @@ mod tests {
             result,
             [
                 Token::DefKeyword,
-                Token::Identifier(istr("function").into()),
+                Token::Identifier(istr("function")),
                 Token::OpenParen,
-                Token::Identifier(istr("x").into()),
+                Token::Identifier(istr("x")),
                 Token::Colon,
-                Token::Identifier(istr("i32").into()),
+                Token::Identifier(istr("i32")),
                 Token::CloseParen,
                 Token::Colon,
             ]
@@ -1000,14 +1003,14 @@ mod tests {
             result,
             [
                 Token::DefKeyword,
-                Token::Identifier(istr("function").into()),
+                Token::Identifier(istr("function")),
                 Token::OpenParen,
-                Token::Identifier(istr("x").into()),
+                Token::Identifier(istr("x")),
                 Token::Colon,
-                Token::Identifier(istr("i32").into()),
+                Token::Identifier(istr("i32")),
                 Token::CloseParen,
                 Token::ArrowRight,
-                Token::Identifier(istr("i32").into()),
+                Token::Identifier(istr("i32")),
                 Token::Colon,
             ]
         );
@@ -1027,7 +1030,7 @@ mod tests {
         assert_eq!(
             result,
             [
-                Token::Identifier(istr("array").into()),
+                Token::Identifier(istr("array")),
                 Token::OpenArrayBracket,
                 Token::LiteralInteger(0),
                 Token::CloseArrayBracket
@@ -1043,7 +1046,7 @@ mod tests {
             result,
             [
                 Token::StructDef,
-                Token::Identifier(istr("Test").into()),
+                Token::Identifier(istr("Test")),
                 Token::Colon
             ]
         );

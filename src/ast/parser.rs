@@ -91,7 +91,7 @@ pub enum Expr {
     UnaryExpression(SpannedOperator, ExprBox),
     MemberAccess(ExprBox, StringSpan),
     //the last parameter here contains the entire span, from start to beginning
-    Array(Vec<SpanExpr>, AstSpan),
+    Array(Vec<SpanExpr>, AstSpan)
     //maybe there could be a syntax to specify the type of the array
     //ex: instead of just x = [1,2,3] it could be x = [1, 2, 3] array<i32>
     //or like sum = array<i32>[].sum() would return 0
@@ -112,7 +112,7 @@ impl Spanned for Expr {
             Parenthesized(e) => e.expr.span,
             UnaryExpression(op, expr) => op.1.range(&expr.expr.span),
             MemberAccess(expr, member) => expr.expr.span.range(&member.1),
-            Array(_arr, span) => *span,
+            Array(.., span) => *span,
         }
     }
 }
@@ -1814,6 +1814,15 @@ mod tests {
     }
 
     #[cfg(test)]
+    impl Deref for SpannedOperator {
+        type Target = Operator;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    #[cfg(test)]
     impl Deref for SpanAST {
         type Target = AST;
 
@@ -2718,4 +2727,30 @@ print(x)"
     fn simple_index_binary_expression() {
         parse_and_print_back_to_original("array[i + 1] = 1");
     }
+
+    #[test]
+    fn deref_value() {
+        let tokens = tokenize("*val").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                UnaryExpression(
+                    Deref @ Operator::Multiply,
+                    Deref @ Variable(Deref @ "val")
+                ) => true,
+                _ => false
+            }
+        })
+    }
+
+    #[test]
+    fn ref_value() {
+        parse_and_print_back_to_original("& val");
+    }
+
+    #[test]
+    fn deref_value_and_set() {
+        parse_and_print_back_to_original("* val = 1");
+    }
+
 }

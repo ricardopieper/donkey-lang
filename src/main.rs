@@ -6,6 +6,8 @@
 #![feature(string_leak)]
 #![feature(once_cell)]
 #![feature(thread_local)]
+#![feature(negative_impls)]
+
 #[macro_use]
 mod interner;
 mod ast;
@@ -43,6 +45,7 @@ use llvm::llvm_backend::generate_llvm;
 use semantic::context::Source;
 
 fn main() {
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -63,7 +66,7 @@ fn main() {
     }
     if args.contains(&"dump_types".to_string()) {
         for t in ctx.type_db.constructors.types.iter() {
-            if t.type_args.len() > 0 {
+            if !t.type_args.is_empty() {
                 println!(
                     "{}<{}>",
                     t.name.borrow(&source.interner),

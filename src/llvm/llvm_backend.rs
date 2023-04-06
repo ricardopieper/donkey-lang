@@ -38,7 +38,7 @@ pub enum LlvmExpression<'ctx> {
 impl<'ctx> LlvmExpression<'ctx> {
     pub fn load(self, builder: &Builder<'ctx>) -> LlvmExpression<'ctx> {
         match self {
-            Self::Pointer(ptr) => Self::BasicValue(builder.build_load(ptr, "loaded_ptr").into()),
+            Self::Pointer(ptr) => Self::BasicValue(builder.build_load(ptr, "loaded_ptr")),
             Self::BasicValue(val) => Self::BasicValue(val),
         }
     }
@@ -46,13 +46,13 @@ impl<'ctx> LlvmExpression<'ctx> {
     pub fn get_raw(self) -> BasicValueEnum<'ctx> {
         match self {
             Self::Pointer(ptr) => ptr.into(),
-            Self::BasicValue(val) => val.into(),
+            Self::BasicValue(val) => val,
         }
     }
 
     pub fn expect_ptr(self) -> PointerValue<'ctx> {
         match self {
-            Self::Pointer(ptr) => ptr.into(),
+            Self::Pointer(ptr) => ptr,
             Self::BasicValue(val) => {
                 panic!("Expected a pointer but got ${val:?}")
             }
@@ -135,7 +135,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
         self.type_cache.insert(instance, llvm_any_type);
 
-        return llvm_any_type;
+        llvm_any_type
     }
 
     pub fn create_function(
@@ -168,14 +168,14 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         };
         let function =
             self.module
-                .add_function(&function_name.borrow(self.interner), function_type, linkage);
+                .add_function(function_name.borrow(self.interner), function_type, linkage);
 
         for (i, param) in function.get_param_iter().enumerate() {
-            param.set_name(&parameters[i].name.borrow(self.interner));
+            param.set_name(parameters[i].name.borrow(self.interner));
         }
         self.functions.insert(function_name, function);
 
-        return function;
+        function
     }
 
     fn create_variable_stack_alloc(
@@ -199,7 +199,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         let llvm_type = self.make_llvm_type(var_type);
         let llvm_type = self.as_basic_type(llvm_type);
 
-        let alloca = builder.build_alloca(llvm_type, &var_name);
+        let alloca = builder.build_alloca(llvm_type, var_name);
         alloca
     }
 
@@ -216,7 +216,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 return_type,
             } => {
                 let function_layout =
-                    crate::compiler::layouts::generate_function_layout(&scopes, self.type_db);
+                    crate::compiler::layouts::generate_function_layout(scopes, self.type_db);
                 let function_signature =
                     self.create_function(*function_name, parameters, *return_type, false);
 
@@ -230,9 +230,9 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     let param_name = &parameters[i].name;
                     let alloca = self
                         .builder
-                        .build_alloca(param.get_type(), &param_name.borrow(self.interner));
+                        .build_alloca(param.get_type(), param_name.borrow(self.interner));
                     self.builder.build_store(alloca, param);
-                    llvm_variables.insert(*param_name, alloca.into());
+                    llvm_variables.insert(*param_name, alloca);
                 }
 
                 //register the variables first by navigating in the scopes,
@@ -253,10 +253,10 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                         };
                         let ptr = self.create_variable_stack_alloc(
                             function_signature,
-                            &name.borrow(self.interner),
+                            name.borrow(self.interner),
                             *type_instance,
                         );
-                        llvm_variables.insert(*name, ptr.into());
+                        llvm_variables.insert(*name, ptr);
                     }
                 }
 
@@ -339,7 +339,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     match &block.finish {
                         MIRBlockFinal::If(expr, true_branch, false_branch, _) => {
                             let expr_compiled = self
-                                .compile_expr_load(block.scope, &symbol_table, &expr)
+                                .compile_expr_load(block.scope, &symbol_table, expr)
                                 .load(self.builder)
                                 .get_raw();
                             self.builder.build_conditional_branch(
@@ -354,7 +354,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                         }
                         MIRBlockFinal::Return(expr, _) => {
                             let expr_compiled = self
-                                .compile_expr_load(block.scope, &symbol_table, &expr)
+                                .compile_expr_load(block.scope, &symbol_table, expr)
                                 .load(self.builder)
                                 .get_raw();
                             self.builder.build_return(Some(&expr_compiled));
@@ -373,7 +373,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 parameters,
                 return_type,
             } => {
-                self.create_function(*function_name, &parameters, *return_type, true);
+                self.create_function(*function_name, parameters, *return_type, true);
             }
         }
     }
@@ -456,7 +456,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                             self.builder.build_store(ptr_to_len, len_val);
                         }
 
-                        LlvmExpression::Pointer(str_alloc.into())
+                        LlvmExpression::Pointer(str_alloc)
                     }
                     LiteralHIRExpr::None => todo!("none not implemented in llvm"),
                 }
@@ -465,7 +465,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 LlvmExpression::Pointer(*symbol_table.get(&(*name, current_scope)).unwrap())
             }
             HIRExpr::Cast(_, _, _) => todo!(),
-            HIRExpr::BinaryOperation(lhs, op, rhs, _, ..) => {
+            HIRExpr::BinaryOperation(lhs, op, rhs, ..) => {
                 let lhs_type = lhs.get_type();
                 let rhs_type = rhs.get_type();
 
@@ -845,7 +845,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     .iter()
                     .map(|x| {
                         let expr_compiled = self
-                            .compile_expr_load(current_scope, &symbol_table, x)
+                            .compile_expr_load(current_scope, symbol_table, x)
                             .load(self.builder);
 
                         expr_compiled.get_raw().into()
@@ -854,7 +854,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
                 let function_compiled = self
                     .module
-                    .get_function(&var_name.borrow(self.interner))
+                    .get_function(var_name.borrow(self.interner))
                     .expect("Function does not exist or was not compiled");
                 let call_site_val = self.builder.build_call(
                     function_compiled,
@@ -866,7 +866,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     .try_as_basic_value()
                     .expect_left("Expected function to return some value, but this function probably returns void and somehow passed the type checker");
 
-                LlvmExpression::BasicValue(expr.into())
+                LlvmExpression::BasicValue(expr)
             }
             HIRExpr::UnaryExpression(op, expr, ..) => {
                 let lhs_type = expr.get_type();
@@ -929,7 +929,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
     fn make_temp(&mut self, _ty: &str) -> String {
         let ret = format!("_{}", self.next_temporary);
         self.next_temporary += 1;
-        return ret;
+        ret
     }
 }
 
@@ -951,7 +951,7 @@ fn build_function_symbol_table<'mir, 'function_layout, 'ctx>(
             let variable_llvm = llvm_variables
                 .get(name)
                 .expect("Should find the variable here");
-            symbol_table.insert((*name, block.scope), (*variable_llvm).into());
+            symbol_table.insert((*name, block.scope), *variable_llvm);
         }
     }
     symbol_table
@@ -971,10 +971,10 @@ fn optimize_module(target_machine: &TargetMachine, module: &Module) {
         .unwrap();
 }
 
-pub fn generate_llvm<'source, 'interner>(
-    type_db: &TypeInstanceManager<'interner>,
-    mir_top_level_nodes: &[MIRTopLevelNode<'source, Checked>],
-    interner: &'interner StringInterner,
+pub fn generate_llvm(
+    type_db: &TypeInstanceManager,
+    mir_top_level_nodes: &[MIRTopLevelNode<Checked>],
+    interner: & StringInterner,
 ) -> Result<(), Box<dyn Error>> {
     let context = Context::create();
     let module = context.create_module("program");
@@ -1018,11 +1018,11 @@ pub fn generate_llvm<'source, 'interner>(
     //println!("Code took {}s to run, {out}", elapsed.as_secs_f64() / 1.0);
 
     let asm_buffer = target_machine
-        .write_to_memory_buffer(&mut codegen.module, FileType::Assembly)
+        .write_to_memory_buffer(codegen.module, FileType::Assembly)
         .unwrap();
 
     let obj_buffer = target_machine
-        .write_to_memory_buffer(&mut codegen.module, FileType::Object)
+        .write_to_memory_buffer(codegen.module, FileType::Object)
         .unwrap();
     // let object_file = obj_buffer.create_object_file().unwrap();
 

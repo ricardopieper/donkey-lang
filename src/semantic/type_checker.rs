@@ -5,7 +5,7 @@ use super::context::FileTableIndex;
 use super::hir::{Checked, HIRAstMetadata, HIRExpr, HIRExprMetadata, LiteralHIRExpr, NotChecked};
 use super::hir_printer::HIRExprPrinter;
 use super::hir_type_resolution::RootElementType;
-use crate::ast::lexer::Operator;
+
 use crate::ast::parser::{Expr, SpannedOperator};
 use crate::interner::{InternedString, StringInterner};
 use crate::types::type_errors::{
@@ -672,10 +672,10 @@ impl<'compiler_context, 'source, 'interner>
     }
 }
 
-fn make_method_name_or_index<'source>(
+fn make_method_name_or_index(
     name: InternedString,
     obj_type_name: &str,
-    expr: HIRExprMetadata<'source>,
+    expr: HIRExprMetadata,
     interner: &StringInterner,
 ) -> FunctionName {
     dbg!(expr);
@@ -688,9 +688,9 @@ fn make_method_name_or_index<'source>(
     }
 }
 
-pub fn typecheck<'source, 'interner>(
+pub fn typecheck<'source>(
     top_nodes: Vec<MIRTopLevelNode<'source, NotChecked>>,
-    type_db: &TypeInstanceManager<'interner>,
+    type_db: &TypeInstanceManager,
     names: &NameRegistry,
     errors: &mut TypeErrors<'source>,
     interner: &StringInterner,
@@ -758,9 +758,9 @@ mod tests {
 
     //Parses a single expression
 
-    fn run_test<'source>(
-        src: &'source Source,
-    ) -> (TypeErrors<'source>, TypeInstanceManager<'source>) {
+    fn run_test(
+        src: &Source,
+    ) -> (TypeErrors<'_>, TypeInstanceManager<'_>) {
         let analysis_result = do_analysis(src);
         println!(
             "{}",
@@ -1080,7 +1080,7 @@ def main(args: array<str>):
         source: &Source
     ) -> String {
         let printer = TypeErrorPrinter::new(err, db, &source.interner, &source.file_table);
-        let error_msg = format!("{}", printer);
+        let error_msg = format!("{printer}");
         error_msg
     }
 

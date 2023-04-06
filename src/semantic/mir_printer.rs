@@ -1,4 +1,4 @@
-use crate::{interner::JoinableInternedStringSlice, types::type_instance_db::TypeInstanceManager};
+use crate::{types::type_instance_db::TypeInstanceManager};
 
 use super::{
     hir_printer::HIRExprPrinter,

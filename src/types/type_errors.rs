@@ -1,8 +1,8 @@
-use crate::ast::lexer::{TokenSpanIndex, TokenTable};
+use crate::ast::lexer::{TokenSpanIndex};
 use crate::ast::parser::Spanned;
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::context::{FileTableIndex, FileTableEntry};
-use crate::semantic::hir::HIRAstMetadata;
+
 use crate::{
     ast::lexer::Operator,
     semantic::{
@@ -28,7 +28,7 @@ where
 
 pub trait TypeError {}
 
-pub trait TypeErrorAtLocation<T: Sized + TypeError> {
+pub trait TypeErrorAtLocation<T: TypeError> {
     fn at(
         self,
         on_element: RootElementType,
@@ -101,7 +101,7 @@ impl TypeErrorDisplay for TypeErrorData<TypeMismatch<AssignContext>> {
 
         write!(f, "Assigned type mismatch: {on_element}, assignment to variable {var}: variable has type {var_type_str} but got assigned a value of type {expr_type_str}",
             on_element = self.on_element.diag_name(interner),
-            var = interner.get_string(self.error.context.target_variable_name).to_string()
+            var = interner.get_string(self.error.context.target_variable_name)
         )
     }
 }
@@ -143,7 +143,7 @@ impl TypeErrorDisplay for TypeErrorData<TypeMismatch<FunctionCallContext>> {
             FunctionName::Function(function_name) => {
                 write!(f, "Function argument type mismatch: {on_element}, call to function {function_called} parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
                     on_element = self.on_element.diag_name(interner),
-                    function_called = interner.get_string(*function_name).to_string(),
+                    function_called = interner.get_string(*function_name),
                     position = self.error.context.argument_position
                 )
             }
@@ -185,7 +185,7 @@ impl TypeErrorDisplay for TypeErrorData<FunctionCallArgumentCountMismatch> {
             FunctionName::Function(call_name) => {
                 write!(f, "Argument count mismatch: {on_element}, call to function {function_called} expects {expected_args} arguments, but {passed_args} were passed",
                     on_element = self.on_element.diag_name(interner),
-                    function_called = interner.get_string(*call_name).to_string(),
+                    function_called = interner.get_string(*call_name),
                     expected_args = self.error.expected_count,
                     passed_args = self.error.passed_count,
                 )
@@ -380,7 +380,7 @@ impl TypeErrorDisplay for TypeErrorData<FieldOrMethodNotFound> {
             f,
             "{on_element}, tried to access field/method {field_or_method} on type {type_name} but no such field or method exists.",
             on_element = self.on_element.diag_name(interner),
-            field_or_method = interner.get_string(self.error.field_or_method).to_string(),
+            field_or_method = interner.get_string(self.error.field_or_method),
             type_name = self.error.object_type.as_string(type_db)
         )
     }
@@ -511,8 +511,7 @@ impl TypeErrorDisplay for TypeErrorData<TypeConstructionFailure> {
             variable = match self.error.error {
                 TypeConstructionError::TypeNotFound { name } => format!("Type not found: {}", interner.borrow(name)),
                 TypeConstructionError::IncorrectNumberOfArgs { expected, received } => format!(
-                    "Incorrect number of args: expected {}, received {}",
-                    expected, received
+                    "Incorrect number of args: expected {expected}, received {received}"
                 ),
             }
         )

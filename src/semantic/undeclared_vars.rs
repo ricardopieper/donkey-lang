@@ -96,7 +96,7 @@ fn detect_decl_errors_in_body<'source, T, T1>(
                 }
             }
             HIR::Assign {
-                path: path @ HIRExpr::Variable(var_name, ..),
+                path: _path @ HIRExpr::Variable(var_name, ..),
                 expression,
                 ..
             } => {
@@ -110,8 +110,8 @@ fn detect_decl_errors_in_body<'source, T, T1>(
                 }
             }
             HIR::Assign {
-                path: path @ HIRExpr::Variable(var_name, ..),
-                expression,
+                path: _path @ HIRExpr::Variable(_var_name, ..),
+                expression: _,
                 ..
             } => {
                 todo!("Assign to arbitrary expressions if they are lvalues")

@@ -16,7 +16,7 @@ impl TypeNamePrinter for TypeInstanceId {
     }
 }
 
-impl<'source> TypeNamePrinter for TypeUsage {
+impl TypeNamePrinter for TypeUsage {
     fn print_name(&self, type_db: &TypeInstanceManager, interner: &StringInterner) -> String {
         match self {
             TypeUsage::Given(id) => type_db.constructors.get_name(*id),

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::fmt::Write;
 
-use crate::ast::lexer::Operator;
+
 use crate::ast::parser::ASTIfStatement;
 use crate::ast::parser::SpanAST;
 use crate::ast::parser::SpannedOperator;
@@ -147,7 +147,7 @@ pub enum HIRType {
 //so we can store TypeIds, but we need it to be accompanied by more data depending on the kind of the type,
 //types such as functions and generics need to be "instanced"
 
-impl<'source> From<&ASTType> for HIRType {
+impl From<&ASTType> for HIRType {
     fn from(typ: &ASTType) -> Self {
         match typ {
             ASTType::Simple(name) => Self::Simple(name.0),
@@ -281,16 +281,16 @@ struct IfTreeNode<'source, TDeclType, TExprType> {
     body_meta: &'source AST,
 }
 
-fn convert_expr_to_hir<'source, 'interner>(
+fn convert_expr_to_hir<'source>(
     expr: &'source Expr,
-    interner: &'interner StringInterner
+    interner: &StringInterner
 ) -> HIRExpr<'source, (), NotChecked> {
     expr_to_hir(expr, interner, false)
 }
 
-fn expr_to_hir<'source, 'interner>(
+fn expr_to_hir<'source>(
     expr: &'source Expr,
-    interner: &'interner StringInterner,
+    interner: &StringInterner,
     is_in_assignment_lhs: bool,
 ) -> HIRExpr<'source, (), NotChecked> {
     match expr {
@@ -354,10 +354,10 @@ fn expr_to_hir<'source, 'interner>(
     }
 }
 
-fn ast_to_hir<'source, 'interner>(
+fn ast_to_hir<'source>(
     ast: &'source SpanAST,
     accum: &mut Vec<UninferredHIR<'source>>,
-    interner: &'interner StringInterner,
+    interner: &StringInterner,
 ) {
     let ast = &ast.ast;
     match ast {
@@ -383,7 +383,7 @@ fn ast_to_hir<'source, 'interner>(
             accum.push(decl_hir);
         }
         AST::Assign { path, expression } => {
-            let path_expr = convert_expr_to_hir(&path.expr, interner);
+            let path_expr = expr_to_hir(&path.expr, interner, true);
             let result_expr = convert_expr_to_hir(&expression.expr, interner);
 
             let decl_hir = HIR::Assign {
@@ -406,12 +406,12 @@ fn ast_to_hir<'source, 'interner>(
         },
         AST::StandaloneExpr(expr) => {
             let Expr::FunctionCall(..) = &expr.expr else {
-                panic!("Can only lower function call standalone expr: {:#?}", expr);
+                panic!("Can only lower function call standalone expr: {expr:#?}");
             };
 
             let result_expr = convert_expr_to_hir(&expr.expr, interner);
             let HIRExpr::FunctionCall(function, args, ..) = result_expr else {
-                panic!("Lowering of function call returned invalid result: {:?}", result_expr);
+                panic!("Lowering of function call returned invalid result: {result_expr:?}");
             };
 
             accum.push(HIR::FunctionCall {
@@ -432,18 +432,18 @@ fn ast_to_hir<'source, 'interner>(
             ast_while_to_hir(&expression.expr, accum, body, ast, interner);
         }
         AST::Intrinsic(_) => panic!("Cannot use intrinsic keyword"),
-        ast => panic!("Not implemented HIR for {:?}", ast),
+        ast => panic!("Not implemented HIR for {ast:?}"),
     }
 }
 
-fn ast_decl_function_to_hir<'source, 'interner>(
+fn ast_decl_function_to_hir<'source>(
     body: &'source [SpanAST],
     function_name: InternedString,
     parameters: &'source [TypeBoundName],
     return_type: &Option<ASTType>,
     ast: &'source AST,
     accum: &mut Vec<StartingHIRRoot<'source>>,
-    interner: &'interner StringInterner,
+    interner: &StringInterner,
 ) {
     if body.len() == 1 {
         if let AST::Intrinsic(_) = &body[0].ast {
@@ -483,26 +483,26 @@ fn ast_decl_function_to_hir<'source, 'interner>(
     //escape the scope of the function!
 }
 
-fn create_type_bound_names<'source>(
-    parameters: &'source [TypeBoundName],
+fn create_type_bound_names(
+    parameters: &[TypeBoundName],
 ) -> Vec<HIRTypedBoundName<HIRType>> {
     parameters.iter().map(create_type_bound_name).collect()
 }
 
-fn create_type_bound_name<'source>(param: &'source TypeBoundName) -> HIRTypedBoundName<HIRType> {
+fn create_type_bound_name(param: &TypeBoundName) -> HIRTypedBoundName<HIRType> {
     HIRTypedBoundName {
         name: param.name.0,
         typename: (&param.name_type).into(),
     }
 }
 
-fn ast_if_to_hir<'source, 'interner>(
+fn ast_if_to_hir<'source>(
     true_branch: &'source ASTIfStatement,
     accum: &mut Vec<UninferredHIR<'source>>,
     elifs: &'source [ASTIfStatement],
     final_else: &'source Option<Vec<SpanAST>>,
     ast: &'source AST,
-    interner: &'interner StringInterner,
+    interner: &StringInterner,
 ) {
     let true_branch_result_expr = convert_expr_to_hir(&true_branch.expression.expr, interner);
 
@@ -599,7 +599,7 @@ fn ast_if_to_hir<'source, 'interner>(
                     node.condition,
                     node.true_body,
                     vec![current_chain],
-                    &node.body_meta,
+                    node.body_meta,
                 ),
             };
             final_if_chain = Some(new_node);
@@ -608,12 +608,12 @@ fn ast_if_to_hir<'source, 'interner>(
     }
 }
 
-fn ast_while_to_hir<'source, 'interner>(
+fn ast_while_to_hir<'source>(
     expression: &'source Expr,
     accum: &mut Vec<UninferredHIR<'source>>,
     body: &'source [SpanAST],
     ast: &'source AST,
-    interner: &'interner StringInterner,
+    interner: &StringInterner,
 ) {
     let expr = convert_expr_to_hir(expression, interner);
 
@@ -625,9 +625,9 @@ fn ast_while_to_hir<'source, 'interner>(
     accum.push(HIR::While(expr, true_body_hir, ast))
 }
 
-pub fn ast_globals_to_hir<'source, 'interner>(
+pub fn ast_globals_to_hir<'source>(
     ast: &'source AST,
-    interner: &'interner StringInterner,
+    interner: &StringInterner,
 ) -> Vec<StartingHIRRoot<'source>> {
     let mut accum = vec![];
     match ast {
@@ -683,7 +683,7 @@ mod tests {
     tls_interner!(INTERNER);
     use super::*;
 
-    use crate::ast::lexer::{TokenSpan, TokenSpanIndex};
+    use crate::ast::lexer::{TokenSpanIndex};
     use crate::ast::parser::{parse_ast, AstSpan};
     use crate::semantic::context::test_utils::tls_interner;
     use crate::semantic::context::{FileTableIndex, FileTableEntry};
@@ -693,7 +693,7 @@ mod tests {
     use crate::types::type_instance_db::TypeInstanceManager;
 
     //Parses a single expression
-    fn parse<'source>(source: &'static str) -> AST {
+    fn parse(source: &'static str) -> AST {
         let tokens = INTERNER.with(|x| crate::ast::lexer::tokenize(FileTableIndex(0), source, x));
         let tokens_lexed = tokens.unwrap();
 
@@ -708,7 +708,7 @@ mod tests {
         ];
 
         let (ast, _) = parse_ast(&file_table[0].token_table, file_table);
-        return AST::Root(ast);
+        AST::Root(ast)
     }
 
     fn build_hir(parsed: AST) -> String {
@@ -740,7 +740,7 @@ def my_function2(arg1: i32, arg2: i32) -> i32:
 ",
         );
         let result = build_hir(parsed);
-        println!("{}", result);
+        println!("{result}");
 
         let expected = "
 def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
@@ -779,7 +779,7 @@ def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
         print(20)";
 
         let result = build_hir(parsed);
-        println!("{}", result);
+        println!("{result}");
 
         assert_eq!(expected.trim(), result.trim());
     }
@@ -817,7 +817,7 @@ def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
 ";
 
         let result = build_hir(parsed);
-        println!("{}", result);
+        println!("{result}");
 
         assert_eq!(expected.trim(), result.trim());
     }
@@ -858,7 +858,7 @@ def main() -> i32:
         );
 
         let result = build_hir(parsed);
-        println!("{}", result);
+        println!("{result}");
         let expected = "
 def main() -> UNRESOLVED! i32:
     x = 0
@@ -869,6 +869,28 @@ def main() -> UNRESOLVED! i32:
         x = 1
         y = 2 + x
         return x + y";
+
+        assert_eq!(expected.trim(), result.trim());
+    }
+
+    #[test]
+    fn array_index_lhs() {
+        let parsed = parse(
+            "
+def main(x: i32) -> i32:
+    arr = [1, 2, 3]
+    a[0] = 1
+    return a[0]
+",
+        );
+        let expected = "
+def main(x: UNRESOLVED! i32) -> UNRESOLVED! i32:
+    arr = [1, 2, 3]
+    a.__index_ptr__(0) = 1
+    return a.__index__(0)
+";
+
+        let result = build_hir(parsed);
 
         assert_eq!(expected.trim(), result.trim());
     }

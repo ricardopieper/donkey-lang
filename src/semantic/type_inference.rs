@@ -1,4 +1,4 @@
-use crate::ast::lexer::{Operator, TokenSpanIndex};
+use crate::ast::lexer::{TokenSpanIndex};
 use crate::ast::parser::{Spanned, SpannedOperator};
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
@@ -32,13 +32,13 @@ pub struct FunctionTypeInferenceContext<'compiler_state, 'source, 'interner> {
     pub interner: &'interner StringInterner,
 }
 
-impl<'source, 'interner> FunctionTypeInferenceContext<'_, 'source, 'interner> {
+impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
     pub fn instantiate_type(&mut self, typedef: &HIRType, file: FileTableIndex, location: TokenSpanIndex) -> Result<TypeInstanceId, CompilerError> {
         let usage = hir_type_to_usage(self.on_function, typedef, self.type_db, self.errors, location, file)?;
         match self.type_db.construct_usage(&usage) {
             Ok(instance_id) => Ok(instance_id),
             Err(e) => {
-                println!("Deu ruim aqui: {:#?}", e);
+                println!("Deu ruim aqui: {e:#?}");
                 self.errors
                     .type_construction_failure
                     .push(TypeConstructionFailure {
@@ -517,7 +517,7 @@ impl<'source, 'interner> FunctionTypeInferenceContext<'_, 'source, 'interner> {
         })
     }
 
-    fn infer_variable_types_in_functions<'params>(
+    fn infer_variable_types_in_functions(
         &mut self,
         parameters: &[HIRTypedBoundName<TypeInstanceId>],
         body: Vec<TypeInferenceInputHIR<'source>>,

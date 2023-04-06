@@ -116,7 +116,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.types.push(TypeConstructor {
             id: next_id,
             kind,
-            name: name.into(),
+            name,
             sign,
             allowed_casts: vec![],
             fields: vec![],
@@ -153,7 +153,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.types.push(TypeConstructor {
             id: next_id,
             kind,
-            name: name.into(),
+            name,
             type_args,
             allowed_casts: vec![],
             fields: vec![],
@@ -379,7 +379,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         let arr_type = self.add_generic(
             TypeKind::Struct,
             istr("array"),
-            vec![GenericParameter(istr("TItem").into())],
+            vec![GenericParameter(istr("TItem"))],
             Some(Bytes::size_of::<usize>() + Bytes::size_of::<u32>()),
         );
 

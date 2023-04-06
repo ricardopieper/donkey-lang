@@ -61,7 +61,7 @@ impl Source {
         };
         file_table_entry.token_table = lexer::tokenize(
             FileTableIndex(prev_count),
-            file_table_entry.contents.as_ref(),
+            file_table_entry.contents,
             &self.interner,
         ).unwrap();
 
@@ -76,7 +76,7 @@ impl Source {
 
     pub fn load_file(&mut self, file_location: &str) {
         let input = fs::read_to_string(file_location)
-            .unwrap_or_else(|_| panic!("Could not read file {}", file_location));
+            .unwrap_or_else(|_| panic!("Could not read file {file_location}"));
         self.load(file_location.to_string(), input);
     }
 
@@ -143,9 +143,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                             &source.file_table,
                         );
                         panic!(
-                            "build_name_registry_and_resolve_signatures {:?}\n{}",
-                            e,
-                            printer
+                            "build_name_registry_and_resolve_signatures {e:?}\n{printer}"
                         );
                     }
                 };
@@ -232,37 +230,37 @@ pub mod test_utils {
         let mut source = Source::new();
         source.load_stdlib();
         source.load_str_ref("test", s);
-        return source;
+        source
     }
 
     pub fn parse_no_std<'a, 'f: 'a>(s: &'a str) -> Source {
         let mut source = Source::new();
         source.load_str_ref("test", s);
-        return source;
+        source
     }
 
-    pub fn do_analysis<'s>(source: &'s Source) -> Analyzer<'s, 's> {
+    pub fn do_analysis(source: &Source) -> Analyzer {
         let mut ctx = Analyzer::new(source);
         ctx.analyze(source);
 
         if ctx.type_errors.count() > 0 {
             let printer = TypeErrorPrinter::new(&ctx.type_errors, &ctx.type_db, &source.interner, &source.file_table);
-            println!("\nTest failed with type errors:\n{}", printer);
+            println!("\nTest failed with type errors:\n{printer}");
         }
 
-        return ctx;
+        ctx
     }
 
-    pub fn do_analysis_no_typecheck<'s>(
-        source: &'s Source,
-    ) -> AnalysisWithoutTypecheckResult<'s, 's> {
-        let mut ctx = Analyzer::new(&source);
+    pub fn do_analysis_no_typecheck(
+        source: &Source,
+    ) -> AnalysisWithoutTypecheckResult {
+        let mut ctx = Analyzer::new(source);
         ctx.generate_mir(source);
-        return AnalysisWithoutTypecheckResult {
+        AnalysisWithoutTypecheckResult {
             mir: ctx.unchecked_mir,
             type_db: ctx.type_db,
             interner: &source.interner,
-        };
+        }
     }
 }
 
@@ -283,7 +281,7 @@ mod tests {
 
     use super::*;
 
-    fn print_hir<'source>(hir: &[InferredTypeHIRRoot<'source>], analyzer: &Analyzer) -> String {
+    fn print_hir(hir: &[InferredTypeHIRRoot], analyzer: &Analyzer) -> String {
         HIRPrinter::new(&analyzer.type_db, &analyzer.source.interner).print_hir(hir)
     }
 
@@ -321,7 +319,7 @@ def my_function():
         assert_eq!(analyzed.type_errors.count(), 0);
 
         let result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", result);
+        println!("{result}");
 
         let expected = "
 def my_function() -> Void:
@@ -342,7 +340,7 @@ def my_function():
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", result);
+        println!("{result}");
 
         let expected = "
 def my_function() -> Void:
@@ -423,7 +421,7 @@ def main(args: array<str>):
         analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(args: array<str>) -> Void:
     my_var : str = args.__index__(0)
@@ -446,7 +444,7 @@ def my_function() -> f32:
 
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", result);
+        println!("{result}");
 
         let expected = "
 def my_function() -> f32:
@@ -471,7 +469,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def sum(x: i32, y: i32) -> i32:
     return x + y
@@ -500,7 +498,7 @@ def main():
 
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def id(x: array<str>) -> str:
     first_item : str = x.__index__(0)
@@ -528,7 +526,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def id(x: array<str>) -> str:
     return x.__index__(0)
@@ -556,7 +554,7 @@ def main():
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
 
-        println!("HIR printed:\n{}", final_result);
+        println!("HIR printed:\n{final_result}");
         let expected = "
 def main() -> Void:
     my_array : array<i32> = [1, 2, 3]
@@ -578,7 +576,7 @@ def main(x: i32) -> i32:
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     y : i32 = 0
@@ -629,7 +627,7 @@ def main(x: i32) -> i32:
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     if x == 0:
@@ -657,7 +655,7 @@ def main(x: i32) -> i32:
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     if x == 0:
@@ -688,7 +686,7 @@ def main(x: i32) -> i32:
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 1);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     if x == 0:
@@ -720,7 +718,7 @@ def main() -> i32:
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     x : i32 = 0
@@ -763,7 +761,7 @@ def main() -> i32:
 
         assert_eq!(analyzed.type_errors.count(), 1);
         let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     if True:
@@ -830,7 +828,7 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{}", result);
+        println!("{result}");
 
         assert_eq!(analyzed.type_errors.count(), 1);
 
@@ -929,7 +927,7 @@ def my_function():
 
         let analyzed = do_analysis(&parsed);
         let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{}", result);
+        println!("{result}");
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
@@ -1020,7 +1018,7 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{}", result);
+        println!("{result}");
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.call_non_callable.len(), 1);
         println!(
