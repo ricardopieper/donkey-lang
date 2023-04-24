@@ -1,16 +1,131 @@
+use super::compiler_errors::CompilerError;
+use super::context::FileTableIndex;
 use super::hir::{
     Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
-    InferredTypeHIRRoot, NotChecked, HIR,
+    InferredTypeHIRRoot, LiteralHIRExpr, NotCheckedSimplified, HIR,
 };
+use super::hir_type_resolution::RootElementType;
+use crate::ast::parser::SpannedOperator;
+use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 
+use crate::types::type_errors::{DerefOnNonPointerError, TypeErrorAtLocation, TypeErrors};
 use crate::{
     ast::parser::{Expr, AST},
     types::type_instance_db::TypeInstanceId,
 };
 
-pub type TypecheckPendingExpression<'source> = HIRExpr<'source, TypeInstanceId, NotChecked>;
-pub type TypecheckedExpression<'source> = HIRExpr<'source, TypeInstanceId, Checked>;
+pub type TypecheckPendingExpression<'source> = MIRExpr<'source, NotCheckedSimplified>;
+pub type TypecheckedExpression<'source> = MIRExpr<'source, Checked>;
+
+pub type MIRExprMetadata<'source> = &'source Expr;
+pub type MIRAstMetadata<'source> = &'source AST;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiteralMIRExpr {
+    Integer(i128),
+    Float(FloatLiteral),
+    String(InternedString),
+    Boolean(bool),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MIRExprLValue<'source, TTypechecked> {
+    Variable(InternedString, TypeInstanceId, MIRExprMetadata<'source>),
+    MemberAccess(
+        Box<MIRExpr<'source, TTypechecked>>,
+        InternedString,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    Deref(
+        Box<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+}
+impl<T> MIRExprLValue<'_, T> {
+    pub fn get_type(&self) -> TypeInstanceId {
+        match self {
+            MIRExprLValue::Variable(_, type_id, _) => *type_id,
+            MIRExprLValue::MemberAccess(_, _, type_id, _) => *type_id,
+            MIRExprLValue::Deref(_, type_id, _) => *type_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MIRExprRValue<'source, TTypechecked> {
+    Literal(LiteralMIRExpr, TypeInstanceId, MIRExprMetadata<'source>),
+    BinaryOperation(
+        Box<MIRExpr<'source, TTypechecked>>,
+        SpannedOperator,
+        Box<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    //obj_expr, method_name, args:type, return type, metadata
+    MethodCall(
+        Box<MIRExpr<'source, TTypechecked>>,
+        InternedString,
+        Vec<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    FunctionCall(
+        Box<MIRExprLValue<'source, TTypechecked>>,
+        Vec<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    Ref(
+        //you can only ref an lvalue
+        Box<MIRExprLValue<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    UnaryExpression(
+        SpannedOperator,
+        Box<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    Array(
+        Vec<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MIRExpr<'source, TTypechecked> {
+    RValue(MIRExprRValue<'source, TTypechecked>),
+    LValue(MIRExprLValue<'source, TTypechecked>),
+    #[allow(dead_code)]
+    TypecheckTag(TTypechecked),
+}
+
+impl<'source, T> MIRExpr<'source, T> {
+    pub fn get_type(&self) -> TypeInstanceId {
+        match self {
+            MIRExpr::RValue(rvalue_expr) => match rvalue_expr {
+                MIRExprRValue::Literal(_, type_id, _) => *type_id,
+                MIRExprRValue::BinaryOperation(_, _, _, type_id, _) => *type_id,
+                MIRExprRValue::MethodCall(_, _, _, type_id, _) => *type_id,
+                MIRExprRValue::FunctionCall(_, _, type_id, _) => *type_id,
+                MIRExprRValue::Ref(_, type_id, _) => *type_id,
+                MIRExprRValue::UnaryExpression(_, _, type_id, _) => *type_id,
+                MIRExprRValue::Array(_, type_id, _) => *type_id,
+            },
+            MIRExpr::LValue(lvalue) => lvalue.get_type(),
+            MIRExpr::TypecheckTag(_) => panic!("Cannot get type of a typecheck tag"),
+        }
+    }
+
+    pub fn is_lvalue(&self) -> bool {
+        matches!(self, MIRExpr::LValue(_))
+    }
+}
 
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
@@ -55,14 +170,15 @@ a scope and a block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockNode<'source, TTypecheckState> {
     Assign {
-        path: HIRExpr<'source, TypeInstanceId, TTypecheckState>,
-        expression: HIRExpr<'source, TypeInstanceId, TTypecheckState>,
+        path: MIRExprLValue<'source, TTypecheckState>,
+        expression: MIRExpr<'source, TTypecheckState>,
         meta_ast: &'source AST,
         meta_expr: &'source Expr,
     },
     FunctionCall {
+        //@TODO maybe it should be an lvalue expr...
         function: InternedString,
-        args: Vec<HIRExpr<'source, TypeInstanceId, TTypecheckState>>,
+        args: Vec<MIRExpr<'source, TTypecheckState>>,
         meta_ast: &'source AST,
         meta_expr: &'source Expr,
         return_type: TypeInstanceId,
@@ -99,17 +215,14 @@ pub struct MIRScope {
 pub enum MIRBlockFinal<'source, TTypecheckState> {
     //expression, true, else, meta
     If(
-        HIRExpr<'source, TypeInstanceId, TTypecheckState>,
+        MIRExpr<'source, TTypecheckState>,
         BlockId,
         BlockId,
-        HIRAstMetadata<'source>,
+        MIRAstMetadata<'source>,
     ),
     GotoBlock(BlockId),
-    Return(
-        HIRExpr<'source, TypeInstanceId, TTypecheckState>,
-        HIRAstMetadata<'source>,
-    ),
-    EmptyReturn(HIRAstMetadata<'source>),
+    Return(MIRExpr<'source, TTypecheckState>, MIRAstMetadata<'source>),
+    EmptyReturn(MIRAstMetadata<'source>),
 }
 
 /*MIRBlock is the definition of an executable chunk of code.
@@ -131,8 +244,8 @@ pub struct MIRBlock<'source, TTypecheckState> {
 pub struct MIRMaybeUnfinishedBlock<'source> {
     pub index: usize,
     pub scope: ScopeId,
-    pub finish: Option<MIRBlockFinal<'source, NotChecked>>,
-    pub block: Vec<MIRBlockNode<'source, NotChecked>>,
+    pub finish: Option<MIRBlockFinal<'source, NotCheckedSimplified>>,
+    pub block: Vec<MIRBlockNode<'source, NotCheckedSimplified>>,
 }
 
 pub type TypecheckedMIRBlock<'source> = MIRBlock<'source, Checked>;
@@ -143,6 +256,243 @@ struct MIRFunctionEmitter<'source> {
     blocks: Vec<MIRMaybeUnfinishedBlock<'source>>,
     scopes: Vec<MIRScope>,
     goto_stack: Vec<BlockId>,
+}
+
+//returns the simplified expression, and whether the expression was simplified at all. Can be called until no simplification is possible.
+fn simplify_expression<'a, T>(
+    expr: HIRExpr<'a, TypeInstanceId, T>,
+) -> (HIRExpr<'a, TypeInstanceId, NotCheckedSimplified>, bool) {
+    match expr {
+        HIRExpr::Literal(literal, ty, meta) => (HIRExpr::Literal(literal, ty, meta), false),
+        HIRExpr::Variable(var_name, ty, meta) => (HIRExpr::Variable(var_name, ty, meta), false),
+        //@TODO casting a literal to a type can be optimized here, just change the inferred type instead of generating an actual cast
+        HIRExpr::Cast(expr, ty, meta) => {
+            let (expr, simplified) = simplify_expression(*expr);
+            (HIRExpr::Cast(Box::new(expr), ty, meta), simplified)
+        }
+        HIRExpr::BinaryOperation(lhs, op, rhs, ty, meta) => {
+            let (lhs, simplified_lhs) = simplify_expression(*lhs);
+            let (rhs, simplified_rhs) = simplify_expression(*rhs);
+            let simplified = simplified_lhs || simplified_rhs;
+            (
+                HIRExpr::BinaryOperation(lhs.into(), op, rhs.into(), ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::MethodCall(object, name, args, ty, meta) => {
+            let (object, simplified_object) = simplify_expression(*object);
+            let (args, simplified_args): (_, Vec<_>) =
+                args.into_iter().map(|arg| simplify_expression(arg)).unzip();
+            let simplified =
+                simplified_object || simplified_args.iter().any(|simplified| *simplified);
+            (
+                HIRExpr::MethodCall(object.into(), name, args, ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::FunctionCall(function, args, ty, meta) => {
+            let (function, simplified_function) = simplify_expression(*function);
+            let (args, simplified_args): (Vec<_>, Vec<_>) =
+                args.into_iter().map(|arg| simplify_expression(arg)).unzip();
+            let simplified =
+                simplified_function || simplified_args.iter().any(|simplified| *simplified);
+            (
+                HIRExpr::FunctionCall(function.into(), args, ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::Deref(derefed_expr, ty, meta) => match *derefed_expr {
+            HIRExpr::Ref(refed_expr, _, _) => {
+                //we can remove the deref and the ref
+                let (refed_expr, simplified) = simplify_expression(*refed_expr);
+                //we might lose some metadata here but it's okay I guess
+                (refed_expr, simplified)
+            }
+            _ => {
+                let (derefed_expr, simplified) = simplify_expression(*derefed_expr);
+                (HIRExpr::Deref(Box::new(derefed_expr), ty, meta), simplified)
+            }
+        },
+        HIRExpr::Ref(refed_expr, ty, meta) => match *refed_expr {
+            //do the inverse as the code above
+            HIRExpr::Deref(derefed_expr, _, _) => {
+                let (derefed_expr, simplified) = simplify_expression(*derefed_expr);
+                (derefed_expr, simplified)
+            }
+            _ => {
+                let (refed_expr, simplified) = simplify_expression(*refed_expr);
+                (HIRExpr::Ref(Box::new(refed_expr), ty, meta), simplified)
+            }
+        },
+        HIRExpr::UnaryExpression(op, rhs, ty, meta) => {
+            let (rhs, simplified) = simplify_expression(*rhs);
+            (
+                HIRExpr::UnaryExpression(op, rhs.into(), ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::MemberAccess(obj, member, ty, meta) => {
+            let (obj, simplified) = simplify_expression(*obj);
+            (
+                HIRExpr::MemberAccess(obj.into(), member, ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::Array(items, ty, meta) => {
+            let (items, simplified_items): (Vec<_>, Vec<_>) = items
+                .into_iter()
+                .map(|item| simplify_expression(item))
+                .unzip();
+            let simplified = simplified_items.iter().any(|simplified| *simplified);
+            (HIRExpr::Array(items, ty, meta), simplified)
+        }
+        HIRExpr::TypecheckTag(_) => panic!("TypecheckTag should have been removed by now"),
+    }
+}
+
+fn hir_expr_to_mir<'a, T>(
+    file: FileTableIndex,
+    element: RootElementType,
+    expr: HIRExpr<'a, TypeInstanceId, T>,
+    errors: &mut TypeErrors<'a>,
+) -> Result<MIRExpr<'a, NotCheckedSimplified>, CompilerError> {
+    let (mut current_expr, mut simplified) = simplify_expression(expr);
+    loop {
+        if !simplified {
+            return convert_to_mir(file, element, current_expr, errors);
+        }
+        (current_expr, simplified) = simplify_expression(current_expr);
+    }
+}
+
+macro_rules! expect_lvalue {
+    ($element:expr, $file:expr, $expr:expr, $errors:expr, $meta:expr) => {
+        match $expr {
+            MIRExpr::RValue(_) => {
+                $errors.invalid_derefed_type.push(
+                    DerefOnNonPointerError {
+                        attempted_type: $expr.get_type(),
+                    }
+                    .at_spanned($element, $file, $meta),
+                );
+                return Err(CompilerError::TypeCheckError)
+            }
+            MIRExpr::LValue(lvalue) => {
+                lvalue
+            }
+            MIRExpr::TypecheckTag(_) => unreachable!(),
+        }
+
+    };
+}
+
+fn convert_to_mir<'a>(
+    file: FileTableIndex,
+    element: RootElementType,
+    expr: HIRExpr<'a, TypeInstanceId, NotCheckedSimplified>,
+    errors: &mut TypeErrors<'a>,
+) -> Result<MIRExpr<'a, NotCheckedSimplified>, CompilerError> {
+    match expr {
+        HIRExpr::Literal(literal, ty, meta) => {
+            let mir_literal: LiteralMIRExpr = match literal {
+                LiteralHIRExpr::Integer(i) => LiteralMIRExpr::Integer(i),
+                LiteralHIRExpr::Float(f) => LiteralMIRExpr::Float(f),
+                LiteralHIRExpr::String(s) => LiteralMIRExpr::String(s),
+                LiteralHIRExpr::Boolean(b) => LiteralMIRExpr::Boolean(b),
+                LiteralHIRExpr::None => todo!("None not implemented in MIR"),
+            };
+            Ok(MIRExpr::RValue(MIRExprRValue::Literal(
+                mir_literal,
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::Variable(name, ty, meta) => {
+            Ok(MIRExpr::LValue(MIRExprLValue::Variable(name, ty, meta)))
+        }
+        HIRExpr::Cast(..) => todo!(),
+        HIRExpr::BinaryOperation(lhs, op, rhs, ty, meta) => {
+            let lhs = hir_expr_to_mir(file, element, *lhs, errors)?;
+            let rhs = hir_expr_to_mir(file, element, *rhs, errors)?;
+            Ok(MIRExpr::RValue(MIRExprRValue::BinaryOperation(
+                lhs.into(),
+                op,
+                rhs.into(),
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::MethodCall(obj, method_name, args, ty, meta) => {
+            let obj = hir_expr_to_mir(file, element, *obj, errors)?;
+            let args: Result<Vec<_>, _> = args
+                .into_iter()
+                .map(|arg| hir_expr_to_mir(file, element, arg, errors))
+                .collect();
+           
+            Ok(MIRExpr::RValue(MIRExprRValue::MethodCall(
+                obj.into(),
+                method_name,
+                args?,
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::FunctionCall(function_expr, args, ty, meta) => {
+            let function_expr = hir_expr_to_mir(file, element, *function_expr, errors)?;
+            let args: Result<Vec<_>, _> = args
+                .into_iter()
+                .map(|arg| hir_expr_to_mir(file, element, arg, errors))
+                .collect();
+
+            let function_lvalue = expect_lvalue!(element, file, function_expr, errors, meta);
+
+            Ok(MIRExpr::RValue(MIRExprRValue::FunctionCall(
+                function_lvalue.into(),
+                args?,
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::Deref(expr, ty, meta) => {
+            let expr = hir_expr_to_mir(file, element, *expr, errors)?;
+            Ok(MIRExpr::LValue(MIRExprLValue::Deref(expr.into(), ty, meta)))
+        }
+        HIRExpr::Ref(expr, ty, meta) => {
+            let expr = hir_expr_to_mir(file, element, *expr, errors)?;
+
+            let ref_lvalue = expect_lvalue!(element, file, expr, errors, meta);
+
+           
+            Ok(MIRExpr::RValue(MIRExprRValue::Ref(ref_lvalue.into(), ty, meta)))
+ 
+        }
+        HIRExpr::UnaryExpression(op, rhs, ty, meta) => {
+            let rhs = hir_expr_to_mir(file, element, *rhs, errors)?;
+            Ok(MIRExpr::RValue(MIRExprRValue::UnaryExpression(
+                op,
+                rhs.into(),
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::MemberAccess(obj, field, ty, meta) => {
+            let obj = hir_expr_to_mir(file, element, *obj, errors)?;
+            Ok(MIRExpr::LValue(MIRExprLValue::MemberAccess(
+                obj.into(),
+                field,
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::Array(items, ty, meta) => {
+            let items: Result<Vec<_>, _> = items
+                .into_iter()
+                .map(|item| hir_expr_to_mir(file, element, item, errors))
+                .collect();
+            Ok(MIRExpr::RValue(MIRExprRValue::Array(items?, ty, meta)))
+        }
+        HIRExpr::TypecheckTag(_) => panic!("TypecheckTag should have been removed by now"),
+    }
 }
 
 impl<'source> MIRFunctionEmitter<'source> {
@@ -156,7 +506,7 @@ impl<'source> MIRFunctionEmitter<'source> {
         }
     }
 
-    fn emit(&mut self, node: MIRBlockNode<'source, NotChecked>) {
+    fn emit(&mut self, node: MIRBlockNode<'source, NotCheckedSimplified>) {
         self.blocks[self.current_block.0].block.push(node);
     }
 
@@ -209,7 +559,7 @@ impl<'source> MIRFunctionEmitter<'source> {
 
     fn finish_with_branch(
         &mut self,
-        condition: HIRExpr<'source, TypeInstanceId>,
+        condition: MIRExpr<'source, NotCheckedSimplified>,
         true_branch: BlockId,
         false_branch: BlockId,
         meta_ast: HIRAstMetadata<'source>,
@@ -224,7 +574,7 @@ impl<'source> MIRFunctionEmitter<'source> {
 
     fn finish_with_return(
         &mut self,
-        expr: HIRExpr<'source, TypeInstanceId>,
+        expr: MIRExpr<'source, NotCheckedSimplified>,
         meta_ast: HIRAstMetadata<'source>,
     ) {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, meta_ast));
@@ -234,7 +584,7 @@ impl<'source> MIRFunctionEmitter<'source> {
         self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::EmptyReturn(meta_ast));
     }
 
-    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<'source, NotChecked>>) {
+    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<'source, NotCheckedSimplified>>) {
         let blocks = self
             .blocks
             .into_iter()
@@ -275,9 +625,12 @@ impl<'source> MIRFunctionEmitter<'source> {
 //returns the "root block" that this execution generated (or started with)
 #[allow(clippy::too_many_lines)] //too lazy for now, and I think it's ok here
 fn process_body<'source>(
+    file: FileTableIndex,
+    element: RootElementType,
     emitter: &mut MIRFunctionEmitter<'source>,
+    errors: &mut TypeErrors<'source>,
     body: Vec<InferredTypeHIR<'source>>,
-) {
+) -> Result<(), CompilerError> {
     for hir in body {
         match hir {
             HIR::Assign {
@@ -286,12 +639,27 @@ fn process_body<'source>(
                 meta_ast,
                 meta_expr,
             } => {
-                emitter.emit(MIRBlockNode::Assign {
-                    path,
-                    expression,
-                    meta_ast,
-                    meta_expr,
-                });
+                let mir_expr = hir_expr_to_mir(file, element, path, errors)?;
+
+                match mir_expr {
+                    MIRExpr::RValue(_) => {
+                        errors.invalid_derefed_type.push(
+                            DerefOnNonPointerError {
+                                attempted_type: mir_expr.get_type(),
+                            }
+                            .at_spanned(element, file, meta_expr),
+                        );
+                    }
+                    MIRExpr::LValue(lvalue) => {
+                        emitter.emit(MIRBlockNode::Assign {
+                            path: lvalue,
+                            expression: hir_expr_to_mir(file, element, expression, errors)?,
+                            meta_ast,
+                            meta_expr,
+                        });
+                    }
+                    MIRExpr::TypecheckTag(_) => unreachable!(),
+                }
             }
             HIR::Declare {
                 var,
@@ -320,8 +688,8 @@ fn process_body<'source>(
                 emitter.set_current_block(new_block);
                 //and *finally* assign the variable
                 emitter.emit(MIRBlockNode::Assign {
-                    path: HIRExpr::Variable(var, expression.get_type(), meta_expr),
-                    expression,
+                    path: MIRExprLValue::Variable(var, expression.get_type(), meta_expr),
+                    expression: hir_expr_to_mir(file, element, expression, errors)?,
                     meta_ast,
                     meta_expr,
                 });
@@ -343,11 +711,14 @@ fn process_body<'source>(
             } => {
                 match &function {
                     HIRExpr::Variable(var, function_type, ..) => {
-                        let pending_args = args.iter().map(std::clone::Clone::clone).collect();
+                        let pending_args: Result<Vec<_>, _> = args
+                            .into_iter()
+                            .map(|x| hir_expr_to_mir(file, element, x, errors))
+                            .collect();
 
                         emitter.emit(MIRBlockNode::FunctionCall {
                             function: *var,
-                            args: pending_args,
+                            args: pending_args?,
                             meta_ast,
                             meta_expr,
                             return_type: *function_type,
@@ -378,7 +749,7 @@ fn process_body<'source>(
 
                 //go to the while block
                 emitter.set_current_block(while_body_block);
-                process_body(emitter, body);
+                process_body(file, element, emitter, errors, body)?;
 
                 emitter.pop_goto_block();
 
@@ -397,7 +768,7 @@ fn process_body<'source>(
 
                 emitter.set_current_block(current_block);
                 emitter.finish_with_branch(
-                    expr,
+                    hir_expr_to_mir(file, element, expr, errors)?,
                     while_body_block, //return to the block
                     fallback_block,   //go to the fallback block
                     meta_ast,
@@ -431,7 +802,7 @@ fn process_body<'source>(
                     let true_branch_block = emitter.new_block(true_branch_scope);
                     //go to the true branch block
                     emitter.set_current_block(true_branch_block);
-                    process_body(emitter, true_branch_hir);
+                    process_body(file, element, emitter, errors, true_branch_hir)?;
 
                     //does the branch have a return instruction, or is already finished
                     let emitted_block_returns =
@@ -461,7 +832,7 @@ fn process_body<'source>(
                     //go to the false branch block
                     emitter.set_current_block(false_branch_block);
 
-                    process_body(emitter, false_branch_hir);
+                    process_body(file, element, emitter, errors, false_branch_hir)?;
 
                     let emitted_block_returns =
                         emitter.check_if_block_is_finished(false_branch_block);
@@ -470,7 +841,12 @@ fn process_body<'source>(
                     emitter.set_current_block(current_block);
 
                     //emit the branch
-                    emitter.finish_with_branch(condition, true_block, false_branch_block, ast);
+                    emitter.finish_with_branch(
+                        hir_expr_to_mir(file, element, condition, errors)?,
+                        true_block,
+                        false_branch_block,
+                        ast,
+                    );
 
                     if !emitted_block_returns {
                         if fallback_scope_and_block.is_none() {
@@ -495,20 +871,26 @@ fn process_body<'source>(
                         fallback_scope_and_block = Some(fallback_block);
                     }
                     let fallback_block = fallback_scope_and_block.unwrap();
-                    emitter.finish_with_branch(condition, true_block, fallback_block, ast);
+                    emitter.finish_with_branch(
+                        hir_expr_to_mir(file, element, condition, errors)?,
+                        true_block,
+                        fallback_block,
+                        ast,
+                    );
 
                     //in this case the function continues in the fallback block
                     emitter.set_current_block(fallback_block);
                 }
             }
             HIR::Return(expr, meta_ast) => {
-                emitter.finish_with_return(expr, meta_ast);
+                emitter.finish_with_return(hir_expr_to_mir(file, element, expr, errors)?, meta_ast);
             }
             HIR::EmptyReturn(meta_ast) => {
                 emitter.finish_with_empty_return(meta_ast);
             }
         }
     }
+    Ok(())
 }
 
 fn generate_or_get_fallback_block(
@@ -526,15 +908,17 @@ fn generate_or_get_fallback_block(
 }
 
 pub fn process_hir_funcdecl<'source>(
+    file: FileTableIndex,
     function_name: InternedString,
     parameters: Vec<HIRTypedBoundName<TypeInstanceId>>,
     body: Vec<InferredTypeHIR<'source>>,
     return_type: TypeInstanceId,
     is_intrinsic: bool,
-    root: HIRAstMetadata<'source>
-) -> MIRTopLevelNode<'source, NotChecked> {
+    errors: &mut TypeErrors<'source>,
+    root: HIRAstMetadata<'source>,
+) -> Result<MIRTopLevelNode<'source, NotCheckedSimplified>, CompilerError> {
     if is_intrinsic {
-        return MIRTopLevelNode::IntrinsicFunction {
+        return Ok(MIRTopLevelNode::IntrinsicFunction {
             function_name,
             parameters: parameters
                 .iter()
@@ -544,7 +928,7 @@ pub fn process_hir_funcdecl<'source>(
                 })
                 .collect::<Vec<_>>(),
             return_type,
-        };
+        });
     }
 
     let mut emitter = MIRFunctionEmitter::new();
@@ -558,7 +942,7 @@ pub fn process_hir_funcdecl<'source>(
         emitter.scope_add_variable(function_zero_scope, param.name, param.typename);
     }
 
-    process_body(&mut emitter, body);
+    process_body(file, RootElementType::Function(function_name), &mut emitter, errors, body)?;
 
     //check for blocks with no returns (like fallback blocks or blocks that the user didnt specify a return)
     for block_id in 0..emitter.blocks.len() {
@@ -570,7 +954,7 @@ pub fn process_hir_funcdecl<'source>(
     }
 
     let (scopes, body) = emitter.finish();
-    return MIRTopLevelNode::DeclareFunction {
+    return Ok(MIRTopLevelNode::DeclareFunction {
         function_name,
         parameters: parameters
             .iter()
@@ -582,12 +966,14 @@ pub fn process_hir_funcdecl<'source>(
         body,
         scopes,
         return_type,
-    };
+    });
 }
 
-pub fn hir_to_mir(
-    hir_nodes: Vec<InferredTypeHIRRoot>,
-) -> Vec<MIRTopLevelNode<NotChecked>> {
+pub fn hir_to_mir<'source>(
+    file: FileTableIndex,
+    hir_nodes: Vec<InferredTypeHIRRoot<'source>>,
+    errors: &mut TypeErrors<'source>,
+) -> Result<Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>, CompilerError> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
@@ -600,13 +986,15 @@ pub fn hir_to_mir(
                 is_intrinsic,
             } => {
                 let fdecl = process_hir_funcdecl(
+                    file,
                     function_name,
                     parameters,
                     body,
                     return_type,
                     is_intrinsic,
-                    meta
-                );
+                    errors,
+                    meta,
+                )?;
                 top_levels.push(fdecl);
             }
             HIRRoot::StructDeclaration {
@@ -619,7 +1007,7 @@ pub fn hir_to_mir(
             }
         }
     }
-    top_levels
+    Ok(top_levels)
 }
 
 #[cfg(test)]
@@ -1554,11 +1942,8 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(
-            result.mir.last().unwrap(),
-            &result.type_db,
-            &src.interner,
-        );
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
         println!("{final_result}");
         let expected = "
 def main() -> i32:
@@ -1721,6 +2106,142 @@ def main() -> Void:
         usescope 8
         result = result + y
         return";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn ref_deref_pattern_is_cancelled_out() {
+        let src = parse(
+            "
+def main(args: array<str>) -> ptr<str>:
+    return &args[0]",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir_node(
+            &result.mir.last().unwrap(),
+            &result.type_db,
+            &src.interner,
+        );
+        //the return would be actually &*args.__index_ptr__(0) but we should cancel out the deref &*
+        let expected = "
+def main(args: array<str>) -> ptr<str>:
+    defscope 0:
+        inheritscope 0
+        args : array<str>
+    defblock 0:
+        usescope 0
+        return args.__index_ptr__(0)
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn deref_ref_pattern_is_cancelled_out() {
+        let src = parse(
+            "
+def main():
+    some_var = 1
+    deref_ref = *&some_var
+",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir_node(
+            &result.mir.last().unwrap(),
+            &result.type_db,
+            &src.interner,
+        );
+        println!("{final_result}");
+        //the return would be actually &*args.__index_ptr__(0) but we should cancel out the deref &*
+        let expected = "
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        some_var : i32
+    defscope 2:
+        inheritscope 1
+    defscope 3:
+        inheritscope 2
+        deref_ref : i32
+    defscope 4:
+        inheritscope 3
+    defblock 0:
+        usescope 0
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        some_var = 1
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        gotoblock 3
+    defblock 3:
+        usescope 3
+        deref_ref = some_var
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        return
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn multiple_ref_deref_cancellation() {
+        let src = parse(
+            "
+def main(args: array<str>) -> ptr<str>:
+    return &*&*&args[0]",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir_node(
+            &result.mir.last().unwrap(),
+            &result.type_db,
+            &src.interner,
+        );
+        let expected = "
+def main(args: array<str>) -> ptr<str>:
+    defscope 0:
+        inheritscope 0
+        args : array<str>
+    defblock 0:
+        usescope 0
+        return args.__index_ptr__(0)
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn multiple_deref_ref_cancellation() {
+        let src = parse(
+            "
+def main(args: array<str>) -> str:
+    return *&*&args[0]",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir_node(
+            &result.mir.last().unwrap(),
+            &result.type_db,
+            &src.interner,
+        );
+        let expected = "
+def main(args: array<str>) -> str:
+    defscope 0:
+        inheritscope 0
+        args : array<str>
+    defblock 0:
+        usescope 0
+        return *args.__index_ptr__(0)
+";
 
         assert_eq!(expected.trim(), final_result.trim());
     }

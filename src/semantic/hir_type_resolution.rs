@@ -19,9 +19,7 @@ impl RootElementType {
     #[allow(dead_code)]
     pub fn get_name(&self, interner: &StringInterner) -> String {
         match self {
-            RootElementType::Struct(s) | RootElementType::Function(s) => {
-                interner.get_string(*s)
-            }
+            RootElementType::Struct(s) | RootElementType::Function(s) => interner.get_string(*s),
         }
     }
 
@@ -39,16 +37,19 @@ pub fn hir_type_to_usage(
     type_db: &TypeInstanceManager,
     errors: &mut TypeErrors,
     location: TokenSpanIndex,
-    file: FileTableIndex
+    file: FileTableIndex,
 ) -> Result<TypeUsage, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
             if let Some(type_id) = type_db.constructors.find_by_name(*name) {
                 Ok(TypeUsage::Given(type_id.id))
             } else {
-                errors.type_not_found.push(TypeNotFound {
-                    type_name: HIRType::Simple(*name),
-                }.at(on_code_element, file, location));
+                errors.type_not_found.push(
+                    TypeNotFound {
+                        type_name: HIRType::Simple(*name),
+                    }
+                    .at(on_code_element, file, location),
+                );
                 Err(CompilerError::TypeInferenceError)
             }
         }
@@ -57,15 +58,19 @@ pub fn hir_type_to_usage(
                 let base_id = type_id.id;
                 let mut generics = vec![];
                 for arg in args.iter() {
-                    let usage = hir_type_to_usage(on_code_element, arg, type_db, errors, location, file)?;
+                    let usage =
+                        hir_type_to_usage(on_code_element, arg, type_db, errors, location, file)?;
                     generics.push(usage);
                 }
 
                 Ok(TypeUsage::Parameterized(base_id, generics))
             } else {
-                errors.type_not_found.push(TypeNotFound {
-                    type_name: HIRType::Simple(*base),
-                }.at(on_code_element, file, location));
+                errors.type_not_found.push(
+                    TypeNotFound {
+                        type_name: HIRType::Simple(*base),
+                    }
+                    .at(on_code_element, file, location),
+                );
                 Err(CompilerError::TypeInferenceError)
             }
         }

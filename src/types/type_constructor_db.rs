@@ -85,6 +85,7 @@ pub struct CommonTypeConstructors {
     pub array: TypeConstructorId,
     pub function: TypeConstructorId,
     pub ptr: TypeConstructorId,
+    pub str: TypeConstructorId,
 }
 
 pub struct TypeConstructorDatabase<'interner> {
@@ -97,9 +98,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
     pub fn new(interner: &'interner StringInterner) -> Self {
         let mut item = Self {
             types: vec![],
-            common_types: CommonTypeConstructors {
-                ..Default::default()
-            },
+            common_types: Default::default(),
             interner,
         };
         item.init_builtin();
@@ -390,15 +389,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             TypeSign::Unsigned,
             istr("function"),
         );
-        self.add_method(
-            arr_type,
-            TypeConstructorFunctionDeclaration {
-                name: istr("__index__"),
-                args: vec![TypeUsage::Given(u32_type)],
-                return_type: TypeUsage::Generic(GenericParameter(istr("TItem"))),
-            },
-        );
-        
+
         self.add_method(
             arr_type,
             TypeConstructorFunctionDeclaration {
@@ -410,7 +401,6 @@ impl<'interner> TypeConstructorDatabase<'interner> {
                 ),
             },
         );
-        
 
         //u32_type
         self.add_simple_field(arr_type, istr("length"), u32_type);

@@ -1,5 +1,5 @@
-use crate::ast::lexer::Operator;
-use crate::interner::{StringInterner};
+
+use crate::interner::StringInterner;
 
 use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR};
 
@@ -7,10 +7,6 @@ use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::hir::HIRRoot;
 use super::type_name_printer::TypeNamePrinter;
-
-pub fn operator_str(op: Operator) -> String {
-    op.to_string()
-}
 
 pub struct HIRExprPrinter<'interner> {
     interner: &'interner StringInterner,
@@ -49,7 +45,7 @@ impl<'interner> HIRExprPrinter<'interner> {
             HIRExpr::BinaryOperation(var, op, var2, ..) => format!(
                 "{} {} {}",
                 self.print(var),
-                operator_str(op.0),
+                op.0.to_string(),
                 self.print(var2)
             ),
             HIRExpr::Array(items, ..) => {
@@ -61,13 +57,15 @@ impl<'interner> HIRExprPrinter<'interner> {
                 format!("[{array_items_str}]")
             }
             HIRExpr::UnaryExpression(op, expr, ..) => {
-                format!("{}{}", operator_str(op.0), self.print(expr))
+                format!("{}{}", op.0.to_string(), self.print(expr))
             }
             HIRExpr::MemberAccess(obj, elem, ..) => {
                 format!("{}.{}", self.print(obj), elem.to_string(self.interner))
             }
             HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".into(),
             HIRExpr::TypecheckTag(_) => unreachable!(),
+            HIRExpr::Deref(expr, ..) => format!("*{}", self.print(expr)),
+            HIRExpr::Ref(expr, ..) => format!("&{}", self.print(expr)),
         }
     }
 

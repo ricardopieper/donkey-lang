@@ -1,6 +1,9 @@
+use core::panic;
 use std::fs;
 
-use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotChecked};
+use super::hir::{
+    ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotCheckedSimplified,
+};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 use super::type_checker::typecheck;
@@ -63,12 +66,13 @@ impl Source {
             FileTableIndex(prev_count),
             file_table_entry.contents,
             &self.interner,
-        ).unwrap();
+        )
+        .unwrap();
 
         self.file_table.push(file_table_entry);
 
-
-        let (ast, _) = parser::parse_ast(&self.file_table[prev_count].token_table, &self.file_table);
+        let (ast, _) =
+            parser::parse_ast(&self.file_table[prev_count].token_table, &self.file_table);
         println!("{}\n", print_ast(&ast, &self.interner));
         let root = parser::AST::Root(ast);
         self.file_table.last_mut().unwrap().ast = root;
@@ -87,7 +91,7 @@ impl Source {
 
 pub struct Analyzer<'source, 'interner> {
     pub mir: Vec<MIRTopLevelNode<'source, Checked>>,
-    pub unchecked_mir: Vec<MIRTopLevelNode<'source, NotChecked>>,
+    pub unchecked_mir: Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>,
     pub type_db: TypeInstanceManager<'interner>,
     pub globals: NameRegistry,
     pub type_errors: TypeErrors<'source>,
@@ -112,12 +116,17 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
     pub fn print_errors(&self) {
         println!(
             "{}",
-            TypeErrorPrinter::new(&self.type_errors, &self.type_db, &self.source.interner, &self.source.file_table)
+            TypeErrorPrinter::new(
+                &self.type_errors,
+                &self.type_db,
+                &self.source.interner,
+                &self.source.file_table
+            )
         )
     }
 
     #[allow(dead_code)]
-    pub fn generate_mir(&mut self, source: &'source Source) {
+    pub fn generate_mir_without_typecheck(&mut self, source: &'source Source) {
         self.generate_mir_and_typecheck(source, false);
     }
     pub fn analyze(&mut self, source: &'source Source) {
@@ -132,7 +141,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                     &mut self.globals,
                     &mut self.type_errors,
                     ast_hir,
-                    file.index
+                    file.index,
                 ) {
                     Ok(hir) => hir,
                     Err(e) => {
@@ -142,9 +151,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                             &source.interner,
                             &source.file_table,
                         );
-                        panic!(
-                            "build_name_registry_and_resolve_signatures {e:?}\n{printer}"
-                        );
+                        panic!("build_name_registry_and_resolve_signatures {e:?}\n{printer}");
                     }
                 };
 
@@ -158,7 +165,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                 &first_assignment_hir,
                 &mut self.type_errors,
                 &source.interner,
-                file.index
+                file.index,
             ) {
                 panic!("detect_undeclared_vars_and_redeclarations Err: {e:#?}");
             }
@@ -169,30 +176,40 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                 first_assignment_hir,
                 &mut self.type_errors,
                 &source.interner,
-                file.index
+                file.index,
             ) {
                 Ok(_) if self.type_errors.count() > 0 => {
-                    let printer =
-                        TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.interner, &source.file_table);
-                    panic!("{}", printer);
+                    let printer = TypeErrorPrinter::new(
+                        &self.type_errors,
+                        &self.type_db,
+                        &source.interner,
+                        &source.file_table,
+                    );
+                    panic!("Type errors:\n{}", printer);
                 }
                 Ok(final_hir) => {
                     self.hir.push(final_hir.clone());
-                    let mir = hir_to_mir(final_hir);
-                    if do_typecheck {
-                        let typechecked = typecheck(
-                            mir,
-                            &self.type_db,
-                            &self.globals,
-                            &mut self.type_errors,
-                            &source.interner,
-                            file.index
-                        );
-                        if self.type_errors.count() == 0 {
-                            self.mir.extend(typechecked.unwrap());
+                    let mir = hir_to_mir(file.index, final_hir, &mut self.type_errors);
+
+                    match mir {
+                        Ok(mir) => {
+                            if do_typecheck {
+                                let typechecked = typecheck(
+                                    mir,
+                                    &self.type_db,
+                                    &self.globals,
+                                    &mut self.type_errors,
+                                    &source.interner,
+                                    file.index,
+                                );
+                                if self.type_errors.count() == 0 {
+                                    self.mir.extend(typechecked.unwrap());
+                                }
+                            } else {
+                                self.unchecked_mir.extend(mir);
+                            }
                         }
-                    } else {
-                        self.unchecked_mir.extend(mir);
+                        Err(_) => {}
                     }
                 }
                 Err(_) => {}
@@ -205,14 +222,18 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
 pub mod test_utils {
     use crate::{
         interner::StringInterner,
-        semantic::{hir::NotChecked, mir::MIRTopLevelNode},
-        types::{type_errors::TypeErrorPrinter, type_instance_db::TypeInstanceManager},
+        semantic::{
+            hir::{NotCheckedSimplified},
+            mir::MIRTopLevelNode,
+        },
+        types::{type_instance_db::TypeInstanceManager},
     };
 
     use super::{Analyzer, Source};
 
     macro_rules! tls_interner {
         ($interner:expr) => {
+            #[allow(dead_code)]
             fn istr(str: &'static str) -> InternedString {
                 $interner.with(|i| i.get(str))
             }
@@ -221,7 +242,7 @@ pub mod test_utils {
     pub(crate) use tls_interner;
 
     pub struct AnalysisWithoutTypecheckResult<'source, 'interner> {
-        pub mir: Vec<MIRTopLevelNode<'source, NotChecked>>,
+        pub mir: Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>,
         pub type_db: TypeInstanceManager<'interner>,
         pub interner: &'interner StringInterner,
     }
@@ -242,20 +263,12 @@ pub mod test_utils {
     pub fn do_analysis(source: &Source) -> Analyzer {
         let mut ctx = Analyzer::new(source);
         ctx.analyze(source);
-
-        if ctx.type_errors.count() > 0 {
-            let printer = TypeErrorPrinter::new(&ctx.type_errors, &ctx.type_db, &source.interner, &source.file_table);
-            println!("\nTest failed with type errors:\n{printer}");
-        }
-
         ctx
     }
 
-    pub fn do_analysis_no_typecheck(
-        source: &Source,
-    ) -> AnalysisWithoutTypecheckResult {
+    pub fn do_analysis_no_typecheck(source: &Source) -> AnalysisWithoutTypecheckResult {
         let mut ctx = Analyzer::new(source);
-        ctx.generate_mir(source);
+        ctx.generate_mir_without_typecheck(source);
         AnalysisWithoutTypecheckResult {
             mir: ctx.unchecked_mir,
             type_db: ctx.type_db,

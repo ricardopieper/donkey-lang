@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::fmt::Write;
 
-
+use crate::ast::lexer::Operator;
 use crate::ast::parser::ASTIfStatement;
 use crate::ast::parser::SpanAST;
 use crate::ast::parser::SpannedOperator;
@@ -14,6 +14,7 @@ use crate::interner::StringInterner;
 use crate::types::type_constructor_db::GenericParameter;
 use crate::types::type_constructor_db::TypeUsage;
 use crate::types::type_instance_db::TypeInstanceId;
+use crate::types::type_instance_db::TypeInstanceManager;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LiteralHIRExpr {
@@ -78,6 +79,8 @@ pub enum HIRTypeDef {
 pub struct NotChecked;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checked;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotCheckedSimplified;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRExpr<'source, TExprType, TTypechecked = NotChecked> {
@@ -108,6 +111,16 @@ pub enum HIRExpr<'source, TExprType, TTypechecked = NotChecked> {
     FunctionCall(
         Box<HIRExpr<'source, TExprType, TTypechecked>>,
         Vec<HIRExpr<'source, TExprType, TTypechecked>>,
+        TExprType,
+        HIRExprMetadata<'source>,
+    ),
+    Deref(
+        Box<HIRExpr<'source, TExprType, TTypechecked>>,
+        TExprType,
+        HIRExprMetadata<'source>,
+    ),
+    Ref(
+        Box<HIRExpr<'source, TExprType, TTypechecked>>,
         TExprType,
         HIRExprMetadata<'source>,
     ),
@@ -200,11 +213,45 @@ impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
             | HIRExpr::BinaryOperation(.., t, _)
             | HIRExpr::FunctionCall(.., t, _)
             | HIRExpr::UnaryExpression(.., t, _)
+            | HIRExpr::Deref(.., t, _)
+            | HIRExpr::Ref(.., t, _)
             | HIRExpr::MemberAccess(.., t, _)
             | HIRExpr::Array(.., t, _)
             | HIRExpr::MethodCall(.., t, _)
             | HIRExpr::Variable(.., t, _) => t,
             HIRExpr::TypecheckTag(_) => unreachable!(),
+        }
+    }
+
+    pub(crate) fn can_be_pointed(&self, type_db: &TypeInstanceManager) -> bool {
+        match self {
+            HIRExpr::Literal(..) => false,
+            HIRExpr::Variable(..) => true,
+            HIRExpr::Cast(..) => false,
+            HIRExpr::BinaryOperation(_expr1, op, _expr2, _, _)
+                if op.0 == Operator::Plus || op.0 == Operator::Minus =>
+            {
+                todo!("Pointer arithmetic not implemented")
+            }
+            HIRExpr::BinaryOperation(..) => false,
+            HIRExpr::MethodCall(..) => {
+                //I don't think this is possible, C complains about it for function calls
+                false
+            }
+            HIRExpr::FunctionCall(..) => false,
+            HIRExpr::Deref(..) => {
+                //you can point to a value that has been dereferenced, because to dereference a value
+                //means the value is a pointer or can be pointed
+                true
+            }
+            HIRExpr::Ref(..) => false,
+            HIRExpr::UnaryExpression(..) => false,
+            HIRExpr::MemberAccess(obj, ..) => {
+                //the only way to create a reference to a memberis if the object is an lvalue too
+                obj.can_be_pointed(type_db)
+            }
+            HIRExpr::Array(..) => false,
+            HIRExpr::TypecheckTag(_) => false,
         }
     }
 }
@@ -283,7 +330,7 @@ struct IfTreeNode<'source, TDeclType, TExprType> {
 
 fn convert_expr_to_hir<'source>(
     expr: &'source Expr,
-    interner: &StringInterner
+    interner: &StringInterner,
 ) -> HIRExpr<'source, (), NotChecked> {
     expr_to_hir(expr, interner, false)
 }
@@ -291,14 +338,14 @@ fn convert_expr_to_hir<'source>(
 fn expr_to_hir<'source>(
     expr: &'source Expr,
     interner: &StringInterner,
-    is_in_assignment_lhs: bool,
+    _is_in_assignment_lhs: bool,
 ) -> HIRExpr<'source, (), NotChecked> {
     match expr {
         Expr::IntegerValue(i, _) => HIRExpr::Literal(LiteralHIRExpr::Integer(*i), (), expr),
         Expr::FloatValue(f, _) => HIRExpr::Literal(LiteralHIRExpr::Float(*f), (), expr),
         Expr::StringValue(s) => HIRExpr::Literal(LiteralHIRExpr::String(s.0), (), expr),
         Expr::BooleanValue(b, _) => HIRExpr::Literal(LiteralHIRExpr::Boolean(*b), (), expr),
-        Expr::NoneExpr(_) => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
+        Expr::NoneValue(_) => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
         Expr::Variable(name) => HIRExpr::Variable(name.0, (), expr),
         Expr::FunctionCall(fun_expr, args, _) => match &fun_expr.expr.expr {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
@@ -307,7 +354,7 @@ fn expr_to_hir<'source>(
                     .map(|x| expr_to_hir(&x.expr, interner, false))
                     .collect(),
                 (),
-                expr,
+                &fun_expr.expr.expr,
             ),
             Expr::MemberAccess(obj, var_name) => HIRExpr::MethodCall(
                 expr_to_hir(&obj.expr.expr, interner, false).into(),
@@ -316,16 +363,26 @@ fn expr_to_hir<'source>(
                     .map(|arg| expr_to_hir(&arg.expr, interner, false))
                     .collect(),
                 (),
-                expr,
+                &obj.expr.expr,
             ),
             _ => panic!("Cannot lower function call to HIR: not variable or member access"),
         },
         Expr::IndexAccess(object, index, _) => {
-            let idx = interner.get( if is_in_assignment_lhs { "__index_ptr__" } else { "__index__"});
-            HIRExpr::MethodCall(
-                Box::new(expr_to_hir(&object.expr.expr, interner, false)),
-                idx,
-                vec![expr_to_hir(&index.expr.expr, interner, false)],
+            //this makes all array[index] operations take the form of:
+            //*(array.__index_ptr__(index))
+
+            let idx = interner.get("__index_ptr__");
+            HIRExpr::Deref(
+                HIRExpr::MethodCall(
+                    Box::new(expr_to_hir(&object.expr.expr, interner, false)),
+                    idx,
+                    vec![expr_to_hir(&index.expr.expr, interner, false)],
+                    (),
+                    //pass the entire expr as metadata so that error reporting recognizes this as an index operator
+                    //and not a method call
+                    expr,
+                )
+                .into(),
                 (),
                 expr,
             )
@@ -338,7 +395,12 @@ fn expr_to_hir<'source>(
         Expr::Parenthesized(_) => panic!("parenthesized not expected"),
         Expr::UnaryExpression(op, rhs) => {
             let rhs = expr_to_hir(&rhs.expr.expr, interner, false);
-            HIRExpr::UnaryExpression(*op, rhs.into(), (), expr)
+
+            match op.0 {
+                Operator::Multiply => HIRExpr::Deref(rhs.into(), (), expr),
+                Operator::Ampersand => HIRExpr::Ref(rhs.into(), (), expr),
+                _ => HIRExpr::UnaryExpression(*op, rhs.into(), (), expr),
+            }
         }
         Expr::MemberAccess(object, member) => {
             let object = expr_to_hir(&object.expr.expr, interner, false);
@@ -483,9 +545,7 @@ fn ast_decl_function_to_hir<'source>(
     //escape the scope of the function!
 }
 
-fn create_type_bound_names(
-    parameters: &[TypeBoundName],
-) -> Vec<HIRTypedBoundName<HIRType>> {
+fn create_type_bound_names(parameters: &[TypeBoundName]) -> Vec<HIRTypedBoundName<HIRType>> {
     parameters.iter().map(create_type_bound_name).collect()
 }
 
@@ -683,10 +743,10 @@ mod tests {
     tls_interner!(INTERNER);
     use super::*;
 
-    use crate::ast::lexer::{TokenSpanIndex};
+    use crate::ast::lexer::TokenSpanIndex;
     use crate::ast::parser::{parse_ast, AstSpan};
     use crate::semantic::context::test_utils::tls_interner;
-    use crate::semantic::context::{FileTableIndex, FileTableEntry};
+    use crate::semantic::context::{FileTableEntry, FileTableIndex};
     use crate::semantic::hir;
 
     use crate::semantic::hir_printer::HIRPrinter;
@@ -697,15 +757,16 @@ mod tests {
         let tokens = INTERNER.with(|x| crate::ast::lexer::tokenize(FileTableIndex(0), source, x));
         let tokens_lexed = tokens.unwrap();
 
-        let file_table = &[
-            FileTableEntry{
-                ast: AST::Break(AstSpan{ start: TokenSpanIndex(0), end: TokenSpanIndex(0) }),
-                contents: source,
-                path: "hir_test".to_string(),
-                index: FileTableIndex(0),
-                token_table: tokens_lexed
-            }
-        ];
+        let file_table = &[FileTableEntry {
+            ast: AST::Break(AstSpan {
+                start: TokenSpanIndex(0),
+                end: TokenSpanIndex(0),
+            }),
+            contents: source,
+            path: "hir_test".to_string(),
+            index: FileTableIndex(0),
+            token_table: tokens_lexed,
+        }];
 
         let (ast, _) = parse_ast(&file_table[0].token_table, file_table);
         AST::Root(ast)
@@ -748,7 +809,7 @@ def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
     numbers = [1, 2, -3, minus]
     r1 = my_function(1, 2)
     r2 = my_function2(3, 4)
-    r3 = my_function(numbers.__index__(1), numbers.__index__(2))
+    r3 = my_function(*numbers.__index_ptr__(1), *numbers.__index_ptr__(2))
     print(r1 + r2 + r3)
 def my_function(arg1: UNRESOLVED! i32, arg2: UNRESOLVED! i32) -> UNRESOLVED! i32:
     return arg1 * arg2 / arg2 - arg1
@@ -773,7 +834,7 @@ def main(args: List<String>):
         );
         let expected = "
 def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
-    if args.__index__(0) == 1:
+    if *args.__index_ptr__(0) == 1:
         print(10)
     else:
         print(20)";
@@ -802,7 +863,7 @@ def main(args: List<String>):
 
         let expected = "
 def main(args: UNRESOLVED List<UNRESOLVED! String>) -> UNRESOLVED! Void:
-    arg = args.__index__(0)
+    arg = *args.__index_ptr__(0)
     if arg == 1:
         print(10)
         if arg <= 0:
@@ -886,8 +947,8 @@ def main(x: i32) -> i32:
         let expected = "
 def main(x: UNRESOLVED! i32) -> UNRESOLVED! i32:
     arr = [1, 2, 3]
-    a.__index_ptr__(0) = 1
-    return a.__index__(0)
+    *a.__index_ptr__(0) = 1
+    return *a.__index_ptr__(0)
 ";
 
         let result = build_hir(parsed);

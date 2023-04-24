@@ -1,13 +1,14 @@
-use crate::ast::lexer::{TokenSpanIndex};
+use crate::ast::lexer::TokenSpanIndex;
 use crate::ast::parser::Spanned;
 use crate::interner::{InternedString, StringInterner};
-use crate::semantic::context::{FileTableIndex, FileTableEntry};
+use crate::semantic::context::{FileTableEntry, FileTableIndex};
 
+use crate::semantic::mir::MIRExpr;
+use crate::semantic::mir_printer::MIRExprPrinter;
 use crate::{
     ast::lexer::Operator,
     semantic::{
-        hir::{Checked, HIRExpr, HIRExprMetadata, HIRType, HIRTypeDisplayer},
-        hir_printer::{operator_str, HIRExprPrinter},
+        hir::{Checked, HIRExprMetadata, HIRType, HIRTypeDisplayer},
         hir_type_resolution::RootElementType,
         type_checker::FunctionName,
     },
@@ -101,7 +102,7 @@ impl TypeErrorDisplay for TypeErrorData<TypeMismatch<AssignContext>> {
 
         write!(f, "Assigned type mismatch: {on_element}, assignment to variable {var}: variable has type {var_type_str} but got assigned a value of type {expr_type_str}",
             on_element = self.on_element.diag_name(interner),
-            var = interner.get_string(self.error.context.target_variable_name)
+            var = interner.borrow(self.error.context.target_variable_name)
         )
     }
 }
@@ -292,7 +293,7 @@ impl<'source> TypeErrorDisplay for TypeErrorData<OutOfTypeBounds<'source>> {
 }
 
 pub struct InvalidCast<'source> {
-    pub expr: HIRExpr<'source, TypeInstanceId, Checked>,
+    pub expr: MIRExpr<'source, Checked>,
     pub cast_to: TypeInstanceId,
 }
 impl TypeError for InvalidCast<'_> {}
@@ -308,7 +309,7 @@ impl<'source> TypeErrorDisplay for TypeErrorData<InvalidCast<'source>> {
             f,
             "{on_element}, value {expr} of type {type} cannot be casted to {cast_type}",
             on_element = self.on_element.diag_name(interner),
-            expr = HIRExprPrinter::new(interner).print(&self.error.expr),
+            expr = MIRExprPrinter::new(interner).print(&self.error.expr),
             type = self.error.expr.get_type().as_string(type_db),
             cast_type = self.error.cast_to.as_string(type_db),
         )
@@ -333,7 +334,7 @@ impl TypeErrorDisplay for TypeErrorData<BinaryOperatorNotFound> {
             f,
             "{on_element}, binary operator {operator} not found for types: {lhs_type} {operator} {rhs_type}",
             on_element = self.on_element.diag_name(interner),
-            operator = operator_str(self.error.operator),
+            operator = self.error.operator.to_string(),
             lhs_type = self.error.lhs.as_string(type_db),
             rhs_type = self.error.rhs.as_string(type_db)
         )
@@ -357,7 +358,7 @@ impl TypeErrorDisplay for TypeErrorData<UnaryOperatorNotFound> {
             f,
             "{on_element}, unary operator {operator} not found for type: {rhs_type}",
             on_element = self.on_element.diag_name(interner),
-            operator = operator_str(self.error.operator),
+            operator = self.error.operator.to_string(),
             rhs_type = self.error.rhs.as_string(type_db)
         )
     }
@@ -380,7 +381,7 @@ impl TypeErrorDisplay for TypeErrorData<FieldOrMethodNotFound> {
             f,
             "{on_element}, tried to access field/method {field_or_method} on type {type_name} but no such field or method exists.",
             on_element = self.on_element.diag_name(interner),
-            field_or_method = interner.get_string(self.error.field_or_method),
+            field_or_method = interner.borrow(self.error.field_or_method),
             type_name = self.error.object_type.as_string(type_db)
         )
     }
@@ -470,7 +471,7 @@ impl TypeErrorDisplay for TypeErrorData<TypeInferenceFailure> {
 pub struct UnexpectedTypeInferenceMismatch<'source> {
     pub inferred: TypeInstanceId,
     pub checked: TypeInstanceId,
-    pub expr: HIRExpr<'source, TypeInstanceId, Checked>,
+    pub expr: MIRExpr<'source, Checked>,
 }
 impl TypeError for UnexpectedTypeInferenceMismatch<'_> {}
 
@@ -485,7 +486,7 @@ impl<'source> TypeErrorDisplay for TypeErrorData<UnexpectedTypeInferenceMismatch
             f,
             "Type inference/check bug: {on_element}, type inferred for expression {expr_str} was {inferred_type}, but type checker detected {checked_type}",
             on_element = self.on_element.diag_name(interner),
-            expr_str = HIRExprPrinter::new(interner).print(&self.error.expr),
+            expr_str = MIRExprPrinter::new(interner).print(&self.error.expr),
             inferred_type = self.error.inferred.as_string(type_db),
             checked_type = self.error.checked.as_string(type_db)
         )
@@ -509,10 +510,10 @@ impl TypeErrorDisplay for TypeErrorData<TypeConstructionFailure> {
             "{on_element}, type construction failed: {variable}",
             on_element = self.on_element.diag_name(interner),
             variable = match self.error.error {
-                TypeConstructionError::TypeNotFound { name } => format!("Type not found: {}", interner.borrow(name)),
-                TypeConstructionError::IncorrectNumberOfArgs { expected, received } => format!(
-                    "Incorrect number of args: expected {expected}, received {received}"
-                ),
+                TypeConstructionError::TypeNotFound { name } =>
+                    format!("Type not found: {}", interner.borrow(name)),
+                TypeConstructionError::IncorrectNumberOfArgs { expected, received } =>
+                    format!("Incorrect number of args: expected {expected}, received {received}"),
             }
         )
     }
@@ -534,7 +535,65 @@ impl TypeErrorDisplay for TypeErrorData<VariableNotFound> {
             f,
             "{on_element}, variable not found: {variable:#?}",
             on_element = self.on_element.diag_name(interner),
-            variable = self.error.variable_name,
+            variable = interner.borrow(self.error.variable_name),
+        )
+    }
+}
+
+pub struct AssignToNonLValueError {
+}
+impl TypeError for AssignToNonLValueError {}
+
+impl TypeErrorDisplay for TypeErrorData<AssignToNonLValueError> {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeInstanceManager<'_>,
+        interner: &StringInterner,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, Attempted to assign to a non-lvalue expression",
+            on_element = self.on_element.diag_name(interner)
+        )
+    }
+}
+
+pub struct DerefOnNonPointerError {
+    pub attempted_type: TypeInstanceId,
+}
+impl TypeError for DerefOnNonPointerError {}
+
+impl TypeErrorDisplay for TypeErrorData<DerefOnNonPointerError> {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager<'_>,
+        interner: &StringInterner,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, Attempted to deref a non-pointer type: {attempted_type}",
+            on_element = self.on_element.diag_name(interner),
+            attempted_type = self.error.attempted_type.as_string(type_db)
+        )
+    }
+}
+
+pub struct RefOnNonLValueError {}
+impl TypeError for RefOnNonLValueError {}
+
+impl TypeErrorDisplay for TypeErrorData<RefOnNonLValueError> {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeInstanceManager<'_>,
+        interner: &StringInterner,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, lvalue is required when creating a reference",
+            on_element = self.on_element.diag_name(interner)
         )
     }
 }
@@ -628,5 +687,7 @@ make_type_errors!(
     type_construction_failure = TypeConstructionFailure,
     out_of_bounds = OutOfTypeBounds<'source>,
     invalid_casts = InvalidCast<'source>,
-    type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>
+    type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>,
+    invalid_derefed_type = DerefOnNonPointerError,
+    invalid_refed_type = RefOnNonLValueError
 );

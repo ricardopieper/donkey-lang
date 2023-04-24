@@ -137,7 +137,7 @@ fn detect_decl_errors_in_body<'source, T, T1>(
                     true_branch,
                     errors,
                     interner,
-                    file
+                    file,
                 ) {
                     return false;
                 }
@@ -147,7 +147,7 @@ fn detect_decl_errors_in_body<'source, T, T1>(
                     false_branch,
                     errors,
                     interner,
-                    file
+                    file,
                 ) {
                     return false;
                 }
@@ -178,7 +178,7 @@ fn detect_declaration_errors_in_function<'source, T, T1, T2>(
         body,
         errors,
         interner,
-        file
+        file,
     )
 }
 
@@ -218,7 +218,7 @@ pub fn detect_undeclared_vars_and_redeclarations<'source, T, T1, T2, T3>(
                 body,
                 errors,
                 interner,
-                file
+                file,
             ) {
                 return Err(CompilerError::TypeInferenceError);
             }

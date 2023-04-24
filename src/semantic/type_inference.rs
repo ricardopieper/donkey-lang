@@ -1,14 +1,16 @@
-use crate::ast::lexer::{TokenSpanIndex};
+use crate::ast::lexer::TokenSpanIndex;
 use crate::ast::parser::{Spanned, SpannedOperator};
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
+use crate::semantic::hir_printer::{HIRExprPrinter};
 use crate::semantic::name_registry::NameRegistry;
 
 use crate::types::type_errors::{
-    BinaryOperatorNotFound, CallToNonCallableType, FieldOrMethodNotFound,
-    InsufficientTypeInformationForArray, TypeConstructionFailure, TypeErrors,
-    UnaryOperatorNotFound, VariableNotFound, TypeErrorAtLocation,
+    BinaryOperatorNotFound, CallToNonCallableType, DerefOnNonPointerError, FieldOrMethodNotFound,
+    InsufficientTypeInformationForArray, OutOfTypeBounds, RefOnNonLValueError,
+    TypeConstructionFailure, TypeErrorAtLocation, TypeErrors, UnaryOperatorNotFound,
+    VariableNotFound,
 };
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
@@ -33,19 +35,80 @@ pub struct FunctionTypeInferenceContext<'compiler_state, 'source, 'interner> {
 }
 
 impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
-    pub fn instantiate_type(&mut self, typedef: &HIRType, file: FileTableIndex, location: TokenSpanIndex) -> Result<TypeInstanceId, CompilerError> {
-        let usage = hir_type_to_usage(self.on_function, typedef, self.type_db, self.errors, location, file)?;
+    pub fn instantiate_type(
+        &mut self,
+        typedef: &HIRType,
+        file: FileTableIndex,
+        location: TokenSpanIndex,
+    ) -> Result<TypeInstanceId, CompilerError> {
+        let usage = hir_type_to_usage(
+            self.on_function,
+            typedef,
+            self.type_db,
+            self.errors,
+            location,
+            file,
+        )?;
         match self.type_db.construct_usage(&usage) {
             Ok(instance_id) => Ok(instance_id),
             Err(e) => {
-                println!("Deu ruim aqui: {e:#?}");
-                self.errors
-                    .type_construction_failure
-                    .push(TypeConstructionFailure {
-                        error: e,
-                    }.at(self.on_function, self.on_file, location) );
+                self.errors.type_construction_failure.push(
+                    TypeConstructionFailure { error: e }.at(
+                        self.on_function,
+                        self.on_file,
+                        location,
+                    ),
+                );
                 Err(CompilerError::TypeInferenceError)
             }
+        }
+    }
+
+    fn try_literal_promotion(
+        &mut self,
+        literal: &LiteralHIRExpr,
+        type_hint: TypeInstanceId,
+        meta: &'source crate::ast::parser::Expr,
+    ) -> Result<TypeInstanceId, CompilerError> {
+        match literal {
+            LiteralHIRExpr::Integer(i) => {
+                //we need to check for promotions and the attempted promoted type
+                //and see if it's in range, i.e. we can't promote 23752432 to an u8
+
+                macro_rules! check_promotion {
+                    ($type:ty, $type_id:expr) => {
+                        if type_hint == $type_id {
+                            if *i >= <$type>::MIN as i128 && *i <= <$type>::MAX as i128 {
+                                return Ok(type_hint);
+                            }
+                            else {
+                                self.errors.out_of_bounds.push(OutOfTypeBounds {
+                                    expr: meta, //@TODO unecessary, at_spanned already contains the metadata
+                                    typ: type_hint
+                                }.at_spanned(self.on_function, self.on_file, meta));
+                                return Err(CompilerError::TypeInferenceError);
+                            }
+                        }
+                    };
+                }
+                macro_rules! check_promotions {
+                    ($($type:ty: $type_id:expr),*) => {
+                        $(
+                            check_promotion!($type, $type_id);
+                        )*
+                    };
+                }
+                check_promotions!(
+                    u8: self.type_db.common_types.u8,
+                    u32: self.type_db.common_types.u32,
+                    u64: self.type_db.common_types.u64,
+                    i32: self.type_db.common_types.i32,
+                    i64: self.type_db.common_types.i64
+                );
+
+                Err(CompilerError::TypeInferenceError)
+            }
+            _ => panic!("Cannot promote value: {:?}", literal),
         }
     }
 
@@ -66,9 +129,15 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
                 Ok(HIRExpr::Variable(var, *found_type, meta))
             }
             HIRExpr::Literal(literal_expr, _, meta) => {
-                //@TODO maybe use a type hint here to resolve to u32, u64, etc whenever needed, as in index accessors
-                let typename = match literal_expr {
-                    LiteralHIRExpr::Integer(_) => self.type_db.common_types.i32,
+                let literal_type = match literal_expr {
+                    LiteralHIRExpr::Integer(_) => {
+                        if let Some(type_hint) = type_hint {
+                            
+                            self.try_literal_promotion(&literal_expr, type_hint, meta)?
+                        } else {
+                            self.type_db.common_types.i32
+                        }
+                    }
                     LiteralHIRExpr::Float(_) => self.type_db.common_types.f32,
                     LiteralHIRExpr::String(_) => {
                         let str_type = self
@@ -81,7 +150,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
                     LiteralHIRExpr::Boolean(_) => self.type_db.common_types.bool,
                     LiteralHIRExpr::None => todo!("Must implement None"),
                 };
-                Ok(HIRExpr::Literal(literal_expr, typename, meta))
+                Ok(HIRExpr::Literal(literal_expr, literal_type, meta))
             }
             HIRExpr::BinaryOperation(lhs, op, rhs, _, meta) => {
                 self.compute_infer_binop(*lhs, meta, *rhs, op)
@@ -93,6 +162,8 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
             HIRExpr::UnaryExpression(op, rhs, _, meta) => {
                 self.compute_infer_unary_expr(*rhs, meta, op)
             }
+            HIRExpr::Deref(rhs, _, meta) => self.compute_infer_deref_expr(*rhs, meta),
+            HIRExpr::Ref(rhs, _, meta) => self.compute_infer_ref_expr(*rhs, meta),
             HIRExpr::MemberAccess(obj, name, _, meta) => {
                 self.compute_infer_member_access(*obj, meta, name)
             }
@@ -130,7 +201,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
         if let Some(method) = method {
             let method_type = self.type_db.get_instance(method.function_type);
             let return_type = method_type.function_return_type.unwrap();
-            let args = self.infer_expr_array(params)?;
+            let args = self.infer_expr_array(params, Some(&method_type.function_args.clone()))?;
 
             Ok(HIRExpr::MethodCall(
                 objexpr.into(),
@@ -140,12 +211,13 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
                 meta,
             ))
         } else {
-            self.errors
-                .field_or_method_not_found
-                .push(FieldOrMethodNotFound {
+            self.errors.field_or_method_not_found.push(
+                FieldOrMethodNotFound {
                     object_type: typeof_obj,
                     field_or_method: method_name,
-                }.at_spanned(self.on_function, self.on_file, meta));
+                }
+                .at_spanned(self.on_function, self.on_file, meta),
+            );
             Err(CompilerError::TypeInferenceError)
         }
     }
@@ -161,34 +233,36 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
                 Ok(HIRExpr::Array(vec![], type_hint.unwrap(), meta))
             } else {
                 self.errors.insufficient_array_type_info.push(
-                    InsufficientTypeInformationForArray {}
-                    .at_spanned(self.on_function, self.on_file, meta),
+                    InsufficientTypeInformationForArray {}.at_spanned(
+                        self.on_function,
+                        self.on_file,
+                        meta,
+                    ),
                 );
                 Err(CompilerError::TypeInferenceError)
             }
         } else {
-            let all_exprs = self.infer_expr_array(array_items)?;
+            let all_exprs = self.infer_expr_array(array_items, None)?;
 
             let first_typed_item = all_exprs.first();
 
             let array_type = self.type_db.constructors.common_types.array;
 
             if let Some(expr) = first_typed_item {
-                let array_type_generic_replaced = self
-                    .type_db
-                    .construct_type(array_type, &[expr.get_type()]);
+                let array_type_generic_replaced =
+                    self.type_db.construct_type(array_type, &[expr.get_type()]);
 
                 match array_type_generic_replaced {
                     Ok(array_type_generic_replaced) => {
-                        Ok(HIRExpr::Array(
-                            all_exprs,
-                            array_type_generic_replaced,
-                            meta,
-                        ))
+                        Ok(HIRExpr::Array(all_exprs, array_type_generic_replaced, meta))
                     }
                     Err(e) => {
                         self.errors.type_construction_failure.push(
-                            TypeConstructionFailure {error: e }.at_spanned(self.on_function, self.on_file, meta)
+                            TypeConstructionFailure { error: e }.at_spanned(
+                                self.on_function,
+                                self.on_file,
+                                meta,
+                            ),
                         );
                         Err(CompilerError::TypeInferenceError)
                     }
@@ -198,8 +272,11 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
                 //no choice but to give up and return a fully unresolved array
                 //hint does not matter much
                 self.errors.insufficient_array_type_info.push(
-                    InsufficientTypeInformationForArray {
-                    }.at_spanned(self.on_function, self.on_file, meta),
+                    InsufficientTypeInformationForArray {}.at_spanned(
+                        self.on_function,
+                        self.on_file,
+                        meta,
+                    ),
                 );
 
                 Err(CompilerError::TypeInferenceError)
@@ -229,15 +306,71 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
                 meta,
             ))
         } else {
-            println!("member access infer error");
-
-            self.errors
-                .field_or_method_not_found
-                .push(FieldOrMethodNotFound {
+            self.errors.field_or_method_not_found.push(
+                FieldOrMethodNotFound {
                     object_type: typeof_obj,
                     field_or_method: name,
-                }.at_spanned(self.on_function, self.on_file, meta));
+                }
+                .at_spanned(self.on_function, self.on_file, meta),
+            );
             Err(CompilerError::TypeInferenceError)
+        }
+    }
+
+    fn compute_infer_deref_expr(
+        &mut self,
+        rhs: HIRExpr<'source, ()>,
+        meta: HIRExprMetadata<'source>,
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
+        let rhs_expr = self.compute_and_infer_expr_type(rhs, None)?;
+        let typeof_obj = rhs_expr.get_type();
+        let type_data = self.type_db.get_instance(typeof_obj);
+        if type_data.base == self.type_db.constructors.common_types.ptr {
+            let derefed_type = type_data.type_args[0];
+            Ok(HIRExpr::Deref(rhs_expr.into(), derefed_type, meta))
+        } else {
+            self.errors.invalid_derefed_type.push(
+                DerefOnNonPointerError {
+                    attempted_type: typeof_obj,
+                }
+                .at_spanned(self.on_function, self.on_file, meta),
+            );
+            Err(CompilerError::TypeInferenceError)
+        }
+    }
+
+    fn compute_infer_ref_expr(
+        &mut self,
+        rhs: HIRExpr<'source, ()>,
+        meta: HIRExprMetadata<'source>,
+    ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
+        let rhs_expr = self.compute_and_infer_expr_type(rhs, None)?;
+        let is_lvalue = rhs_expr.can_be_pointed(self.type_db);
+        if !is_lvalue {
+            self.errors
+                .invalid_refed_type
+                .push(RefOnNonLValueError {}.at_spanned(self.on_function, self.on_file, meta));
+            return Err(CompilerError::TypeInferenceError);
+        }
+        let typeof_obj = rhs_expr.get_type();
+        let ptr_type = self.type_db.constructors.common_types.ptr;
+        let ptr_type_generic_replaced = self.type_db.construct_type(ptr_type, &[typeof_obj]);
+        match ptr_type_generic_replaced {
+            Ok(ptr_type_generic_replaced) => Ok(HIRExpr::Ref(
+                rhs_expr.into(),
+                ptr_type_generic_replaced,
+                meta,
+            )),
+            Err(e) => {
+                self.errors.type_construction_failure.push(
+                    TypeConstructionFailure { error: e }.at_spanned(
+                        self.on_function,
+                        self.on_file,
+                        meta,
+                    ),
+                );
+                Err(CompilerError::TypeInferenceError)
+            }
         }
     }
 
@@ -261,10 +394,13 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
             }
         }
 
-        self.errors.unary_op_not_found.push(UnaryOperatorNotFound {
-            rhs: rhs_type,
-            operator: op.0,
-        }.at_spanned(self.on_function, self.on_file, &op.1));
+        self.errors.unary_op_not_found.push(
+            UnaryOperatorNotFound {
+                rhs: rhs_type,
+                operator: op.0,
+            }
+            .at_spanned(self.on_function, self.on_file, &op.1),
+        );
 
         Err(CompilerError::TypeInferenceError)
     }
@@ -272,10 +408,12 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
     fn infer_expr_array(
         &mut self,
         exprs: Vec<HIRExpr<'source, ()>>,
+        positional_type_hints: Option<&[TypeInstanceId]>,
     ) -> Result<Vec<HIRExpr<'source, TypeInstanceId>>, CompilerError> {
         let mut result = vec![];
-        for expr in exprs {
-            let res = self.compute_and_infer_expr_type(expr, None)?;
+        for (idx, expr) in exprs.into_iter().enumerate() {
+            let type_hint = positional_type_hints.and_then(|hints| hints.get(idx));
+            let res = self.compute_and_infer_expr_type(expr, type_hint.copied())?;
             result.push(res);
         }
         Ok(result)
@@ -290,10 +428,8 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
         let HIRExpr::Variable(var, .., fcall_meta) = fun_expr else {
             panic!("Functions should be bound to a name! This is a bug in the type inference phase or HIR expression reduction phase.");
         };
-        //infer parameter types
-        let fun_params = self.infer_expr_array(fun_params)?;
 
-        let Some(decl_type) = self.decls_in_scope.get(&var) else {
+        let Some(decl_type) = self.decls_in_scope.get(&var).copied() else {
             self.errors.variable_not_found.push(VariableNotFound {
                 variable_name: var
             }.at_spanned(self.on_function, self.on_file, meta));
@@ -302,8 +438,12 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
 
         //we have to find the function declaration
 
-        let type_instance = self.type_db.get_instance(*decl_type);
+        let args = { self.type_db.get_instance(decl_type).function_args.clone() };
+        //infer parameter types
+        let fun_params = self.infer_expr_array(fun_params, Some(&args))?;
 
+        //@TODO find a way to avoid this get_instance repeated call
+        let type_instance = self.type_db.get_instance(decl_type);
         let function_inferred = HIRExpr::Variable(var, type_instance.id, fcall_meta).into();
 
         if type_instance.is_function {
@@ -317,9 +457,12 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
             ))
         } else {
             //type is fully resolved but all wrong
-            self.errors.call_non_callable.push(CallToNonCallableType {
-                actual_type: type_instance.id,
-            }.at_spanned(self.on_function, self.on_file, meta));
+            self.errors.call_non_callable.push(
+                CallToNonCallableType {
+                    actual_type: type_instance.id,
+                }
+                .at_spanned(self.on_function, self.on_file, meta),
+            );
             Err(CompilerError::TypeInferenceError)
         }
     }
@@ -352,13 +495,14 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
         }
 
         //operator not found, add binary op not found error
-        self.errors
-            .binary_op_not_found
-            .push(BinaryOperatorNotFound {
+        self.errors.binary_op_not_found.push(
+            BinaryOperatorNotFound {
                 lhs: lhs_type,
                 rhs: rhs_type,
                 operator: op.0,
-            }.at_spanned(self.on_function, self.on_file, &op.1));
+            }
+            .at_spanned(self.on_function, self.on_file, &op.1),
+        );
 
         Err(CompilerError::TypeInferenceError)
     }
@@ -456,7 +600,10 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
         meta_expr: HIRExprMetadata<'source>,
     ) -> Result<InferredTypeHIR<'source>, CompilerError> {
         let function_arg = self.compute_and_infer_expr_type(function, None)?;
-        let inferred_args = self.infer_expr_array(args)?;
+        let function_type = function_arg.get_type();
+        let function_type_data = self.type_db.get_instance(function_type);
+        let inferred_args =
+            self.infer_expr_array(args, Some(&function_type_data.function_args.clone()))?;
 
         Ok(HIR::FunctionCall {
             function: function_arg,
@@ -494,10 +641,12 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
         //Type hint takes precedence over expr type
         let variable_chosen = match variable_typedecl {
             HIRTypeDef::PendingInference => None,
-            HIRTypeDef::Provided(typedecl) => match self.instantiate_type(&typedecl, self.on_file, meta_expr.get_span().start) {
-                Ok(id) => Some(id),
-                Err(e) => return Err(e),
-            },
+            HIRTypeDef::Provided(typedecl) => {
+                match self.instantiate_type(&typedecl, self.on_file, meta_expr.get_span().start) {
+                    Ok(id) => Some(id),
+                    Err(e) => return Err(e),
+                }
+            }
         };
 
         let typed_expr = self.compute_and_infer_expr_type(assigned_value, variable_chosen)?;
@@ -537,7 +686,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
             decls_in_scope: &mut decls_in_scope,
             interner: self.interner,
             on_function: self.on_function,
-            on_file: self.on_file
+            on_file: self.on_file,
         };
 
         new_ctx_with_modified_scope.infer_types_in_body(body)
@@ -550,7 +699,7 @@ pub fn infer_types<'source, 'interner>(
     mir: Vec<TypeInferenceInputHIRRoot<'source>>,
     errors: &mut TypeErrors<'source>,
     interner: &'interner StringInterner,
-    file: FileTableIndex
+    file: FileTableIndex,
 ) -> Result<Vec<InferredTypeHIRRoot<'source>>, CompilerError> {
     let mut new_mir = vec![];
 

@@ -99,7 +99,6 @@ impl ToString for Operator {
     }
 }
 
-
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Token {
     LiteralFloat(FloatLiteral),
@@ -485,7 +484,7 @@ impl<'interner> Tokenizer<'interner> {
 
         let operators = &[
             "+", "->", "-", "*", "%", "/", "<<", ">>", "<=", ">=", ">", "<", "!=", "==", "=", "^",
-            "(", ")", "&"
+            "(", ")", "&",
         ];
         while self.can_go() {
             self.commit_current_token(&mut token_table);

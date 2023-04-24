@@ -124,7 +124,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                         file,
                     )?;
                     println!("Usage: {usage:#?}");
-                    
+
                     let constructed = type_db.construct_usage(&usage);
                     if let Err(e) = constructed {
                         println!("Name registry failed: {e:#?}");
@@ -156,15 +156,13 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
 
                 let constructed = type_db.construct_usage(&usage);
                 if let Err(e) = constructed {
-                    errors
-                        .type_construction_failure
-                        .push(TypeConstructionFailure {
-                            error: e,
-                        }.at_spanned(
+                    errors.type_construction_failure.push(
+                        TypeConstructionFailure { error: e }.at_spanned(
                             RootElementType::Function(function_name),
                             file,
                             meta,
-                        ));
+                        ),
+                    );
                     return Err(CompilerError::TypeInferenceError);
                 }
                 let return_type = constructed.unwrap();

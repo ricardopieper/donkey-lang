@@ -1,12 +1,12 @@
 #[cfg(not(test))]
 use std::ops::Deref;
 
-use crate::ast::ast_printer;
+
 use crate::ast::lexer::{Operator, Token};
 use crate::commons::float::FloatLiteral;
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::context::{FileTableEntry, FileTableIndex};
-use crate::Source;
+
 
 //This is a box wrapper type so that I can implement a "double deref"
 //automatically to make testing easier
@@ -80,7 +80,7 @@ pub enum Expr {
     FloatValue(FloatLiteral, AstSpan),
     StringValue(StringSpan),
     BooleanValue(bool, AstSpan),
-    NoneExpr(AstSpan),
+    NoneValue(AstSpan),
     Variable(StringSpan),
     //the last parameter here contains the closing parenthesis.
     FunctionCall(ExprBox, Vec<SpanExpr>, AstSpan),
@@ -91,11 +91,10 @@ pub enum Expr {
     UnaryExpression(SpannedOperator, ExprBox),
     MemberAccess(ExprBox, StringSpan),
     //the last parameter here contains the entire span, from start to beginning
-    Array(Vec<SpanExpr>, AstSpan)
-    //maybe there could be a syntax to specify the type of the array
-    //ex: instead of just x = [1,2,3] it could be x = [1, 2, 3] array<i32>
-    //or like sum = array<i32>[].sum() would return 0
-    //x: array<i32> = [] should work too
+    Array(Vec<SpanExpr>, AstSpan), //maybe there could be a syntax to specify the type of the array
+                                   //ex: instead of just x = [1,2,3] it could be x = [1, 2, 3] array<i32>
+                                   //or like sum = array<i32>[].sum() would return 0
+                                   //x: array<i32> = [] should work too
 }
 
 impl Spanned for Expr {
@@ -103,7 +102,7 @@ impl Spanned for Expr {
         match self {
             IntegerValue(.., span)
             | FloatValue(_, span)
-            | NoneExpr(span)
+            | NoneValue(span)
             | BooleanValue(_, span) => *span,
             StringValue(s) | Variable(s) => s.1,
             FunctionCall(f, _, end) => f.expr.span.range(end),
@@ -192,7 +191,7 @@ pub enum ASTType {
 impl ASTType {
     pub fn to_string(&self, interner: &StringInterner) -> String {
         match self {
-            ASTType::Simple(s) => format!("{}", interner.borrow(s.0)),
+            ASTType::Simple(s) => interner.borrow(s.0).to_string(),
             ASTType::Generic(s, params) => {
                 let generic_params = params
                     .iter()
@@ -302,7 +301,7 @@ impl Spanned for AST {
             } => match final_else {
                 Some(f) => true_branch.get_span().range(&f.last().unwrap().span),
                 None => {
-                    if elifs.len() == 0 {
+                    if elifs.is_empty() {
                         true_branch.get_span()
                     } else {
                         true_branch
@@ -406,7 +405,7 @@ impl ToString for ParsingError {
                 format!("Error: {e}")
             }
             ParsingError::TypeBoundExpectedColonAfterFieldName => {
-                format!("Error: Expected column after field name")
+                "Error: Expected column after field name".to_string()
             }
         }
     }
@@ -821,7 +820,7 @@ impl<'tok> Parser<'tok> {
             }
 
             AST::StructDeclaration {
-                struct_name: struct_name,
+                struct_name,
                 type_parameters: vec![],
                 body: fields,
             }
@@ -986,7 +985,7 @@ impl<'tok> Parser<'tok> {
 
             return_type = self.parse_type_name();
 
-            if !return_type.is_some() {
+            if return_type.is_none() {
                 return self.non_recoverable(ParsingError::Fatal(
                     "Expected type name after arrow right on function declaration".into(),
                 ));
@@ -1014,7 +1013,7 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_break(&mut self) -> ParsingEvent {
-        let tok = self.cur().clone();
+        let tok = *self.cur();
         if let Token::BreakKeyword = tok.token {
             self.next();
 
@@ -1025,7 +1024,7 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_return(&mut self) -> ParsingEvent {
-        let tok = self.cur().clone();
+        let tok = *self.cur();
         if let Token::ReturnKeyword = tok.token {
             self.next();
             if self.can_advance_on_line() {
@@ -1051,7 +1050,7 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_intrinsic(&mut self) -> ParsingEvent {
-        let tok = self.cur().clone();
+        let tok = *self.cur();
         if let Token::IntrinsicKeyword = tok.token {
             self.next();
             if !self.can_advance_on_line() {
@@ -1115,7 +1114,7 @@ impl<'tok> Parser<'tok> {
         parsing_result: ParsingEvent,
         results: &mut Vec<SpanAST>,
         parsed_successfully: &mut bool,
-    ) -> () {
+    ) {
         match parsing_result {
             ParsingEvent::Success(parsed_result) => {
                 results.push(parsed_result);
@@ -1538,7 +1537,7 @@ impl<'tok> Parser<'tok> {
                         was_operand = true;
                     }
                     Token::None => {
-                        self.push_operand(NoneExpr(tok.span_index.get_span()).self_spanning());
+                        self.push_operand(NoneValue(tok.span_index.get_span()).self_spanning());
                         was_operand = true;
                     }
                     Token::True => {
@@ -1724,7 +1723,7 @@ impl<'tok> Parser<'tok> {
                 Ok(r) => {
                     expressions.push(r.resulting_expr);
                 }
-                Err(e) => {
+                Err(_e) => {
                     break;
                 }
             }
@@ -1782,7 +1781,7 @@ pub fn parse_ast<'a>(
 
     print_errors(&parser, file_table, tokens);
 
-    return (result, parser);
+    (result, parser)
 }
 
 fn print_errors(parser: &Parser, file_table: &[FileTableEntry], tokens: &TokenTable) {
@@ -1856,7 +1855,7 @@ mod tests {
     use std::{assert_matches::assert_matches, ops::Deref};
 
     use crate::{
-        ast::ast_printer::print_ast,
+        ast::ast_printer::{print_ast, print_fully_parenthesized_ast},
         interner::StringInterner,
         semantic::context::{test_utils::tls_interner, FileTableIndex},
     };
@@ -1894,10 +1893,10 @@ mod tests {
         let mut parser = Parser::new(&table[0].token_table);
         let result = parser.parse_ast();
         print_errors(&parser, table, &table[0].token_table);
-        if parser.get_errors().len() > 0 {
+        if !parser.get_errors().is_empty() {
             panic!("Deu ruim");
         }
-        return result;
+        result
     }
 
     #[test]
@@ -1923,7 +1922,7 @@ mod tests {
     impl Deref for StringSpan {
         type Target = str;
 
-        fn deref<'s>(&'s self) -> &'s Self::Target {
+        fn deref(&self) -> &Self::Target {
             //@SAFETY actually not very safe.
             //This is, indeed, a hack.
             //The tradeoff here is to make testing easier.
@@ -2204,7 +2203,7 @@ mod tests {
 
     fn parse_and_print_back_to_original(source: &str) {
         let unindented = unindent(source);
-        let tokens = tokenize(&unindent(source)).unwrap();
+        let tokens = tokenize(&unindented).unwrap();
         let result = test_parse(tokens);
         let printed = INTERNER.with(|i| print_ast(&result, i));
         pretty_assertions::assert_eq!(printed.trim(), unindented.trim());
@@ -2753,4 +2752,17 @@ print(x)"
         parse_and_print_back_to_original("* val = 1");
     }
 
+    #[test]
+    fn set_ptr_complex_expr() {
+        let unindented =
+            unindent("* array[obj.getter().prop[0].some_ptr + obj.getter().prop[1]] = 1");
+        let tokens = tokenize(&unindented).unwrap();
+        let result = test_parse(tokens);
+        let printed = INTERNER.with(|i| print_fully_parenthesized_ast(&result, i));
+
+        assert_eq!(
+            printed,
+            "* (array[(obj.getter().prop[0].some_ptr + obj.getter().prop[1])]) = 1"
+        );
+    }
 }

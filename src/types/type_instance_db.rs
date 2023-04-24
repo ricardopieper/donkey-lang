@@ -114,9 +114,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         let mut item = TypeInstanceManager {
             types: vec![],
             constructors: TypeConstructorDatabase::new(interner),
-            common_types: CommonTypeInstances {
-                ..Default::default()
-            },
+            common_types: Default::default(),
         };
         item.init_builtin();
         item
@@ -130,11 +128,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         &self.types[id.0]
     }
 
-    pub fn find_struct_member(
-        &self,
-        id: TypeInstanceId,
-        name: InternedString,
-    ) -> StructMember {
+    pub fn find_struct_member(&self, id: TypeInstanceId, name: InternedString) -> StructMember {
         let instance = self.get_instance(id);
         if let Some((index, field)) = instance
             .fields
@@ -233,18 +227,18 @@ impl<'interner> TypeInstanceManager<'interner> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
     /*
-    
+
     struct ptr<TPtr>:
         intrinsic
 
     struct array<TItem>:
         data: ptr<TItem>
         length: u32
-    
+
     impl array<TItem>:
         def __index__(i: u32): TItem
         def __index_ptr__(i: u32): ptr<TItem>
-    
+
     */
     pub fn construct_usage_generic(
         &mut self,
@@ -275,7 +269,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         positional_args: &[TypeInstanceId],
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         let c = self.constructors.find(constructor_id);
-        
+
         for existing_type in &self.types {
             if existing_type.base == constructor_id && existing_type.type_args == positional_args {
                 return Ok(existing_type.id);
@@ -314,9 +308,7 @@ impl<'interner> TypeInstanceManager<'interner> {
 
         let name = if positional_args.is_empty() {
             let constructor = self.constructors.find(constructor_id);
-            self.constructors
-                .interner
-                .get_string(constructor.name)
+            self.constructors.interner.get_string(constructor.name)
         } else {
             let constructor = self.constructors.find(constructor_id);
             let generics = positional_args
@@ -343,6 +335,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             let size = self.compute_size(&self.types[id.0]);
             self.types[id.0].size = size;
         }
+
         Ok(id)
     }
 

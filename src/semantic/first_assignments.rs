@@ -7,8 +7,8 @@ use crate::{
 use std::collections::HashSet;
 
 use super::hir::{
-    FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, GlobalsInferredMIRRoot, HIRRoot,
-    HIRTypeDef, UninferredHIR, HIRExpr,
+    FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, GlobalsInferredMIRRoot, HIRExpr,
+    HIRRoot, HIRTypeDef, UninferredHIR,
 };
 
 fn make_first_assignments_in_body<'source>(
@@ -39,7 +39,7 @@ fn make_first_assignments_in_body<'source>(
                 expression,
                 meta_ast,
                 meta_expr,
-            }  => {
+            } => {
                 if let HIRExpr::Variable(var_name, ..) = path {
                     if declarations_found.contains(&var_name) {
                         HIR::Assign {
@@ -59,7 +59,12 @@ fn make_first_assignments_in_body<'source>(
                         }
                     }
                 } else {
-                    todo!("Unsupported assign to expression")
+                    HIR::Assign {
+                        path,
+                        expression,
+                        meta_ast,
+                        meta_expr,
+                    }
                 }
             }
             HIR::If(condition, true_branch, false_branch, meta) => {

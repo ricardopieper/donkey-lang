@@ -1,6 +1,8 @@
 Donkey's Type System
 ====================
 
+TODO: This document is old. Things changed a bit with the introduction of lvalues and rvalues at MIR level
+
 The type system is actually kind of simplistic. We have support for generics in the type system but not much else besides basic checking.
 It will get more complex in the future with traits though.
 

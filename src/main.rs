@@ -4,7 +4,6 @@
 #![feature(generic_const_exprs)]
 #![feature(const_trait_impl)]
 #![feature(string_leak)]
-#![feature(once_cell)]
 #![feature(thread_local)]
 #![feature(negative_impls)]
 
@@ -45,7 +44,6 @@ use llvm::llvm_backend::generate_llvm;
 use semantic::context::Source;
 
 fn main() {
-
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -54,7 +52,7 @@ fn main() {
 
     let mut source = Source::new();
 
-    source.load_stdlib();
+    //source.load_stdlib();
     source.load_file(&args[1]);
 
     let mut ctx = crate::semantic::context::Analyzer::new(&source);
