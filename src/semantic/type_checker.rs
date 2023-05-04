@@ -90,37 +90,36 @@ impl<'compiler_context, 'source, 'interner>
                 args,
                 return_type,
                 meta,
-            )) => {
-                self.check_expr_function_call(*function_expr, args, return_type, meta)
-            } 
+            )) => self.check_expr_function_call(*function_expr, args, return_type, meta),
 
             MIRExpr::RValue(MIRExprRValue::UnaryExpression(op, rhs, inferred_type, meta)) => {
                 self.check_expr_unary(*rhs, op, inferred_type, meta)
             }
-           
+
             MIRExpr::RValue(MIRExprRValue::Array(expr_array, inferred_type, meta)) => {
                 self.check_expr_array(expr_array, inferred_type, meta)
             }
-            MIRExpr::LValue(lvalue) => {
-                self.typecheck_lvalue(lvalue).map(MIRExpr::LValue)
-            }
+            MIRExpr::LValue(lvalue) => self.typecheck_lvalue(lvalue).map(MIRExpr::LValue),
 
             MIRExpr::TypecheckTag(_) => unreachable!(),
-          
+
             MIRExpr::RValue(MIRExprRValue::Ref(obj, expr_type, meta)) => {
                 self.check_ref_expr(*obj, expr_type, meta)
             }
         }
     }
 
-    fn typecheck_lvalue(&mut self, lvalue: MIRExprLValue<'source, NotCheckedSimplified>) -> Result<MIRExprLValue<'source, Checked>, CompilerError> {
+    fn typecheck_lvalue(
+        &mut self,
+        lvalue: MIRExprLValue<'source, NotCheckedSimplified>,
+    ) -> Result<MIRExprLValue<'source, Checked>, CompilerError> {
         match lvalue {
             MIRExprLValue::MemberAccess(obj, member, inferred_type, meta) => {
                 self.check_expr_member_access(*obj, member, inferred_type, meta)
             }
-            MIRExprLValue::Variable(var, inferred_type, meta) => Ok(
-                MIRExprLValue::Variable(var, inferred_type, meta),
-            ),
+            MIRExprLValue::Variable(var, inferred_type, meta) => {
+                Ok(MIRExprLValue::Variable(var, inferred_type, meta))
+            }
             MIRExprLValue::Deref(obj, expr_type, meta) => {
                 self.check_deref_expr(*obj, expr_type, meta)
             } //should be OK...
@@ -159,11 +158,7 @@ impl<'compiler_context, 'source, 'interner>
             );
         }
 
-        return Ok(MIRExprLValue::Deref(
-            Box::new(typechecked),
-            expr_type,
-            meta,
-        ));
+        return Ok(MIRExprLValue::Deref(Box::new(typechecked), expr_type, meta));
     }
 
     fn check_ref_expr(
@@ -218,7 +213,9 @@ impl<'compiler_context, 'source, 'interner>
             || {
                 //@TODO invoking the printer here is kinda sus
                 let printer = MIRExprPrinter::new(self.interner);
-                let interned = self.interner.get(&printer.print_lvalue(&checked_func.clone()));
+                let interned = self
+                    .interner
+                    .get(&printer.print_lvalue(&checked_func.clone()));
                 FunctionName::Function(interned)
             },
             args,
@@ -496,7 +493,9 @@ impl<'compiler_context, 'source, 'interner>
                     false
                 }
             }
-            LiteralMIRExpr::String(_) | LiteralMIRExpr::Boolean(_) => true,
+            LiteralMIRExpr::String(_) | LiteralMIRExpr::Boolean(_) | LiteralMIRExpr::Char(_) => {
+                true
+            }
         };
         if is_properly_typed {
             Ok(MIRExpr::RValue(MIRExprRValue::Literal(
@@ -604,7 +603,11 @@ impl<'compiler_context, 'source, 'interner>
             .map(|arg| self.typecheck(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
-        if function_type.function_args.len() != checked_args.len() {
+        let valid_vararg_call = checked_args.len() >= function_type.function_args.len();
+        let different_arg_count = checked_args.len() != function_type.function_args.len();
+
+        //for non-variadic calls, argument amount must be the same
+        if different_arg_count && !function_type.is_variadic {
             self.errors.function_call_argument_count.push(
                 FunctionCallArgumentCountMismatch {
                     called_function_name: function_name(),
@@ -614,7 +617,20 @@ impl<'compiler_context, 'source, 'interner>
                 .at_spanned(self.on_element, self.on_file, meta),
             );
             return Err(CompilerError::TypeCheckError);
-        };
+        }
+
+        //for variadic calls, the argument number has to be at least the same as the non-variadic arguments
+        if function_type.is_variadic && !valid_vararg_call {
+            self.errors.function_call_argument_count.push(
+                FunctionCallArgumentCountMismatch {
+                    called_function_name: function_name(),
+                    expected_count: function_type.function_args.len(),
+                    passed_count: checked_args.len(),
+                }
+                .at_spanned(self.on_element, self.on_file, meta),
+            );
+            return Err(CompilerError::TypeCheckError);
+        }
 
         let checked_arg_types = checked_args.iter().map(|x| x.get_type());
         let arg_pairs = function_type.function_args.iter().zip(checked_arg_types);
@@ -869,7 +885,6 @@ pub fn typecheck<'source>(
     interner: &StringInterner,
     file: FileTableIndex,
 ) -> Result<Vec<MIRTopLevelNode<'source, Checked>>, CompilerError> {
-    println!("typechecking");
     let mut new_mir = vec![];
     for node in top_nodes {
         match node {
@@ -877,11 +892,13 @@ pub fn typecheck<'source>(
                 function_name,
                 parameters,
                 return_type,
+                is_varargs,
             } => {
                 new_mir.push(MIRTopLevelNode::IntrinsicFunction {
                     function_name,
                     parameters,
                     return_type,
+                    is_varargs,
                 });
             }
             MIRTopLevelNode::DeclareFunction {

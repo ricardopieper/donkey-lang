@@ -34,6 +34,7 @@ pub struct TypeConstructorFunctionDeclaration {
     //pub type_args: Vec<GenericParameter>,
     pub args: Vec<TypeUsage>,
     pub return_type: TypeUsage,
+    pub is_variadic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +82,7 @@ pub struct CommonTypeConstructors {
     pub f32: TypeConstructorId,
     pub f64: TypeConstructorId,
     pub u8: TypeConstructorId,
+    pub char: TypeConstructorId,
     pub bool: TypeConstructorId,
     pub array: TypeConstructorId,
     pub function: TypeConstructorId,
@@ -363,6 +365,12 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.common_types.u8 =
             self.register_primitive_number(istr("u8"), Bytes::size_of::<u8>(), TypeSign::Unsigned);
 
+        self.common_types.char = self.register_primitive_number(
+            istr("char"),
+            Bytes::size_of::<u8>(),
+            TypeSign::Unsigned,
+        );
+
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
         let ptr_type = self.add_generic(
             TypeKind::Primitive {
@@ -399,6 +407,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
                     ptr_type,
                     vec![TypeUsage::Generic(GenericParameter(istr("TItem")))],
                 ),
+                is_variadic: false,
             },
         );
 

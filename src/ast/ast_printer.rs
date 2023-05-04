@@ -6,12 +6,13 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -
     match expr {
         Expr::IntegerValue(i, _) => format!("{i}"),
         Expr::FloatValue(f, _) => format!("{}", f.0),
-        Expr::StringValue(s) => format!("\"{}\"", interner.borrow(s.0)),
+        Expr::StringValue(s) => format!("{:?}", interner.borrow(s.0)),
+        Expr::CharValue(c, _) => format!("{:?}", c),
         Expr::BooleanValue(b, _) => if *b { "True" } else { "False" }.to_string(),
         Expr::NoneValue(_) => "None".to_string(),
         Expr::Variable(name) => interner.get_string(name.0),
         Expr::FunctionCall(function_expr, params, _) => {
-            let call_expr_str = print_expr(&function_expr.expr.expr, interner, parenthesized);
+            let call_expr_str = print_expr(function_expr, interner, parenthesized);
             let args = params
                 .iter()
                 .map(|x| print_expr(&x.expr, interner, parenthesized))
@@ -20,16 +21,16 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -
             format!("{call_expr_str}({args})")
         }
         Expr::IndexAccess(indexed_expr, index_expr, _) => {
-            let indexed_expr_str = print_expr(&indexed_expr.expr.expr, interner, parenthesized);
-            let index_expr_str = print_expr(&index_expr.expr.expr, interner, parenthesized);
+            let indexed_expr_str = print_expr(indexed_expr, interner, parenthesized);
+            let index_expr_str = print_expr(index_expr, interner, parenthesized);
             format!("{indexed_expr_str}[{index_expr_str}]")
         }
         Expr::BinaryOperation(lhs, op, rhs) => {
-            let mut lhs_str = print_expr(&lhs.expr.expr, interner, parenthesized);
-            let mut rhs_str = print_expr(&rhs.expr.expr, interner, parenthesized);
+            let mut lhs_str = print_expr(lhs, interner, parenthesized);
+            let mut rhs_str = print_expr(rhs, interner, parenthesized);
             let op_str = op.0.to_string();
-            let lhs_is_binary = matches!(lhs.expr.expr, Expr::BinaryOperation(_, _, _));
-            let rhs_is_binary = matches!(rhs.expr.expr, Expr::BinaryOperation(_, _, _));
+            let lhs_is_binary = matches!(lhs.as_ref(), Expr::BinaryOperation(_, _, _));
+            let rhs_is_binary = matches!(rhs.as_ref(), Expr::BinaryOperation(_, _, _));
 
             if lhs_is_binary {
                 lhs_str = format!("({lhs_str})");
@@ -46,8 +47,8 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -
         }
         Expr::Parenthesized(_) => panic!("Parenthesized expr reached print_expr"),
         Expr::UnaryExpression(op, expr) => {
-            let mut expr_str = print_expr(&expr.expr.expr, interner, parenthesized);
-            let expr_is_binary = matches!(expr.expr.expr, Expr::BinaryOperation(_, _, _));
+            let mut expr_str = print_expr(expr, interner, parenthesized);
+            let expr_is_binary = matches!(expr.as_ref(), Expr::BinaryOperation(_, _, _));
 
             if expr_is_binary {
                 expr_str = format!("({expr_str})");
@@ -60,7 +61,7 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -
             }
         }
         Expr::MemberAccess(obj, member) => {
-            let obj_str = print_expr(&obj.expr.expr, interner, parenthesized);
+            let obj_str = print_expr(obj, interner, parenthesized);
             let member_str = interner.borrow(member.0);
             format!("{obj_str}.{member_str}")
         }
@@ -209,6 +210,7 @@ fn print_ast_internal(
             parameters,
             body,
             return_type,
+            is_varargs,
         } => {
             let mut buf = "".to_string();
             let function_name = interner.borrow(function_name.0);
@@ -222,15 +224,25 @@ fn print_ast_internal(
                 .collect::<Vec<_>>()
                 .join(", ");
 
+            let varargs = if *is_varargs { "..." } else { "" };
+
+            let comma_if_params = if !params.is_empty() && *is_varargs {
+                ", "
+            } else {
+                ""
+            };
+
             match return_type {
                 Some(x) => {
                     let return_type = x.to_string(interner);
                     buf.push_str(&format!(
-                        "{indent}def {function_name}({params}) -> {return_type}:"
+                        "{indent}def {function_name}({params}{comma_if_params}{varargs}) -> {return_type}:"
                     ));
                 }
                 None => {
-                    buf.push_str(&format!("{indent}def {function_name}({params}):"));
+                    buf.push_str(&format!(
+                        "{indent}def {function_name}({params}{comma_if_params}{varargs}):"
+                    ));
                 }
             }
             buf.push('\n');
@@ -271,6 +283,7 @@ pub fn print_ast(ast: &[SpanAST], interner: &StringInterner) -> String {
         .join("\n");
 }
 
+#[allow(dead_code)]
 pub fn print_fully_parenthesized_ast(ast: &[SpanAST], interner: &StringInterner) -> String {
     return ast
         .iter()

@@ -65,6 +65,7 @@ pub struct TypeInstance {
     pub size: Bytes,
     pub name: String,
     pub is_function: bool,
+    pub is_variadic: bool,
     //only valid if this is a function
     pub function_args: Vec<TypeInstanceId>,
     //only valid if this is a function
@@ -94,6 +95,7 @@ pub struct CommonTypeInstances {
     pub f32: TypeInstanceId,
     pub f64: TypeInstanceId,
     pub u8: TypeInstanceId,
+    pub char: TypeInstanceId,
     pub bool: TypeInstanceId,
 }
 
@@ -148,8 +150,9 @@ impl<'interner> TypeInstanceManager<'interner> {
         &mut self,
         arg_types: &[TypeInstanceId],
         return_type: TypeInstanceId,
+        is_variadic: bool,
     ) -> TypeInstanceId {
-        self.construct_function_method(None, arg_types, return_type)
+        self.construct_function_method(None, arg_types, return_type, is_variadic)
     }
 
     pub fn construct_method(
@@ -157,8 +160,9 @@ impl<'interner> TypeInstanceManager<'interner> {
         method_of: TypeInstanceId,
         arg_types: &[TypeInstanceId],
         return_type: TypeInstanceId,
+        is_variadic: bool,
     ) -> TypeInstanceId {
-        self.construct_function_method(Some(method_of), arg_types, return_type)
+        self.construct_function_method(Some(method_of), arg_types, return_type, is_variadic)
     }
 
     fn construct_function_method(
@@ -166,6 +170,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         method_of: Option<TypeInstanceId>,
         arg_types: &[TypeInstanceId],
         return_type: TypeInstanceId,
+        is_variadic: bool,
     ) -> TypeInstanceId {
         for instance in &self.types {
             if !instance.is_function {
@@ -193,6 +198,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             base: self.constructors.common_types.function,
             is_function: true,
             size,
+            is_variadic,
             name: String::new(), //@TODO build name
             function_args: arg_types.to_vec(),
             function_return_type: Some(return_type),
@@ -435,7 +441,8 @@ impl<'interner> TypeInstanceManager<'interner> {
                 let return_type =
                     self.construct_usage_generic(&method_decl.return_type, type_args)?;
 
-                let method_type_id = self.construct_method(id, &args, return_type);
+                let method_type_id =
+                    self.construct_method(id, &args, return_type, method_decl.is_variadic);
 
                 result.push(TypeInstanceStructMethod {
                     name: method_decl.name,
@@ -479,6 +486,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         make_type!(f32);
         make_type!(f64);
         make_type!(u8);
+        make_type!(char);
     }
 }
 
@@ -500,6 +508,7 @@ fn make_base_instance(
         methods: vec![],
         type_args: positional_args.to_vec(),
         is_function: false,
+        is_variadic: false,
         function_args: vec![],
         function_return_type: None,
         is_method_of: None,

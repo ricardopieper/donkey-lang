@@ -1,3 +1,5 @@
+use std::ops::Index;
+
 use crate::{
     commons::float::FloatLiteral,
     interner::{InternedString, StringInterner},
@@ -103,6 +105,7 @@ impl ToString for Operator {
 pub enum Token {
     LiteralFloat(FloatLiteral),
     LiteralInteger(i128),
+    LiteralChar(char),
     LiteralString(InternedString),
     Operator(Operator),
     Identifier(InternedString),
@@ -126,6 +129,7 @@ pub enum Token {
     DefKeyword,
     OpenParen,
     CloseParen,
+    Ellipsis,
     OpenArrayBracket,
     CloseArrayBracket,
     MemberAccessor,
@@ -138,6 +142,7 @@ impl Token {
         match self {
             Token::LiteralFloat(_) => "float literal",
             Token::LiteralInteger(_) => "integer literal",
+            Token::LiteralChar(_) => "char literal",
             Token::LiteralString(_) => "string literal",
             Token::Operator(_) => "operator",
             Token::Identifier(_) => "identifier",
@@ -147,6 +152,7 @@ impl Token {
             Token::None => "None",
             Token::Comma => "comma ,",
             Token::Colon => "colon :",
+            Token::Ellipsis => "ellipsis (...)",
             Token::StructDef => "struct keyword",
             Token::IfKeyword => "if keyword",
             Token::ForKeyword => "for keyword",
@@ -222,6 +228,7 @@ impl PartialToken {
                 "<" => Token::Operator(Operator::Less),
                 ">=" => Token::Operator(Operator::GreaterEquals),
                 "<=" => Token::Operator(Operator::LessEquals),
+                "..." => Token::Ellipsis,
                 _ => panic!("Unimplemented operator {s}"),
             },
         }
@@ -329,7 +336,7 @@ impl<'interner> Tokenizer<'interner> {
     }
 
     fn reset_eater_buffer(&mut self) {
-        self.eater_buf = String::new();
+        self.eater_buf.clear();
     }
 
     fn next(&mut self) {
@@ -394,9 +401,53 @@ impl<'interner> Tokenizer<'interner> {
         }
     }
 
-    fn eat_string_literal(&mut self) -> bool {
+    fn eat_char_literal(&mut self) -> (bool, char) {
         let stop = self.cur();
-        if stop != '\'' && stop != '"' {
+        if stop != '\'' {
+            return (false, '\0');
+        }
+        self.next();
+        //@TODO maybe there's a char ascii math trick to escape this without a match and produce the escaped char from it's representation
+        //@TODO support for unicode chars?
+        let cur = self.cur();
+        let is_escaping = cur == '\\';
+        if is_escaping {
+            self.next();
+            let cur = self.cur();
+
+            let escaped_char = match cur {
+                '\\' => '\\',
+                '\'' => '\'',
+                '0' => '\0',
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                _ => panic!("cannot escape char {cur}"),
+            };
+
+            self.next();
+
+            if self.cur() != '\'' {
+                panic!("expected \\' after char, instead found {}. Char literals can only be 1 char long, or must be escaped", self.cur());
+            }
+            self.next();
+
+            return (true, escaped_char);
+        } else {
+            let ch = cur;
+            self.next();
+            if self.cur() != '\'' {
+                panic!("expected \\' after char, instead found {}. Char literals can only be 1 char long, or must be escaped", self.cur());
+            }
+            self.next();
+            return (true, ch);
+        }
+    }
+
+    fn eat_string_literal(&mut self) -> bool {
+        //@TODO use the same logic as eat_char_literal?
+        let stop = self.cur();
+        if stop != '"' {
             return false;
         }
         self.next();
@@ -404,20 +455,19 @@ impl<'interner> Tokenizer<'interner> {
         let mut finished = false;
         while self.can_go() {
             let cur = self.cur();
+            //start a escape sequence
             if cur == '\\' && !is_escaping {
                 is_escaping = true;
                 self.next();
                 continue;
             }
+
             if is_escaping {
-                if stop == '\'' && cur == '\'' {
-                    self.eater_buf.push('\'');
-                } else if stop == '"' && cur == '"' {
-                    self.eater_buf.push('"');
-                } else if cur == '\\' {
-                    self.eater_buf.push('\\');
-                } else if cur == '0' {
-                    self.eater_buf.push('\0');
+                let escapable_chars = ['\\', '"', '0', 'n', 't', 'r'];
+                let resulting_chars = ['\\', '"', '\0', '\n', '\t', '\r'];
+                let pos = escapable_chars.iter().position(|x| *x == cur);
+                if let Some(pos) = pos {
+                    self.eater_buf.push(resulting_chars[pos]);
                 } else {
                     panic!("cannot escape char {cur}");
                 }
@@ -425,11 +475,7 @@ impl<'interner> Tokenizer<'interner> {
                 self.next();
                 continue;
             }
-            if stop == '\'' && cur == '\'' {
-                finished = true;
-                break;
-            }
-            if stop == '"' && cur == '"' {
+            if cur == '"' {
                 finished = true;
                 break;
             }
@@ -484,7 +530,7 @@ impl<'interner> Tokenizer<'interner> {
 
         let operators = &[
             "+", "->", "-", "*", "%", "/", "<<", ">>", "<=", ">=", ">", "<", "!=", "==", "=", "^",
-            "(", ")", "&",
+            "(", ")", "&", "...",
         ];
         while self.can_go() {
             self.commit_current_token(&mut token_table);
@@ -548,7 +594,7 @@ impl<'interner> Tokenizer<'interner> {
                 self.reset_eater_buffer();
                 let identifier = self.eat_identifier().unwrap();
                 self.cur_partial_token = PartialToken::Identifier(identifier.to_string());
-            } else if self.cur() == '\'' || self.cur() == '"' {
+            } else if self.cur() == '"' {
                 self.reset_eater_buffer();
 
                 self.start_token();
@@ -565,8 +611,25 @@ impl<'interner> Tokenizer<'interner> {
                 );
 
                 self.next();
+            } else if self.cur() == '\'' {
+                self.reset_eater_buffer();
+                self.start_token();
+
+                let (success, char) = self.eat_char_literal();
+                if !success {
+                    return Err("Error parsing char literal".to_string());
+                }
+                self.end_token();
+
+                token_table.add(
+                    Token::LiteralChar(char),
+                    self.file,
+                    self.start_token,
+                    self.end_token,
+                );
             } else {
                 self.start_token();
+                //@TODO maybe this should be together with the operators?
                 let token = match self.cur() {
                     ',' => Some(Token::Comma),
                     ':' => Some(Token::Colon),
@@ -880,29 +943,64 @@ mod tests {
 
     #[test]
     fn string_literal() -> Result<(), String> {
-        let result = tokenize("'abc'")?;
-        assert_eq!(result, [Token::LiteralString(istr("abc"))]);
-        Ok(())
-    }
-
-    #[test]
-    fn string_literal_doublequotes() -> Result<(), String> {
         let result = tokenize("\"abc\"")?;
         assert_eq!(result, [Token::LiteralString(istr("abc"))]);
         Ok(())
     }
 
     #[test]
-    fn string_literal_escapedouble() -> Result<(), String> {
+    fn char_literal() -> Result<(), String> {
+        let result = tokenize("'a'")?;
+        assert_eq!(result, [Token::LiteralChar('a')]);
+        Ok(())
+    }
+
+    #[test]
+    fn string_literal_escape_double_quotes() -> Result<(), String> {
         let result = tokenize("\"a\\\"b\\\"c\"")?;
         assert_eq!(result, [Token::LiteralString(istr("a\"b\"c"))]);
         Ok(())
     }
 
     #[test]
-    fn string_literal_escapesingle() -> Result<(), String> {
-        let result = tokenize("\'a\\'b\\'c\'")?;
-        assert_eq!(result, [Token::LiteralString(istr("a'b'c"))]);
+    fn string_literal_newline_tabs_and_null_terminator() -> Result<(), String> {
+        let result = tokenize("\"a \t \n \0 \"")?;
+        assert_eq!(result, [Token::LiteralString(istr("a \t \n \0 "))]);
+        Ok(())
+    }
+
+    #[test]
+    fn escape_char_literal_newline() -> Result<(), String> {
+        let result = tokenize("'\\n'")?;
+        assert_eq!(result, [Token::LiteralChar('\n')]);
+        Ok(())
+    }
+
+    #[test]
+    fn escape_char_literal_tab() -> Result<(), String> {
+        let result = tokenize("'\\t'")?;
+        assert_eq!(result, [Token::LiteralChar('\t')]);
+        Ok(())
+    }
+
+    #[test]
+    fn escape_char_literal_single_quote() -> Result<(), String> {
+        let result = tokenize("'\\''")?;
+        assert_eq!(result, [Token::LiteralChar('\'')]);
+        Ok(())
+    }
+
+    #[test]
+    fn escape_char_literal_single_doublequote() -> Result<(), String> {
+        let result = tokenize("'\"'")?;
+        assert_eq!(result, [Token::LiteralChar('\"')]);
+        Ok(())
+    }
+
+    #[test]
+    fn escape_char_literal_null_terminator() -> Result<(), String> {
+        let result = tokenize("'\\0'")?;
+        assert_eq!(result, [Token::LiteralChar('\0')]);
         Ok(())
     }
 
@@ -1049,6 +1147,13 @@ mod tests {
                 Token::Colon
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ellipsis() -> Result<(), String> {
+        let result = tokenize("...")?;
+        assert_eq!(result, [Token::Ellipsis,]);
         Ok(())
     }
 }

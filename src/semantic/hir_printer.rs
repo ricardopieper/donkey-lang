@@ -1,4 +1,3 @@
-
 use crate::interner::StringInterner;
 
 use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR};
@@ -73,6 +72,7 @@ impl<'interner> HIRExprPrinter<'interner> {
         match &expr {
             LiteralHIRExpr::Float(f) => format!("{:?}", f.0),
             LiteralHIRExpr::Integer(i) => format!("{i}"),
+            LiteralHIRExpr::Char(c) => format!("\'{c}\'"),
             LiteralHIRExpr::String(s) => format!("\"{}\"", self.interner.borrow(*s)),
             LiteralHIRExpr::Boolean(true) => self.interner.get("True").to_string(self.interner),
             LiteralHIRExpr::Boolean(false) => self.interner.get("False").to_string(self.interner),
@@ -96,7 +96,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
         HIRPrinter {
             type_db,
             interner,
-            expr_printer: HIRExprPrinter { interner },
+            expr_printer: HIRExprPrinter::new(interner),
         }
     }
 

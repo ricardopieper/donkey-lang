@@ -3,7 +3,6 @@ use crate::ast::parser::{Spanned, SpannedOperator};
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
-use crate::semantic::hir_printer::{HIRExprPrinter};
 use crate::semantic::name_registry::NameRegistry;
 
 use crate::types::type_errors::{
@@ -132,11 +131,14 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
                 let literal_type = match literal_expr {
                     LiteralHIRExpr::Integer(_) => {
                         if let Some(type_hint) = type_hint {
-                            
                             self.try_literal_promotion(&literal_expr, type_hint, meta)?
                         } else {
                             self.type_db.common_types.i32
                         }
+                    }
+                    LiteralHIRExpr::Char(_) => {
+                        //@TODO promotable?
+                        self.type_db.common_types.char
                     }
                     LiteralHIRExpr::Float(_) => self.type_db.common_types.f32,
                     LiteralHIRExpr::String(_) => {
@@ -345,7 +347,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
         meta: HIRExprMetadata<'source>,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let rhs_expr = self.compute_and_infer_expr_type(rhs, None)?;
-        let is_lvalue = rhs_expr.can_be_pointed(self.type_db);
+        let is_lvalue = rhs_expr.is_lvalue(self.type_db);
         if !is_lvalue {
             self.errors
                 .invalid_refed_type
@@ -712,6 +714,7 @@ pub fn infer_types<'source, 'interner>(
                 return_type,
                 meta,
                 is_intrinsic,
+                is_varargs,
             } => {
                 let mut inference_ctx = FunctionTypeInferenceContext {
                     on_function: RootElementType::Function(function_name),
@@ -731,6 +734,7 @@ pub fn infer_types<'source, 'interner>(
                     return_type,
                     meta,
                     is_intrinsic,
+                    is_varargs,
                 }
             }
             HIRRoot::StructDeclaration {

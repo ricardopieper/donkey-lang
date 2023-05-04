@@ -30,6 +30,7 @@ use crate::{
     types::type_instance_db::TypeInstanceManager,
 };
 
+#[allow(clippy::enum_variant_names)] //RValue and LValue are known terms, let me use it
 pub enum LlvmExpression<'ctx> {
     RValue(BasicValueEnum<'ctx>),
     LValue(PointerValue<'ctx>),
@@ -37,18 +38,12 @@ pub enum LlvmExpression<'ctx> {
 }
 
 impl<'ctx> LlvmExpression<'ctx> {
+    //If this is a variable or a deref expression result or a field access, we load it. Otherwise just return it.
     pub fn load_if_lvalue(self, builder: &Builder<'ctx>) -> LlvmExpression<'ctx> {
         match self {
             Self::LValue(ptr) => Self::LoadedLValue(builder.build_load(ptr, "loaded_ptr"), ptr),
             Self::RValue(val) => Self::RValue(val),
             Self::LoadedLValue(val, ptr) => Self::LoadedLValue(val, ptr),
-        }
-    }
-
-    pub fn ensure_lvalue(self) -> LlvmExpression<'ctx> {
-        match self {
-            Self::RValue(val) => panic!("Expected an lvalue but got ${val:?}, address is unknown"),
-            lvalue @ (Self::LValue(..) | Self::LoadedLValue(..)) => lvalue,
         }
     }
 
@@ -152,6 +147,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         parameters: &[MIRTypedBoundName],
         return_type: TypeInstanceId,
         is_intrinsic: bool,
+        is_varargs: bool,
     ) -> FunctionValue<'ctx> {
         let params = parameters
             .iter()
@@ -163,10 +159,11 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
             .collect::<Vec<_>>();
 
         let function_type = if self.type_db.common_types.void == return_type {
-            self.context.void_type().fn_type(&params, false)
+            self.context.void_type().fn_type(&params, is_varargs)
         } else {
             let llvm_return_type = self.make_llvm_type(return_type);
-            self.as_basic_type(llvm_return_type).fn_type(&params, false)
+            self.as_basic_type(llvm_return_type)
+                .fn_type(&params, is_varargs)
         };
 
         let linkage = if function_name == self.interner.get("main") || is_intrinsic {
@@ -226,7 +223,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 let function_layout =
                     crate::compiler::layouts::generate_function_layout(scopes, self.type_db);
                 let function_signature =
-                    self.create_function(*function_name, parameters, *return_type, false);
+                    self.create_function(*function_name, parameters, *return_type, false, false);
 
                 let cur_basic = self.context.append_basic_block(function_signature, "entry");
                 self.builder.position_at_end(cur_basic);
@@ -384,8 +381,9 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 function_name,
                 parameters,
                 return_type,
+                is_varargs,
             } => {
-                self.create_function(*function_name, parameters, *return_type, true);
+                self.create_function(*function_name, parameters, *return_type, true, *is_varargs);
             }
         }
     }
@@ -396,25 +394,23 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         symbol_table: &FunctionSymbolTable<'ctx>,
         expression: &MIRExpr<Checked>,
     ) -> LlvmExpression<'ctx> {
-
         match expression {
-            MIRExpr::RValue(rvalue) => {
-                self.compile_rvalue(rvalue, current_scope, symbol_table)
-            }
-            MIRExpr::LValue(lvalue) => {
-                self.compile_lvalue(lvalue, symbol_table, current_scope)
-            }
+            MIRExpr::RValue(rvalue) => self.compile_rvalue(rvalue, current_scope, symbol_table),
+            MIRExpr::LValue(lvalue) => self.compile_lvalue(lvalue, symbol_table, current_scope),
             MIRExpr::TypecheckTag(_) => panic!(),
         }
     }
 
-    fn compile_rvalue(&mut self, rvalue: &MIRExprRValue<Checked>, current_scope: ScopeId, symbol_table: &FunctionSymbolTable<'ctx>) -> LlvmExpression<'ctx> {
+    fn compile_rvalue(
+        &mut self,
+        rvalue: &MIRExprRValue<Checked>,
+        current_scope: ScopeId,
+        symbol_table: &FunctionSymbolTable<'ctx>,
+    ) -> LlvmExpression<'ctx> {
         let types = &self.type_db.common_types;
-        
+
         match rvalue {
-            MIRExprRValue::Literal(literal, ty, _) => {
-                self.build_literal(literal, types, ty)
-            }
+            MIRExprRValue::Literal(literal, ty, _) => self.build_literal(literal, types, ty),
             MIRExprRValue::BinaryOperation(lhs, op, rhs, _ty, _) => {
                 self.build_binary_expr(lhs, rhs, current_scope, symbol_table, op, types)
             }
@@ -467,11 +463,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 //The X lives somewhere in memory (there is an alloca related to it, a ptr),
                 //then we do a compile_expr on that variable. The result is an lvalue which contains the pointer.
 
-                let ptr = self.compile_lvalue(
-                    expr,
-                    symbol_table,
-                    current_scope
-                );
+                let ptr = self.compile_lvalue(expr, symbol_table, current_scope);
 
                 LlvmExpression::RValue(ptr.expect_lvalue().into())
             }
@@ -486,10 +478,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     Operator::Minus => {
                         if lhs_type.is_integer(self.type_db) || lhs_type == types.bool {
                             self.builder
-                                .build_int_neg(
-                                    compiled.into_int_value(),
-                                    &self.make_temp("int"),
-                                )
+                                .build_int_neg(compiled.into_int_value(), &self.make_temp("int"))
                                 .into()
                         } else if lhs_type.is_float(self.type_db) {
                             self.builder
@@ -499,11 +488,11 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                                 )
                                 .into()
                         } else {
-                            panic!("Not implemented")
+                            todo!("Not implemented")
                         }
                     }
                     _ => {
-                        panic!("Not implemented unary operator: {op:?}")
+                        todo!("Not implemented unary operator: {op:?}")
                     }
                 };
                 LlvmExpression::RValue(expr)
@@ -512,7 +501,12 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         }
     }
 
-    fn compile_lvalue(&mut self, lvalue: &MIRExprLValue<Checked>, symbol_table: &FunctionSymbolTable<'ctx>, current_scope: ScopeId) -> LlvmExpression<'ctx>  {
+    fn compile_lvalue(
+        &mut self,
+        lvalue: &MIRExprLValue<Checked>,
+        symbol_table: &FunctionSymbolTable<'ctx>,
+        current_scope: ScopeId,
+    ) -> LlvmExpression<'ctx> {
         match lvalue {
             MIRExprLValue::Variable(name, _, _) => {
                 LlvmExpression::LValue(*symbol_table.get(&(*name, current_scope)).unwrap())
@@ -558,8 +552,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 match expr {
                     LlvmExpression::RValue(basic) => {
                         let as_ptr = basic.into_pointer_value();
-                        let loaded =
-                            self.builder.build_load(as_ptr, &self.make_temp("deref"));
+                        let loaded = self.builder.build_load(as_ptr, &self.make_temp("deref"));
                         LlvmExpression::LoadedLValue(loaded, as_ptr)
                     }
                     LlvmExpression::LValue(ptr) | LlvmExpression::LoadedLValue(_, ptr) => {
@@ -579,8 +572,8 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
     fn build_binary_expr(
         &mut self,
-        lhs: &Box<MIRExpr<Checked>>,
-        rhs: &Box<MIRExpr<Checked>>,
+        lhs: &MIRExpr<Checked>,
+        rhs: &MIRExpr<Checked>,
         current_scope: ScopeId,
         symbol_table: &FunctionSymbolTable<'ctx>,
         op: &crate::ast::parser::SpannedOperator,
@@ -621,7 +614,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                         &self.make_temp("float")).into()
                     }
                 } else {
-                    panic!("Not implemented")
+                    todo!("Not implemented")
                 }
             };
         }
@@ -974,6 +967,10 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 };
                 LlvmExpression::RValue(val.into())
             }
+            LiteralMIRExpr::Char(c) => {
+                let val = self.context.i8_type().const_int(*c as u64, false);
+                LlvmExpression::RValue(val.into())
+            }
             LiteralMIRExpr::Float(f) => {
                 let val = if types.f32 == *literal_type {
                     self.context.f32_type().const_float(f.0 as f32 as f64)
@@ -992,7 +989,6 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
             ),
             LiteralMIRExpr::String(s) => {
                 let str_alloc = self.build_string_literal(s);
-                println!("str_alloc: {:?}", str_alloc);
                 LlvmExpression::LValue(str_alloc).load_if_lvalue(self.builder)
             } //LiteralMIRExpr::None => todo!("none not implemented in llvm"),
         }
@@ -1119,7 +1115,7 @@ pub fn generate_llvm(
         }
     }
 
-    module.print_to_stderr();
+    //module.print_to_stderr();
 
     let target_machine = get_native_target_machine();
 

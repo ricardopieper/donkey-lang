@@ -25,6 +25,7 @@ pub type MIRAstMetadata<'source> = &'source AST;
 pub enum LiteralMIRExpr {
     Integer(i128),
     Float(FloatLiteral),
+    Char(char),
     String(InternedString),
     Boolean(bool),
 }
@@ -148,6 +149,7 @@ pub enum MIRTopLevelNode<'source, TTypecheckStateExpr> {
         function_name: InternedString,
         parameters: Vec<MIRTypedBoundName>,
         return_type: TypeInstanceId,
+        is_varargs: bool,
     },
     DeclareFunction {
         function_name: InternedString,
@@ -259,9 +261,9 @@ struct MIRFunctionEmitter<'source> {
 }
 
 //returns the simplified expression, and whether the expression was simplified at all. Can be called until no simplification is possible.
-fn simplify_expression<'a, T>(
-    expr: HIRExpr<'a, TypeInstanceId, T>,
-) -> (HIRExpr<'a, TypeInstanceId, NotCheckedSimplified>, bool) {
+fn simplify_expression<T>(
+    expr: HIRExpr<'_, TypeInstanceId, T>,
+) -> (HIRExpr<'_, TypeInstanceId, NotCheckedSimplified>, bool) {
     match expr {
         HIRExpr::Literal(literal, ty, meta) => (HIRExpr::Literal(literal, ty, meta), false),
         HIRExpr::Variable(var_name, ty, meta) => (HIRExpr::Variable(var_name, ty, meta), false),
@@ -375,14 +377,11 @@ macro_rules! expect_lvalue {
                     }
                     .at_spanned($element, $file, $meta),
                 );
-                return Err(CompilerError::TypeCheckError)
+                return Err(CompilerError::TypeCheckError);
             }
-            MIRExpr::LValue(lvalue) => {
-                lvalue
-            }
+            MIRExpr::LValue(lvalue) => lvalue,
             MIRExpr::TypecheckTag(_) => unreachable!(),
         }
-
     };
 }
 
@@ -397,6 +396,7 @@ fn convert_to_mir<'a>(
             let mir_literal: LiteralMIRExpr = match literal {
                 LiteralHIRExpr::Integer(i) => LiteralMIRExpr::Integer(i),
                 LiteralHIRExpr::Float(f) => LiteralMIRExpr::Float(f),
+                LiteralHIRExpr::Char(c) => LiteralMIRExpr::Char(c),
                 LiteralHIRExpr::String(s) => LiteralMIRExpr::String(s),
                 LiteralHIRExpr::Boolean(b) => LiteralMIRExpr::Boolean(b),
                 LiteralHIRExpr::None => todo!("None not implemented in MIR"),
@@ -428,7 +428,7 @@ fn convert_to_mir<'a>(
                 .into_iter()
                 .map(|arg| hir_expr_to_mir(file, element, arg, errors))
                 .collect();
-           
+
             Ok(MIRExpr::RValue(MIRExprRValue::MethodCall(
                 obj.into(),
                 method_name,
@@ -462,9 +462,11 @@ fn convert_to_mir<'a>(
 
             let ref_lvalue = expect_lvalue!(element, file, expr, errors, meta);
 
-           
-            Ok(MIRExpr::RValue(MIRExprRValue::Ref(ref_lvalue.into(), ty, meta)))
- 
+            Ok(MIRExpr::RValue(MIRExprRValue::Ref(
+                ref_lvalue.into(),
+                ty,
+                meta,
+            )))
         }
         HIRExpr::UnaryExpression(op, rhs, ty, meta) => {
             let rhs = hir_expr_to_mir(file, element, *rhs, errors)?;
@@ -914,6 +916,7 @@ pub fn process_hir_funcdecl<'source>(
     body: Vec<InferredTypeHIR<'source>>,
     return_type: TypeInstanceId,
     is_intrinsic: bool,
+    is_varargs: bool,
     errors: &mut TypeErrors<'source>,
     root: HIRAstMetadata<'source>,
 ) -> Result<MIRTopLevelNode<'source, NotCheckedSimplified>, CompilerError> {
@@ -928,7 +931,12 @@ pub fn process_hir_funcdecl<'source>(
                 })
                 .collect::<Vec<_>>(),
             return_type,
+            is_varargs,
         });
+    }
+
+    if !is_intrinsic && is_varargs {
+        todo!("Varargs functions not supported outside intrinsics");
     }
 
     let mut emitter = MIRFunctionEmitter::new();
@@ -942,7 +950,13 @@ pub fn process_hir_funcdecl<'source>(
         emitter.scope_add_variable(function_zero_scope, param.name, param.typename);
     }
 
-    process_body(file, RootElementType::Function(function_name), &mut emitter, errors, body)?;
+    process_body(
+        file,
+        RootElementType::Function(function_name),
+        &mut emitter,
+        errors,
+        body,
+    )?;
 
     //check for blocks with no returns (like fallback blocks or blocks that the user didnt specify a return)
     for block_id in 0..emitter.blocks.len() {
@@ -984,6 +998,7 @@ pub fn hir_to_mir<'source>(
                 return_type,
                 meta,
                 is_intrinsic,
+                is_varargs,
             } => {
                 let fdecl = process_hir_funcdecl(
                     file,
@@ -992,6 +1007,7 @@ pub fn hir_to_mir<'source>(
                     body,
                     return_type,
                     is_intrinsic,
+                    is_varargs,
                     errors,
                     meta,
                 )?;
@@ -2119,11 +2135,8 @@ def main(args: array<str>) -> ptr<str>:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(
-            &result.mir.last().unwrap(),
-            &result.type_db,
-            &src.interner,
-        );
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
         //the return would be actually &*args.__index_ptr__(0) but we should cancel out the deref &*
         let expected = "
 def main(args: array<str>) -> ptr<str>:
@@ -2149,11 +2162,8 @@ def main():
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(
-            &result.mir.last().unwrap(),
-            &result.type_db,
-            &src.interner,
-        );
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
         println!("{final_result}");
         //the return would be actually &*args.__index_ptr__(0) but we should cancel out the deref &*
         let expected = "
@@ -2201,11 +2211,8 @@ def main(args: array<str>) -> ptr<str>:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(
-            &result.mir.last().unwrap(),
-            &result.type_db,
-            &src.interner,
-        );
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
         let expected = "
 def main(args: array<str>) -> ptr<str>:
     defscope 0:
@@ -2228,11 +2235,8 @@ def main(args: array<str>) -> str:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(
-            &result.mir.last().unwrap(),
-            &result.type_db,
-            &src.interner,
-        );
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
         let expected = "
 def main(args: array<str>) -> str:
     defscope 0:

@@ -1,5 +1,5 @@
 use crate::interner::{InternedString, StringInterner};
-use crate::types::type_errors::TypeErrorAtLocation;
+use crate::types::type_errors::{TypeErrorAtLocation, VarargsNotSupported};
 use crate::{
     semantic::hir::{HIRExpr, HIRTypedBoundName, HIR},
     types::type_errors::{TypeErrors, VariableNotFound},
@@ -7,6 +7,7 @@ use crate::{
 use std::collections::HashSet;
 
 use super::context::FileTableIndex;
+use super::hir::NotChecked;
 use super::{
     compiler_errors::CompilerError, hir::HIRRoot, hir_type_resolution::RootElementType,
     name_registry::NameRegistry,
@@ -182,9 +183,22 @@ fn detect_declaration_errors_in_function<'source, T, T1, T2>(
     )
 }
 
-pub fn detect_undeclared_vars_and_redeclarations<'source, T, T1, T2, T3>(
+pub type AnyUncheckedHIRExpr<'s, TExprType> = HIRExpr<'s, TExprType, NotChecked>;
+pub type AnyUncheckedHIR<'s, TVariableDeclType, TExprType> =
+    HIR<'s, TVariableDeclType, AnyUncheckedHIRExpr<'s, TExprType>>;
+pub type AnyUncheckedHIRRoot<'s, TGlobalTypes, TExprType, TBodyType, TStructFieldsType> =
+    HIRRoot<'s, TGlobalTypes, AnyUncheckedHIR<'s, TBodyType, TExprType>, TStructFieldsType>;
+
+//@TODO simplify types?
+pub fn detect_undeclared_vars_and_redeclarations<
+    'source,
+    TGlobalTypes,
+    TExprType,
+    TBodyType,
+    TStructFieldsType,
+>(
     globals: &NameRegistry,
-    mir: &[HIRRoot<'source, T, HIR<'source, T1, HIRExpr<'source, T2>>, T3>],
+    mir: &[AnyUncheckedHIRRoot<'source, TGlobalTypes, TExprType, TBodyType, TStructFieldsType>],
     errors: &mut TypeErrors<'source>,
     interner: &StringInterner,
     file: FileTableIndex,
@@ -208,9 +222,23 @@ pub fn detect_undeclared_vars_and_redeclarations<'source, T, T1, T2, T3>(
             function_name,
             parameters,
             body,
+            is_intrinsic,
+            is_varargs,
+            meta,
             ..
         } = node
         {
+            if !is_intrinsic && *is_varargs {
+                errors
+                    .varargs_not_supported
+                    .push(VarargsNotSupported {}.at_spanned(
+                        RootElementType::Function(*function_name),
+                        file,
+                        *meta,
+                    ));
+                return Err(CompilerError::TypeCheckError);
+            }
+
             if !detect_declaration_errors_in_function(
                 declarations_found.clone(),
                 *function_name,

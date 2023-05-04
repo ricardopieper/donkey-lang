@@ -1,15 +1,13 @@
 use core::panic;
 use std::fs;
 
-use super::hir::{
-    ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotCheckedSimplified,
-};
+use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotCheckedSimplified};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
 use super::name_registry::NameRegistry;
 use super::type_checker::typecheck;
-use crate::ast::ast_printer::print_ast;
+
 use crate::ast::lexer::{TokenSpanIndex, TokenTable};
-use crate::ast::parser::AstSpan;
+use crate::ast::parser::{print_errors, AstSpan, Parser};
 use crate::ast::{lexer, parser};
 use crate::interner::StringInterner;
 use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
@@ -43,11 +41,11 @@ impl Source {
 }
 impl Source {
     #[allow(dead_code)]
-    pub fn load_str_ref(self: &mut Source, file_name: &str, source: &str) {
+    pub fn load_str_ref(self: &mut Source, file_name: &str, source: &str) -> bool {
         self.load(file_name.to_string(), source.to_string())
     }
 
-    pub fn load(self: &mut Source, file_name: String, source: String) {
+    pub fn load(self: &mut Source, file_name: String, source: String) -> bool {
         let prev_count = self.file_table.len();
         let mut file_table_entry = FileTableEntry {
             path: file_name,
@@ -70,22 +68,31 @@ impl Source {
         .unwrap();
 
         self.file_table.push(file_table_entry);
+        let last = &self.file_table.last().unwrap();
+        let mut parser = Parser::new(&last.token_table);
+        let result = parser.parse_ast();
 
-        let (ast, _) =
-            parser::parse_ast(&self.file_table[prev_count].token_table, &self.file_table);
-        println!("{}\n", print_ast(&ast, &self.interner));
-        let root = parser::AST::Root(ast);
+        if !parser.errors.is_empty() {
+            print_errors(&parser, &self.file_table, &last.token_table);
+            return false;
+        }
+
+        //println!("{}\n", print_ast(&ast, &self.interner));
+        let root = parser::AST::Root(result);
         self.file_table.last_mut().unwrap().ast = root;
+
+        return true;
     }
 
-    pub fn load_file(&mut self, file_location: &str) {
+    pub fn load_file(&mut self, file_location: &str) -> bool {
         let input = fs::read_to_string(file_location)
             .unwrap_or_else(|_| panic!("Could not read file {file_location}"));
-        self.load(file_location.to_string(), input);
+        self.load(file_location.to_string(), input)
     }
 
-    pub fn load_stdlib(&mut self) {
-        self.load_file("./stdlib/llvm_intrinsics.dk");
+    #[allow(dead_code)]
+    pub fn load_stdlib(&mut self) -> bool {
+        self.load_file("./stdlib/llvm_intrinsics.dk")
     }
 }
 
@@ -160,14 +167,20 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                     inferred_globals_hir,
                 );
 
-            if let Err(e) = undeclared_vars::detect_undeclared_vars_and_redeclarations(
+            if let Err(_e) = undeclared_vars::detect_undeclared_vars_and_redeclarations(
                 &self.globals,
                 &first_assignment_hir,
                 &mut self.type_errors,
                 &source.interner,
                 file.index,
             ) {
-                panic!("detect_undeclared_vars_and_redeclarations Err: {e:#?}");
+                let printer = TypeErrorPrinter::new(
+                    &self.type_errors,
+                    &self.type_db,
+                    &source.interner,
+                    &source.file_table,
+                );
+                panic!("Type errors:\n{}", printer);
             }
 
             match type_inference::infer_types(
@@ -191,25 +204,22 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                     self.hir.push(final_hir.clone());
                     let mir = hir_to_mir(file.index, final_hir, &mut self.type_errors);
 
-                    match mir {
-                        Ok(mir) => {
-                            if do_typecheck {
-                                let typechecked = typecheck(
-                                    mir,
-                                    &self.type_db,
-                                    &self.globals,
-                                    &mut self.type_errors,
-                                    &source.interner,
-                                    file.index,
-                                );
-                                if self.type_errors.count() == 0 {
-                                    self.mir.extend(typechecked.unwrap());
-                                }
-                            } else {
-                                self.unchecked_mir.extend(mir);
+                    if let Ok(mir) = mir {
+                        if do_typecheck {
+                            let typechecked = typecheck(
+                                mir,
+                                &self.type_db,
+                                &self.globals,
+                                &mut self.type_errors,
+                                &source.interner,
+                                file.index,
+                            );
+                            if self.type_errors.count() == 0 {
+                                self.mir.extend(typechecked.unwrap());
                             }
+                        } else {
+                            self.unchecked_mir.extend(mir);
                         }
-                        Err(_) => {}
                     }
                 }
                 Err(_) => {}
@@ -222,11 +232,8 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
 pub mod test_utils {
     use crate::{
         interner::StringInterner,
-        semantic::{
-            hir::{NotCheckedSimplified},
-            mir::MIRTopLevelNode,
-        },
-        types::{type_instance_db::TypeInstanceManager},
+        semantic::{hir::NotCheckedSimplified, mir::MIRTopLevelNode},
+        types::type_instance_db::TypeInstanceManager,
     };
 
     use super::{Analyzer, Source};

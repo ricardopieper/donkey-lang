@@ -1,15 +1,15 @@
-use std::{collections::HashMap, ops::Deref};
+use std::{cell::UnsafeCell, collections::HashMap, ops::Deref};
 
 #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
 pub struct InternedString(pub usize);
 
 //The string interner uses RefCell so that we can share it freely
 pub struct StringInterner {
-    strings: Vec<String>,
+    strings: UnsafeCell<Vec<String>>,
     //The key is actually a string inside the strings vec.
     //However, we never return this reference. Instead we return a reference to strings
     //which will have a lifetime bounded to Self.
-    table: HashMap<&'static str, InternedString>,
+    table: UnsafeCell<HashMap<&'static str, InternedString>>,
 }
 
 //I swear I know what I'm doing!
@@ -19,46 +19,45 @@ impl !Sync for StringInterner {}
 impl StringInterner {
     pub fn new() -> Self {
         StringInterner {
-            strings: vec![],
-            table: HashMap::new(),
+            strings: UnsafeCell::new(vec![]),
+            table: UnsafeCell::new(HashMap::new()),
         }
     }
 
     pub fn get(&self, string: &str) -> InternedString {
-        if let Some(v) = self.table.get(string) {
-            return *v;
+        unsafe {
+            if let Some(v) = (*self.table.get()).get(string) {
+                return *v;
+            }
         }
 
         self.insert_new_string(string.to_string())
     }
 
     fn insert_new_string(&self, string: String) -> InternedString {
-        let index = InternedString(self.strings.len());
         unsafe {
+            let index = InternedString((*self.strings.get()).len());
             //@SAFETY As long as we execute this code in a single thread, this should be safe.
             //And we specifically marked the struct as !Send and !Sync.
             //We also never return anything that references the hashmap table,
             //we only use the hashmap on lookups. We do return the InternedString value, but
             //it's returned by copy, and the value itself is just a usize.
-            //If the strings vec is resized, the vec inside String is are still valid,
+            //If the strings vec is resized, the Strings inside the vec are still valid,
             //because the strings inside the vec are not changed, the pointers are the same
             //and the values themselves are not dropped or mutated. It is that still valid
-            //pointer address (and len) that we are storing in the hashmap.
+            //pointer address (and len) that we are storing in the vec.
             //Also, the strings cannot be deleted from the string vec, none of the methods in
             //the interner delete any values, so they are never dropped and remain valid as long as
             //the interner is alive.
 
-            let vec = &mut *(&self.strings as *const Vec<String> as *mut Vec<String>);
-            vec.push(string);
+            (*self.strings.get()).push(string);
 
-            let str_ref: &str = (self.strings[index.0]).deref();
+            let str_ref: &str = ((*self.strings.get())[index.0]).deref();
             let as_static: &'static str = std::mem::transmute(str_ref);
-            type MutMap = HashMap<&'static str, InternedString>;
-            let table = &mut *(&self.table as *const MutMap as *mut MutMap);
-            table.insert(as_static, index);
-        };
-
-        index
+            let table = self.table.get();
+            (*table).insert(as_static, index);
+            index
+        }
     }
 
     pub fn get_string(&self, string: InternedString) -> String {
@@ -66,7 +65,10 @@ impl StringInterner {
     }
 
     pub fn borrow(&self, string: InternedString) -> &str {
-        self.strings[string.0].as_ref()
+        unsafe {
+            let strings = self.strings.get();
+            (*strings)[string.0].as_ref()
+        }
     }
 }
 
@@ -122,9 +124,9 @@ impl InternedString {
 }
 
 mod test {
-    #[allow(unused_imports)] //I don't know why this is necessary, cargo clippy --fix removes it resulting in a compiltaion error
+    #[allow(unused_imports)]
+    //I don't know why this is necessary, cargo clippy --fix removes it resulting in a compiltaion error
     use super::StringInterner;
-
 
     #[test]
     fn test_interning() {
@@ -149,16 +151,16 @@ mod test {
             let interner = StringInterner::new();
 
             //add a bunch of numbers
-            for i in 0..32 {
-                interner.get(all_strings[i].as_str());
+            for string in all_strings.iter().take(32) {
+                interner.get(string.as_str());
             }
 
             let some_num = interner.get("17");
             let borrow = some_num.borrow(&interner);
 
             //force a couple reallocations
-            for i in 32..512 {
-                interner.get(all_strings[i].as_str());
+            for string in all_strings.iter().take(512).skip(32) {
+                interner.get(string.as_str());
             }
 
             assert_eq!(borrow, "17");

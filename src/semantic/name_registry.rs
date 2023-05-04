@@ -106,6 +106,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 body,
                 meta,
                 is_intrinsic,
+                is_varargs,
             } => {
                 //print signature
                 if function_name == InternedString(38) {
@@ -123,11 +124,11 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                         meta.get_span().start,
                         file,
                     )?;
-                    println!("Usage: {usage:#?}");
+                    //println!("Usage: {usage:#?}");
 
                     let constructed = type_db.construct_usage(&usage);
                     if let Err(e) = constructed {
-                        println!("Name registry failed: {e:#?}");
+                        //println!("Name registry failed: {e:#?}");
                         errors.type_construction_failure.push(
                             TypeConstructionFailure { error: e }.at_spanned(
                                 RootElementType::Function(function_name),
@@ -167,7 +168,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 }
                 let return_type = constructed.unwrap();
 
-                let func_id = type_db.construct_function(&param_types, return_type);
+                let func_id = type_db.construct_function(&param_types, return_type, is_varargs);
 
                 registry.insert(function_name, func_id);
 
@@ -178,6 +179,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                     return_type,
                     meta,
                     is_intrinsic,
+                    is_varargs,
                 });
             }
             HIRRoot::StructDeclaration {

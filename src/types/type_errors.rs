@@ -540,8 +540,7 @@ impl TypeErrorDisplay for TypeErrorData<VariableNotFound> {
     }
 }
 
-pub struct AssignToNonLValueError {
-}
+pub struct AssignToNonLValueError {}
 impl TypeError for AssignToNonLValueError {}
 
 impl TypeErrorDisplay for TypeErrorData<AssignToNonLValueError> {
@@ -576,6 +575,24 @@ impl TypeErrorDisplay for TypeErrorData<DerefOnNonPointerError> {
             "{on_element}, Attempted to deref a non-pointer type: {attempted_type}",
             on_element = self.on_element.diag_name(interner),
             attempted_type = self.error.attempted_type.as_string(type_db)
+        )
+    }
+}
+
+pub struct VarargsNotSupported {}
+impl TypeError for VarargsNotSupported {}
+
+impl TypeErrorDisplay for TypeErrorData<VarargsNotSupported> {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeInstanceManager<'_>,
+        interner: &StringInterner,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, varargs not supported on non-intrinsic functions",
+            on_element = self.on_element.diag_name(interner),
         )
     }
 }
@@ -689,5 +706,6 @@ make_type_errors!(
     invalid_casts = InvalidCast<'source>,
     type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>,
     invalid_derefed_type = DerefOnNonPointerError,
-    invalid_refed_type = RefOnNonLValueError
+    invalid_refed_type = RefOnNonLValueError,
+    varargs_not_supported = VarargsNotSupported
 );

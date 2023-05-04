@@ -6,6 +6,7 @@
 #![feature(string_leak)]
 #![feature(thread_local)]
 #![feature(negative_impls)]
+#![feature(type_alias_impl_trait)]
 
 #[macro_use]
 mod interner;
@@ -52,11 +53,18 @@ fn main() {
 
     let mut source = Source::new();
 
-    //source.load_stdlib();
-    source.load_file(&args[1]);
+    source.load_stdlib();
+    if !source.load_file(&args[1]) {
+        return;
+    }
 
     let mut ctx = crate::semantic::context::Analyzer::new(&source);
     ctx.analyze(&source);
+
+    if ctx.type_errors.count() > 0 {
+        ctx.print_errors();
+        return;
+    }
 
     if args.contains(&"print_mir".to_string()) {
         let printed_mir = mir_printer::print_mir(&ctx.mir, &ctx.type_db, &source.interner);

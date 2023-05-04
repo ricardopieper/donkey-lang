@@ -1,12 +1,8 @@
-#[cfg(not(test))]
-use std::ops::Deref;
-
-
 use crate::ast::lexer::{Operator, Token};
 use crate::commons::float::FloatLiteral;
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::context::{FileTableEntry, FileTableIndex};
-
+use std::ops::Deref;
 
 //This is a box wrapper type so that I can implement a "double deref"
 //automatically to make testing easier
@@ -21,15 +17,30 @@ impl ExprBox {
             expr: Box::new(expr),
         }
     }
+}
 
-    pub fn span(&self) -> AstSpan {
-        self.expr.span
+impl AsRef<Expr> for ExprBox {
+    fn as_ref(&self) -> &Expr {
+        self.expr.deref()
     }
 }
 
-#[cfg(not(test))]
+impl AsRef<AstSpan> for ExprBox {
+    fn as_ref(&self) -> &AstSpan {
+        &self.expr.span
+    }
+}
+
 impl Deref for ExprBox {
-    type Target = Box<SpanExpr>;
+    type Target = Expr;
+
+    fn deref(&self) -> &Self::Target {
+        self.expr.deref()
+    }
+}
+
+impl Deref for SpanExpr {
+    type Target = Expr;
 
     fn deref(&self) -> &Self::Target {
         &self.expr
@@ -74,11 +85,18 @@ impl Spanned for StringSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpannedOperator(pub Operator, pub AstSpan);
 
+impl Spanned for SpannedOperator {
+    fn get_span(&self) -> AstSpan {
+        self.1
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     IntegerValue(i128, AstSpan),
     FloatValue(FloatLiteral, AstSpan),
     StringValue(StringSpan),
+    CharValue(char, AstSpan),
     BooleanValue(bool, AstSpan),
     NoneValue(AstSpan),
     Variable(StringSpan),
@@ -101,16 +119,17 @@ impl Spanned for Expr {
     fn get_span(&self) -> AstSpan {
         match self {
             IntegerValue(.., span)
+            | CharValue(_, span)
             | FloatValue(_, span)
             | NoneValue(span)
             | BooleanValue(_, span) => *span,
-            StringValue(s) | Variable(s) => s.1,
-            FunctionCall(f, _, end) => f.expr.span.range(end),
-            IndexAccess(arr, _, end) => arr.expr.span.range(end),
-            BinaryOperation(start, _, end) => start.expr.span.range(&end.expr.span),
-            Parenthesized(e) => e.expr.span,
-            UnaryExpression(op, expr) => op.1.range(&expr.expr.span),
-            MemberAccess(expr, member) => expr.expr.span.range(&member.1),
+            StringValue(s) | Variable(s) => s.get_span(),
+            FunctionCall(f, _, end) => f.get_span().range(end),
+            IndexAccess(arr, _, end) => arr.get_span().range(end),
+            BinaryOperation(start, _, end) => start.get_span().range(&end.expr.span),
+            Parenthesized(e) => e.get_span(),
+            UnaryExpression(op, expr) => op.get_span().range(expr.as_ref()),
+            MemberAccess(expr, member) => expr.get_span().range(&member.1),
             Array(.., span) => *span,
         }
     }
@@ -260,6 +279,7 @@ pub enum AST {
         parameters: Vec<TypeBoundName>,
         body: Vec<SpanAST>,
         return_type: Option<ASTType>,
+        is_varargs: bool,
     },
     Break(AstSpan),
     Intrinsic(AstSpan),
@@ -327,9 +347,8 @@ impl Spanned for AST {
                 .range(&body.last().unwrap().get_span()),
             AST::DeclareFunction {
                 function_name,
-                parameters: _,
                 body,
-                return_type: _,
+                ..
             } => function_name.get_span().range(&body.last().unwrap().span),
             AST::Break(span) => *span,
             AST::Intrinsic(span) => *span,
@@ -372,7 +391,7 @@ fn clean_parens(expr: SpanExpr) -> SpanExpr {
 pub struct Parser<'tok> {
     parsing_state: Vec<ParsingState>,
     tokens: &'tok TokenTable,
-    errors: Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>,
+    pub errors: Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>,
     irrecoverable_error: bool,
 }
 
@@ -528,6 +547,7 @@ impl<'tok> Parser<'tok> {
         }
     }
 
+    #[cfg(test)]
     pub fn get_errors(&self) -> &[(ParsingError, FileTableIndex, TokenSpanIndex)] {
         &self.errors
     }
@@ -578,10 +598,6 @@ impl<'tok> Parser<'tok> {
         self.cur_offset(0)
     }
 
-    fn loc(&self) -> TokenSpanIndex {
-        self.cur_offset(0).span_index
-    }
-
     fn prev_token(&self) -> Option<&TokenData> {
         self.cur_offset_opt(-1)
     }
@@ -593,10 +609,6 @@ impl<'tok> Parser<'tok> {
     fn cur_offset_opt(&self, offset: isize) -> Option<&TokenData> {
         let index = self.parsing_state.last().unwrap().index as isize + offset;
         self.tokens.tokens.get(index as usize)
-    }
-
-    fn is_last(&self) -> bool {
-        self.parsing_state.last().unwrap().index == self.tokens.tokens.len() - 1
     }
 
     fn is_not_end(&self) -> bool {
@@ -969,6 +981,11 @@ impl<'tok> Parser<'tok> {
                 break;
             }
         }
+        let mut is_varargs = false;
+        if let Token::Ellipsis = self.cur().token {
+            is_varargs = true;
+            self.next();
+        }
 
         if let Token::CloseParen = self.cur().token {
             self.next();
@@ -1007,6 +1024,7 @@ impl<'tok> Parser<'tok> {
                 parameters: params,
                 body: ast,
                 return_type,
+                is_varargs,
             }
             .span_prefixed(begin)
         }))
@@ -1067,12 +1085,20 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_standalone_expr(&mut self) -> ParsingEvent {
-        ParsingEvent::Success(
-            self.parse_expr()
-                .ok()
-                .map(|expr| AST::StandaloneExpr(expr.resulting_expr).self_spanning())
-                .unwrap(),
-        )
+        let parsed_expr = self.parse_expr();
+        match parsed_expr {
+            Ok(result) => {
+                return ParsingEvent::Success(
+                    AST::StandaloneExpr(result.resulting_expr).self_spanning(),
+                )
+            }
+            Err(e) => {
+                return self.grammar_fail(ParsingError::ContextForError(
+                    "Expected expression".into(),
+                    e.into(),
+                ))
+            }
+        }
     }
 
     //returns the identation level until the first non-whitespace token
@@ -1123,7 +1149,7 @@ impl<'tok> Parser<'tok> {
                 //correct indentation found: commit
                 self.set_cur(&popped);
 
-                if !(!self.is_not_end() || self.cur_is_newline()) {
+                if self.is_not_end() && !self.cur_is_newline() {
                     let cur = self.cur();
                     let span = &self.tokens.spans[cur.span_index.0];
                     let file = span.file;
@@ -1529,6 +1555,10 @@ impl<'tok> Parser<'tok> {
                         self.push_operand(FloatValue(f, tok.span_index.get_span()).self_spanning());
                         was_operand = true;
                     }
+                    Token::LiteralChar(c) => {
+                        self.push_operand(CharValue(c, tok.span_index.get_span()).self_spanning());
+                        was_operand = true;
+                    }
                     Token::LiteralString(s) => {
                         //@TODO cloneless: store the literals somewhere it can be fetched by ref?
                         self.push_operand(
@@ -1784,7 +1814,7 @@ pub fn parse_ast<'a>(
     (result, parser)
 }
 
-fn print_errors(parser: &Parser, file_table: &[FileTableEntry], tokens: &TokenTable) {
+pub fn print_errors(parser: &Parser, file_table: &[FileTableEntry], tokens: &TokenTable) {
     for (error, file, token) in parser.errors.iter() {
         let err = error.to_string();
         let file_name = &file_table[file.0].path;
@@ -1801,15 +1831,6 @@ mod tests {
 
     thread_local! {
         static INTERNER: StringInterner = StringInterner::new();
-    }
-
-    #[cfg(test)]
-    impl Deref for ExprBox {
-        type Target = Expr;
-
-        fn deref(&self) -> &Self::Target {
-            &self.expr.expr
-        }
     }
 
     #[cfg(test)]
@@ -1834,22 +1855,6 @@ mod tests {
 
     fn tokenize(str: &str) -> Result<TokenTable, String> {
         INTERNER.with(|x| crate::ast::lexer::tokenize(FileTableIndex(0), str, x))
-    }
-
-    impl TypeBoundName {
-        //do not delete, used by tests!
-        pub fn simple(name: StringSpan, name_type: StringSpan) -> Self {
-            Self {
-                name,
-                name_type: ASTType::Simple(name_type),
-            }
-        }
-        pub fn generic_1(name: StringSpan, name_type: StringSpan, generic: StringSpan) -> Self {
-            Self {
-                name,
-                name_type: ASTType::Generic(name_type, vec![ASTType::Simple(generic)]),
-            }
-        }
     }
 
     use std::{assert_matches::assert_matches, ops::Deref};
@@ -1894,7 +1899,7 @@ mod tests {
         let result = parser.parse_ast();
         print_errors(&parser, table, &table[0].token_table);
         if !parser.get_errors().is_empty() {
-            panic!("Deu ruim");
+            panic!("Parsing failed");
         }
         result
     }
@@ -1909,14 +1914,6 @@ mod tests {
     }
 
     use match_deref::match_deref;
-
-    impl Deref for SpanExpr {
-        type Target = Expr;
-
-        fn deref(&self) -> &Self::Target {
-            &self.expr
-        }
-    }
 
     #[cfg(test)]
     impl Deref for StringSpan {
@@ -2117,7 +2114,9 @@ mod tests {
                                 Deref @ BinaryOperation (
                                     Deref @ IntegerValue(2, _),
                                     SpannedOperator(Operator::Divide, _),
-                                    Deref @ FloatValue(FloatLiteral(3.4), _)
+                                    Deref @ FloatValue(FloatLiteral(_), _)
+                                    //not matching the exact 3.4 value here because rust doesn't like float matching
+                                    //maybe migrate to parse_and_print_back_to_original
                                 )
 
                             ],
@@ -2486,7 +2485,12 @@ print(x)"
 
     #[test]
     fn assign_string_expr() {
-        parse_and_compare("x = 'abc'", "x = \"abc\"");
+        parse_and_compare("x = \"abc\"", "x = \"abc\"");
+    }
+
+    #[test]
+    fn assign_char_expr() {
+        parse_and_compare("x = 'a'", "x = 'a'");
     }
 
     #[test]
@@ -2496,7 +2500,7 @@ print(x)"
 
     #[test]
     fn assign_string_concat_expr() {
-        parse_and_compare("x = 'abc' + 'cde'", "x = \"abc\" + \"cde\"");
+        parse_and_compare("x = \"abc\" + \"cde\"", "x = \"abc\" + \"cde\"");
     }
 
     #[test]
@@ -2511,7 +2515,10 @@ print(x)"
 
     #[test]
     fn array_of_stuff() {
-        parse_and_compare("[1, 'two', True, 4.565]", "[1, \"two\", True, 4.565]");
+        parse_and_compare(
+            "[1, \"two\", '\\n', True, 4.565]",
+            "[1, \"two\", '\\n', True, 4.565]",
+        );
     }
 
     #[test]
@@ -2590,6 +2597,26 @@ print(x)"
             "
     def function(x: i32) -> i32:
         return x + 1
+    ",
+        );
+    }
+
+    #[test]
+    fn parse_intrinsic_varargs() {
+        parse_and_print_back_to_original(
+            "
+    def varargs(x: i32, ...) -> i32:
+        intrinsic
+    ",
+        );
+    }
+
+    #[test]
+    fn parse_intrinsic_varargs_only() {
+        parse_and_print_back_to_original(
+            "
+    def varargs(...) -> i32:
+        intrinsic
     ",
         );
     }

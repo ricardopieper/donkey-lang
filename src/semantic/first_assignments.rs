@@ -143,6 +143,7 @@ pub fn transform_first_assignment_into_declaration(
                 return_type,
                 meta,
                 is_intrinsic,
+                is_varargs,
             } => {
                 let new_body = make_assignments_into_declarations_in_function(&parameters, body);
                 HIRRoot::DeclareFunction {
@@ -152,6 +153,7 @@ pub fn transform_first_assignment_into_declaration(
                     return_type,
                     meta,
                     is_intrinsic,
+                    is_varargs,
                 }
             }
             HIRRoot::StructDeclaration {

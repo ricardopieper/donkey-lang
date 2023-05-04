@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::fmt::Write;
+use std::ops::Deref;
 
 use crate::ast::lexer::Operator;
 use crate::ast::parser::ASTIfStatement;
@@ -21,6 +22,7 @@ pub enum LiteralHIRExpr {
     Integer(i128),
     Float(FloatLiteral),
     String(InternedString),
+    Char(char),
     Boolean(bool),
     None,
 }
@@ -223,7 +225,7 @@ impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
         }
     }
 
-    pub(crate) fn can_be_pointed(&self, type_db: &TypeInstanceManager) -> bool {
+    pub(crate) fn is_lvalue(&self, _type_db: &TypeInstanceManager) -> bool {
         match self {
             HIRExpr::Literal(..) => false,
             HIRExpr::Variable(..) => true,
@@ -231,7 +233,7 @@ impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
             HIRExpr::BinaryOperation(_expr1, op, _expr2, _, _)
                 if op.0 == Operator::Plus || op.0 == Operator::Minus =>
             {
-                todo!("Pointer arithmetic not implemented")
+                todo!("Pointer arithmetic not implemented: must check if either side is a pointer")
             }
             HIRExpr::BinaryOperation(..) => false,
             HIRExpr::MethodCall(..) => {
@@ -247,8 +249,8 @@ impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
             HIRExpr::Ref(..) => false,
             HIRExpr::UnaryExpression(..) => false,
             HIRExpr::MemberAccess(obj, ..) => {
-                //the only way to create a reference to a memberis if the object is an lvalue too
-                obj.can_be_pointed(type_db)
+                //the only way to create a reference to a member is if the object is an lvalue too
+                obj.is_lvalue(_type_db)
             }
             HIRExpr::Array(..) => false,
             HIRExpr::TypecheckTag(_) => false,
@@ -274,6 +276,7 @@ pub enum HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType> {
         return_type: TGlobalTypes,
         meta: HIRAstMetadata<'source>,
         is_intrinsic: bool,
+        is_varargs: bool,
     },
     StructDeclaration {
         struct_name: InternedString,
@@ -344,26 +347,27 @@ fn expr_to_hir<'source>(
         Expr::IntegerValue(i, _) => HIRExpr::Literal(LiteralHIRExpr::Integer(*i), (), expr),
         Expr::FloatValue(f, _) => HIRExpr::Literal(LiteralHIRExpr::Float(*f), (), expr),
         Expr::StringValue(s) => HIRExpr::Literal(LiteralHIRExpr::String(s.0), (), expr),
+        Expr::CharValue(c, _) => HIRExpr::Literal(LiteralHIRExpr::Char(*c), (), expr),
         Expr::BooleanValue(b, _) => HIRExpr::Literal(LiteralHIRExpr::Boolean(*b), (), expr),
         Expr::NoneValue(_) => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
         Expr::Variable(name) => HIRExpr::Variable(name.0, (), expr),
-        Expr::FunctionCall(fun_expr, args, _) => match &fun_expr.expr.expr {
+        Expr::FunctionCall(fun_expr, args, _) => match fun_expr.as_ref() {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
                 expr_to_hir(var, interner, false).into(),
                 args.iter()
                     .map(|x| expr_to_hir(&x.expr, interner, false))
                     .collect(),
                 (),
-                &fun_expr.expr.expr,
+                fun_expr,
             ),
             Expr::MemberAccess(obj, var_name) => HIRExpr::MethodCall(
-                expr_to_hir(&obj.expr.expr, interner, false).into(),
+                expr_to_hir(obj, interner, false).into(),
                 var_name.0,
                 args.iter()
                     .map(|arg| expr_to_hir(&arg.expr, interner, false))
                     .collect(),
                 (),
-                &obj.expr.expr,
+                obj,
             ),
             _ => panic!("Cannot lower function call to HIR: not variable or member access"),
         },
@@ -374,9 +378,9 @@ fn expr_to_hir<'source>(
             let idx = interner.get("__index_ptr__");
             HIRExpr::Deref(
                 HIRExpr::MethodCall(
-                    Box::new(expr_to_hir(&object.expr.expr, interner, false)),
+                    Box::new(expr_to_hir(object, interner, false)),
                     idx,
-                    vec![expr_to_hir(&index.expr.expr, interner, false)],
+                    vec![expr_to_hir(index, interner, false)],
                     (),
                     //pass the entire expr as metadata so that error reporting recognizes this as an index operator
                     //and not a method call
@@ -388,13 +392,13 @@ fn expr_to_hir<'source>(
             )
         }
         Expr::BinaryOperation(lhs, op, rhs) => {
-            let lhs = expr_to_hir(&lhs.expr.expr, interner, false);
-            let rhs = expr_to_hir(&rhs.expr.expr, interner, false);
+            let lhs = expr_to_hir(lhs, interner, false);
+            let rhs = expr_to_hir(rhs, interner, false);
             HIRExpr::BinaryOperation(lhs.into(), *op, rhs.into(), (), expr)
         }
         Expr::Parenthesized(_) => panic!("parenthesized not expected"),
         Expr::UnaryExpression(op, rhs) => {
-            let rhs = expr_to_hir(&rhs.expr.expr, interner, false);
+            let rhs = expr_to_hir(rhs, interner, false);
 
             match op.0 {
                 Operator::Multiply => HIRExpr::Deref(rhs.into(), (), expr),
@@ -403,13 +407,13 @@ fn expr_to_hir<'source>(
             }
         }
         Expr::MemberAccess(object, member) => {
-            let object = expr_to_hir(&object.expr.expr, interner, false);
+            let object = expr_to_hir(object, interner, false);
             HIRExpr::MemberAccess(object.into(), member.0, (), expr)
         }
         Expr::Array(items, _) => {
             let items = items
                 .iter()
-                .map(|item| expr_to_hir(&item.expr, interner, false))
+                .map(|item| expr_to_hir(item, interner, false))
                 .collect();
             HIRExpr::Array(items, (), expr)
         }
@@ -467,11 +471,11 @@ fn ast_to_hir<'source>(
             }
         },
         AST::StandaloneExpr(expr) => {
-            let Expr::FunctionCall(..) = &expr.expr else {
+            let Expr::FunctionCall(..) = expr.deref() else {
                 panic!("Can only lower function call standalone expr: {expr:#?}");
             };
 
-            let result_expr = convert_expr_to_hir(&expr.expr, interner);
+            let result_expr = convert_expr_to_hir(expr, interner);
             let HIRExpr::FunctionCall(function, args, ..) = result_expr else {
                 panic!("Lowering of function call returned invalid result: {result_expr:?}");
             };
@@ -480,7 +484,7 @@ fn ast_to_hir<'source>(
                 function: *function,
                 args: args.to_vec(),
                 meta_ast: ast,
-                meta_expr: &expr.expr,
+                meta_expr: expr,
             });
         }
         AST::IfStatement {
@@ -494,7 +498,7 @@ fn ast_to_hir<'source>(
             ast_while_to_hir(&expression.expr, accum, body, ast, interner);
         }
         AST::Intrinsic(_) => panic!("Cannot use intrinsic keyword"),
-        ast => panic!("Not implemented HIR for {ast:?}"),
+        ast => todo!("Not implemented HIR for {ast:?}"),
     }
 }
 
@@ -503,6 +507,7 @@ fn ast_decl_function_to_hir<'source>(
     function_name: InternedString,
     parameters: &'source [TypeBoundName],
     return_type: &Option<ASTType>,
+    is_varargs: bool,
     ast: &'source AST,
     accum: &mut Vec<StartingHIRRoot<'source>>,
     interner: &StringInterner,
@@ -514,6 +519,7 @@ fn ast_decl_function_to_hir<'source>(
                 parameters: create_type_bound_names(parameters),
                 body: vec![],
                 is_intrinsic: true,
+                is_varargs,
                 return_type: match return_type {
                     Some(x) => x.into(),
                     None => HIRType::Simple(interner.get("Void")),
@@ -534,6 +540,7 @@ fn ast_decl_function_to_hir<'source>(
         parameters: create_type_bound_names(parameters),
         body: function_body,
         is_intrinsic: false,
+        is_varargs,
         return_type: match return_type {
             Some(x) => x.into(),
             None => HIRType::Simple(interner.get("Void")),
@@ -696,12 +703,14 @@ pub fn ast_globals_to_hir<'source>(
             parameters,
             body,
             return_type,
+            is_varargs,
         } => {
             ast_decl_function_to_hir(
                 body,
                 function_name.0,
                 parameters,
                 return_type,
+                *is_varargs,
                 ast,
                 &mut accum,
                 interner,

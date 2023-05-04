@@ -79,6 +79,7 @@ impl<'interner> MIRExprPrinter<'interner> {
 
     pub fn print_literal_expr(&self, expr: &LiteralMIRExpr) -> String {
         match &expr {
+            LiteralMIRExpr::Char(c) => format!("\'{}\'", c),
             LiteralMIRExpr::Float(f) => format!("{:?}", f.0),
             LiteralMIRExpr::Integer(i) => format!("{i}"),
             LiteralMIRExpr::String(s) => format!("\"{}\"", self.interner.borrow(*s)),
@@ -181,6 +182,7 @@ fn print_mir_str<T>(
             function_name,
             parameters,
             return_type,
+            is_varargs,
         } => {
             let parameters = parameters
                 .iter()
@@ -193,8 +195,10 @@ fn print_mir_str<T>(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
+
+            let varargs = if *is_varargs { ", ..." } else { "" };
             let function = format!(
-                "def {}({}) -> {}\n",
+                "def {}({}{varargs}) -> {}\n",
                 function_name.to_string(interner),
                 parameters,
                 &return_type.as_string(type_db)
