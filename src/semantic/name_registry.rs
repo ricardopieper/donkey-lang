@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
-use crate::interner::InternedString;
+use crate::ast::parser::Spanned;
+use crate::interner::{InternedString, StringInterner};
 use crate::types::type_constructor_db::{TypeKind, TypeSign};
-use crate::types::type_errors::{TypeConstructionFailure, TypeErrors};
+use crate::types::type_errors::{TypeConstructionFailure, TypeErrorAtLocation, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
 use super::compiler_errors::CompilerError;
+use super::context::FileTableIndex;
 use super::hir::{GlobalsInferredMIRRoot, HIRRoot, HIRType, HIRTypedBoundName, StartingHIRRoot};
 use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 
@@ -15,7 +17,7 @@ pub struct PartiallyResolvedFunctionSignature {
     pub return_type: HIRType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NameRegistry {
     names: HashMap<InternedString, TypeInstanceId>,
     //This could help still provide some type inference when just enough information is available
@@ -64,31 +66,22 @@ impl NameRegistry {
     pub fn insert(&mut self, variable_name: InternedString, var_type: TypeInstanceId) {
         self.names.insert(variable_name, var_type);
     }
+
+    pub fn print(&self, interner: &StringInterner, type_db: &TypeInstanceManager) {
+        println!("Name registry:");
+        for (k, v) in &self.names {
+            println!("{}: {}", k.to_string(interner), v.as_string(type_db));
+        }
+    }
 }
 
-/*
-fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegistry) {
-    let f64_f64 = type_db.construct_function(&[type_db.common_types.f64], type_db.common_types.f64);
-    let f32_f32 = type_db.construct_function(&[type_db.common_types.f32], type_db.common_types.f32);
-    let string_void =
-        type_db.construct_function(&[type_db.common_types.string], type_db.common_types.void);
-
-    let argless_void = type_db.construct_function(&[], type_db.common_types.void);
-
-    registry.insert("sqrt", f64_f64);
-    registry.insert("sqrt_f32", f32_f32);
-    registry.insert("pow_f32", f32_f32);
-    registry.insert("pow", f64_f64);
-    registry.insert("print", string_void);
-    registry.insert("panic", argless_void);
-}*/
-
 /*Builds a name registry and resolves the top level declarations*/
-pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
-    type_db: &'a mut TypeInstanceManager<'interner>,
+pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
+    type_db: &'a mut TypeInstanceManager,
     registry: &'a mut NameRegistry,
     errors: &'a mut TypeErrors<'source>,
     mir: Vec<StartingHIRRoot<'source>>,
+    file: FileTableIndex,
 ) -> Result<Vec<GlobalsInferredMIRRoot<'source>>, CompilerError> {
     //register_builtins(type_db, registry);
     let mut new_mir = vec![];
@@ -103,7 +96,12 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                 body,
                 meta,
                 is_intrinsic,
+                is_varargs,
             } => {
+                //print signature
+                //if function_name == InternedString(38) {
+                //    println!("Function: {function_name:?}, args: {parameters:?}, return: {return_type:?}");
+                //}
                 let mut param_types = vec![];
                 let mut resolved_params = vec![];
 
@@ -113,16 +111,21 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                         &type_def.typename,
                         type_db,
                         errors,
+                        meta.get_span().start,
+                        file,
                     )?;
+                    //println!("Usage: {usage:#?}");
 
                     let constructed = type_db.construct_usage(&usage);
                     if let Err(e) = constructed {
-                        errors
-                            .type_construction_failure
-                            .push(TypeConstructionFailure {
-                                on_element: RootElementType::Function(function_name),
-                                error: e,
-                            });
+                        //println!("Name registry failed: {e:#?}");
+                        errors.type_construction_failure.push(
+                            TypeConstructionFailure { error: e }.at_spanned(
+                                RootElementType::Function(function_name),
+                                file,
+                                meta,
+                            ),
+                        );
                         return Err(CompilerError::TypeInferenceError);
                     }
                     let type_id = constructed.unwrap();
@@ -138,21 +141,24 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                     &return_type,
                     type_db,
                     errors,
+                    meta.get_span().start,
+                    file,
                 )?;
 
                 let constructed = type_db.construct_usage(&usage);
                 if let Err(e) = constructed {
-                    errors
-                        .type_construction_failure
-                        .push(TypeConstructionFailure {
-                            on_element: RootElementType::Function(function_name),
-                            error: e,
-                        });
+                    errors.type_construction_failure.push(
+                        TypeConstructionFailure { error: e }.at_spanned(
+                            RootElementType::Function(function_name),
+                            file,
+                            meta,
+                        ),
+                    );
                     return Err(CompilerError::TypeInferenceError);
                 }
                 let return_type = constructed.unwrap();
 
-                let func_id = type_db.construct_function(&param_types, return_type);
+                let func_id = type_db.construct_function(&param_types, return_type, is_varargs);
 
                 registry.insert(function_name, func_id);
 
@@ -163,11 +169,13 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                     return_type,
                     meta,
                     is_intrinsic,
+                    is_varargs,
                 });
             }
             HIRRoot::StructDeclaration {
                 struct_name,
                 fields,
+                meta,
                 ..
             } => {
                 let type_id =
@@ -180,6 +188,8 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source, 'interner>(
                         &field.typename,
                         type_db,
                         errors,
+                        meta.get_span().start,
+                        file,
                     )?;
                     type_db
                         .constructors

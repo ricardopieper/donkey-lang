@@ -4,8 +4,10 @@
 #![feature(generic_const_exprs)]
 #![feature(const_trait_impl)]
 #![feature(string_leak)]
-#![feature(once_cell)]
 #![feature(thread_local)]
+#![feature(negative_impls)]
+#![feature(type_alias_impl_trait)]
+
 #[macro_use]
 mod interner;
 mod ast;
@@ -52,10 +54,17 @@ fn main() {
     let mut source = Source::new();
 
     source.load_stdlib();
-    source.load_file(&args[1]);
+    if !source.load_file(&args[1]) {
+        return;
+    }
 
     let mut ctx = crate::semantic::context::Analyzer::new(&source);
     ctx.analyze(&source);
+
+    if ctx.type_errors.count() > 0 {
+        ctx.print_errors();
+        return;
+    }
 
     if args.contains(&"print_mir".to_string()) {
         let printed_mir = mir_printer::print_mir(&ctx.mir, &ctx.type_db, &source.interner);
@@ -63,7 +72,7 @@ fn main() {
     }
     if args.contains(&"dump_types".to_string()) {
         for t in ctx.type_db.constructors.types.iter() {
-            if t.type_args.len() > 0 {
+            if !t.type_args.is_empty() {
                 println!(
                     "{}<{}>",
                     t.name.borrow(&source.interner),

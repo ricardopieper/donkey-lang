@@ -7,7 +7,7 @@ pub mod hir_type_resolution;
 pub mod mir;
 pub mod mir_printer;
 pub mod name_registry;
+pub mod struct_instantiations;
 pub mod type_checker;
 pub mod type_inference;
 pub mod type_name_printer;
-pub mod undeclared_vars;

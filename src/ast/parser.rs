@@ -1,11 +1,8 @@
-#[cfg(not(test))]
-use std::ops::Deref;
-
 use crate::ast::lexer::{Operator, Token};
 use crate::commons::float::FloatLiteral;
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::context::{FileTableEntry, FileTableIndex};
-use crate::Source;
+use std::ops::Deref;
 
 //This is a box wrapper type so that I can implement a "double deref"
 //automatically to make testing easier
@@ -20,15 +17,30 @@ impl ExprBox {
             expr: Box::new(expr),
         }
     }
+}
 
-    pub fn span(&self) -> AstSpan {
-        self.expr.span
+impl AsRef<Expr> for ExprBox {
+    fn as_ref(&self) -> &Expr {
+        self.expr.deref()
     }
 }
 
-#[cfg(not(test))]
+impl AsRef<AstSpan> for ExprBox {
+    fn as_ref(&self) -> &AstSpan {
+        &self.expr.span
+    }
+}
+
 impl Deref for ExprBox {
-    type Target = Box<SpanExpr>;
+    type Target = Expr;
+
+    fn deref(&self) -> &Self::Target {
+        self.expr.deref()
+    }
+}
+
+impl Deref for SpanExpr {
+    type Target = Expr;
 
     fn deref(&self) -> &Self::Target {
         &self.expr
@@ -73,13 +85,20 @@ impl Spanned for StringSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpannedOperator(pub Operator, pub AstSpan);
 
+impl Spanned for SpannedOperator {
+    fn get_span(&self) -> AstSpan {
+        self.1
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     IntegerValue(i128, AstSpan),
     FloatValue(FloatLiteral, AstSpan),
     StringValue(StringSpan),
+    CharValue(char, AstSpan),
     BooleanValue(bool, AstSpan),
-    NoneExpr(AstSpan),
+    NoneValue(AstSpan),
     Variable(StringSpan),
     //the last parameter here contains the closing parenthesis.
     FunctionCall(ExprBox, Vec<SpanExpr>, AstSpan),
@@ -90,28 +109,28 @@ pub enum Expr {
     UnaryExpression(SpannedOperator, ExprBox),
     MemberAccess(ExprBox, StringSpan),
     //the last parameter here contains the entire span, from start to beginning
-    Array(Vec<SpanExpr>, AstSpan),
-    //maybe there could be a syntax to specify the type of the array
-    //ex: instead of just x = [1,2,3] it could be x = [1, 2, 3] array<i32>
-    //or like sum = array<i32>[].sum() would return 0
-    //x: array<i32> = [] should work too
+    Array(Vec<SpanExpr>, AstSpan), //maybe there could be a syntax to specify the type of the array
+                                   //ex: instead of just x = [1,2,3] it could be x = [1, 2, 3] array<i32>
+                                   //or like sum = array<i32>[].sum() would return 0
+                                   //x: array<i32> = [] should work too
 }
 
 impl Spanned for Expr {
     fn get_span(&self) -> AstSpan {
         match self {
             IntegerValue(.., span)
+            | CharValue(_, span)
             | FloatValue(_, span)
-            | NoneExpr(span)
+            | NoneValue(span)
             | BooleanValue(_, span) => *span,
-            StringValue(s) | Variable(s) => s.1,
-            FunctionCall(f, _, end) => f.expr.span.range(end),
-            IndexAccess(arr, _, end) => arr.expr.span.range(end),
-            BinaryOperation(start, _, end) => start.expr.span.range(&end.expr.span),
-            Parenthesized(e) => e.expr.span,
-            UnaryExpression(op, expr) => op.1.range(&expr.expr.span),
-            MemberAccess(expr, member) => expr.expr.span.range(&member.1),
-            Array(_arr, span) => *span,
+            StringValue(s) | Variable(s) => s.get_span(),
+            FunctionCall(f, _, end) => f.get_span().range(end),
+            IndexAccess(arr, _, end) => arr.get_span().range(end),
+            BinaryOperation(start, _, end) => start.get_span().range(&end.expr.span),
+            Parenthesized(e) => e.get_span(),
+            UnaryExpression(op, expr) => op.get_span().range(expr.as_ref()),
+            MemberAccess(expr, member) => expr.get_span().range(&member.1),
+            Array(.., span) => *span,
         }
     }
 }
@@ -191,7 +210,7 @@ pub enum ASTType {
 impl ASTType {
     pub fn to_string(&self, interner: &StringInterner) -> String {
         match self {
-            ASTType::Simple(s) => format!("{}", interner.borrow(s.0)),
+            ASTType::Simple(s) => interner.borrow(s.0).to_string(),
             ASTType::Generic(s, params) => {
                 let generic_params = params
                     .iter()
@@ -229,7 +248,7 @@ impl Spanned for TypeBoundName {
 pub enum AST {
     StandaloneExpr(SpanExpr),
     Assign {
-        path: (Vec<StringSpan>, AstSpan),
+        path: SpanExpr,
         expression: SpanExpr,
     },
     Declare {
@@ -260,6 +279,7 @@ pub enum AST {
         parameters: Vec<TypeBoundName>,
         body: Vec<SpanAST>,
         return_type: Option<ASTType>,
+        is_varargs: bool,
     },
     Break(AstSpan),
     Intrinsic(AstSpan),
@@ -290,10 +310,9 @@ impl Spanned for AST {
     fn get_span(&self) -> AstSpan {
         match self {
             AST::StandaloneExpr(s) => s.span,
-            AST::Assign {
-                path: (_path, span),
-                expression,
-            } => span.range(&expression.span),
+            AST::Assign { path, expression } => {
+                expression.expr.get_span().prefix(&path.expr.get_span())
+            }
             AST::Declare { var, expression } => var.get_span().range(&expression.span),
             AST::IfStatement {
                 true_branch,
@@ -302,7 +321,7 @@ impl Spanned for AST {
             } => match final_else {
                 Some(f) => true_branch.get_span().range(&f.last().unwrap().span),
                 None => {
-                    if elifs.len() == 0 {
+                    if elifs.is_empty() {
                         true_branch.get_span()
                     } else {
                         true_branch
@@ -328,9 +347,8 @@ impl Spanned for AST {
                 .range(&body.last().unwrap().get_span()),
             AST::DeclareFunction {
                 function_name,
-                parameters: _,
                 body,
-                return_type: _,
+                ..
             } => function_name.get_span().range(&body.last().unwrap().span),
             AST::Break(span) => *span,
             AST::Intrinsic(span) => *span,
@@ -373,7 +391,7 @@ fn clean_parens(expr: SpanExpr) -> SpanExpr {
 pub struct Parser<'tok> {
     parsing_state: Vec<ParsingState>,
     tokens: &'tok TokenTable,
-    errors: Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>,
+    pub errors: Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>,
     irrecoverable_error: bool,
 }
 
@@ -406,7 +424,7 @@ impl ToString for ParsingError {
                 format!("Error: {e}")
             }
             ParsingError::TypeBoundExpectedColonAfterFieldName => {
-                format!("Error: Expected column after field name")
+                "Error: Expected column after field name".to_string()
             }
         }
     }
@@ -431,7 +449,7 @@ macro_rules! parse_guard {
     ($parser:expr, $pattern:pat_param, $result:expr) => {
         if let $pattern = $parser.cur().token {
             $parser.next();
-            if (!$parser.can_go()) {
+            if (!$parser.can_advance_on_line()) {
                 return $result;
             }
         } else {
@@ -514,28 +532,6 @@ use Expr::*;
 
 use super::lexer::{TokenData, TokenSpanIndex, TokenTable};
 
-macro_rules! decl_macros {
-    ($parser:expr) => {
-        macro_rules! grammar_fail {
-            ($parsing_error:expr) => {{
-                let cur = $parser.cur();
-                let span = &$parser.tokens.spans[cur.span_index.0];
-                ParsingEvent::GrammarRuleFail($parsing_error, span.file, cur.span_index)
-            }};
-        }
-
-        macro_rules! non_recoverable {
-            ($parsing_error:expr) => {{
-                $parser.irrecoverable_error = true;
-                let cur = $parser.cur();
-                let span = &$parser.tokens.spans[cur.span_index.0];
-
-                ParsingEvent::NonRecoverable($parsing_error, span.file, cur.span_index)
-            }};
-        }
-    };
-}
-
 impl<'tok> Parser<'tok> {
     pub fn new(tokens: &'tok TokenTable) -> Parser<'tok> {
         Parser {
@@ -551,6 +547,7 @@ impl<'tok> Parser<'tok> {
         }
     }
 
+    #[cfg(test)]
     pub fn get_errors(&self) -> &[(ParsingError, FileTableIndex, TokenSpanIndex)] {
         &self.errors
     }
@@ -601,10 +598,6 @@ impl<'tok> Parser<'tok> {
         self.cur_offset(0)
     }
 
-    fn loc(&self) -> TokenSpanIndex {
-        self.cur_offset(0).span_index
-    }
-
     fn prev_token(&self) -> Option<&TokenData> {
         self.cur_offset_opt(-1)
     }
@@ -618,15 +611,11 @@ impl<'tok> Parser<'tok> {
         self.tokens.tokens.get(index as usize)
     }
 
-    fn is_last(&self) -> bool {
-        self.parsing_state.last().unwrap().index == self.tokens.tokens.len() - 1
-    }
-
     fn is_not_end(&self) -> bool {
         self.parsing_state.last().unwrap().index < self.tokens.tokens.len()
     }
 
-    fn can_go(&self) -> bool {
+    fn can_advance_on_line(&self) -> bool {
         self.is_not_end() && !self.cur_is_newline()
     }
 
@@ -667,29 +656,27 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_assign(&mut self) -> ParsingEvent {
-        decl_macros!(self);
-        let mut path: Vec<StringSpan> = vec![];
-        while let TokenData {
-            token: Token::Identifier(id),
-            span_index: loc,
-        } = self.cur()
-        {
-            path.push(id.token_spanned(*loc));
-            if self.is_last() {
-                return ParsingEvent::TryAnotherGrammarRule;
-            }
+        //assignments are x = y,
+        //and the lhs is also an expression, involving index acessors and method calls in the left hand side.
 
-            self.next();
+        //try to parse the lhs expression before the =
+        //create a new stack here, so that we can pop if after the expr we don't find what we want
+        self.new_stack();
 
-            if let Token::MemberAccessor = self.cur().token {
-                self.next();
-            }
-        }
-        if !self.can_go() {
+        let lhs = self.parse_expr();
+
+        let Ok(lvalue_expr) = lhs else {
+            self.pop_stack();
+            return ParsingEvent::TryAnotherGrammarRule;
+        };
+
+        if !self.can_advance_on_line() {
+            self.pop_stack();
             return ParsingEvent::TryAnotherGrammarRule;
         }
 
         let Token::Assign = self.cur().token else {
+            self.pop_stack();
             return ParsingEvent::TryAnotherGrammarRule;
         };
 
@@ -698,31 +685,21 @@ impl<'tok> Parser<'tok> {
         let expr = self.parse_expr();
 
         match expr {
-            Ok(e) => {
-                let span = path
-                    .first()
-                    .unwrap()
-                    .get_span()
-                    .range(&path.last().unwrap().get_span());
-
-                ParsingEvent::Success(
-                    AST::Assign {
-                        path: (path.into(), span),
-                        expression: e.resulting_expr,
-                    }
-                    .self_spanning(),
-                )
-            }
-            Err(e) => {
-                grammar_fail!(ParsingError::InvalidSyntax(
-                    "Expected expression after assign".to_string()
-                ))
-            }
+            Ok(e) => ParsingEvent::Success(
+                AST::Assign {
+                    path: lvalue_expr.resulting_expr,
+                    expression: e.resulting_expr,
+                }
+                .self_spanning(),
+            ),
+            Err(e) => self.grammar_fail(ParsingError::ContextForError(
+                "Expected expression after assign".into(),
+                Box::new(e),
+            )),
         }
     }
 
-    pub fn parse_assign_typed(&mut self) -> ParsingEvent {
-        decl_macros!(self);
+    pub fn parse_declaration(&mut self) -> ParsingEvent {
         let decl = self.parse_type_bound_name();
 
         let Ok(Some(typed_var_decl)) = decl else { return ParsingEvent::TryAnotherGrammarRule; };
@@ -731,7 +708,7 @@ impl<'tok> Parser<'tok> {
         let cur = self.cur();
         if let Token::Assign = cur.token {
             self.next();
-            let expr = self.parse_expr(); //.expect("Expected expression after assign");
+            let expr = self.parse_expr();
             match expr {
                 Ok(expr) => ParsingEvent::Success(
                     AST::Declare {
@@ -740,12 +717,10 @@ impl<'tok> Parser<'tok> {
                     }
                     .self_spanning(),
                 ),
-                Err(e) => {
-                    grammar_fail!(ParsingError::ContextForError(
-                        "Expected expression after assign".to_string(),
-                        e.into()
-                    ))
-                }
+                Err(e) => self.grammar_fail(ParsingError::ContextForError(
+                    "Expected expression after assign".to_string(),
+                    e.into(),
+                )),
             }
         } else {
             ParsingEvent::TryAnotherGrammarRule
@@ -753,17 +728,15 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_if_statement(&mut self) -> ParsingEvent {
-        decl_macros!(self);
-
         let begin = self.cur().span_index;
         parse_guard!(self, Token::IfKeyword);
 
         let expr = match self.parse_expr() {
             Ok(result) => result.resulting_expr,
             Err(e) => {
-                return grammar_fail!(ParsingError::ContextForError(
+                return self.grammar_fail(ParsingError::ContextForError(
                     "Expected expression for if statement".into(),
-                    e.into()
+                    e.into(),
                 ))
             }
         };
@@ -789,7 +762,7 @@ impl<'tok> Parser<'tok> {
         let cur_identation = self.get_expected_indent();
         let identation_else = self.skip_whitespace_newline();
 
-        if !self.can_go() || identation_else != cur_identation {
+        if !self.can_advance_on_line() || identation_else != cur_identation {
             self.pop_stack();
             return ParsingEvent::Success(if_statement);
         }
@@ -810,8 +783,8 @@ impl<'tok> Parser<'tok> {
                     }
                     .span_prefixed(begin),
                     _ => {
-                        return non_recoverable!(ParsingError::Fatal(
-                            "Unexpected AST during if parsing".to_string()
+                        return self.non_recoverable(ParsingError::Fatal(
+                            "Unexpected AST during if parsing".to_string(),
                         ));
                     }
                 }
@@ -823,7 +796,6 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_structdef(&mut self) -> ParsingEvent {
-        decl_macros!(self);
         let begin = self.cur().span_index;
         parse_guard!(self, Token::StructDef);
 
@@ -835,14 +807,14 @@ impl<'tok> Parser<'tok> {
 
             loop {
                 self.skip_whitespace_newline();
-                if !self.can_go() {
+                if !self.can_advance_on_line() {
                     break;
                 }
                 let Token::Identifier(_) = self.cur().token else { break; };
                 let parsed = self.parse_type_bound_name().unwrap().unwrap();
                 fields.push(parsed);
 
-                if !self.can_go() {
+                if !self.can_advance_on_line() {
                     break;
                 }
 
@@ -850,7 +822,7 @@ impl<'tok> Parser<'tok> {
                 let Token::NewLine = self.cur().token else { break; };
 
                 self.next();
-                if !self.can_go() {
+                if !self.can_advance_on_line() {
                     break;
                 }
                 //if a second newline is found, then the struct declaration is found
@@ -860,7 +832,7 @@ impl<'tok> Parser<'tok> {
             }
 
             AST::StructDeclaration {
-                struct_name: struct_name,
+                struct_name,
                 type_parameters: vec![],
                 body: fields,
             }
@@ -871,16 +843,15 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_while_statement(&mut self) -> ParsingEvent {
-        decl_macros!(self);
         let begin = self.cur().span_index;
         parse_guard!(self, Token::WhileKeyword);
 
         let expr = match self.parse_expr() {
             Ok(result) => result.resulting_expr,
             Err(e) => {
-                return grammar_fail!(ParsingError::ContextForError(
+                return self.grammar_fail(ParsingError::ContextForError(
                     "Expected expression for while statement".into(),
-                    e.into()
+                    e.into(),
                 ))
             }
         };
@@ -898,7 +869,6 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_for_statement(&mut self) -> ParsingEvent {
-        decl_macros!(self);
         let begin = self.cur().span_index;
         parse_guard!(self, Token::ForKeyword);
         let variable_name = expect_identifier!(self, "variable name in for loop");
@@ -907,9 +877,9 @@ impl<'tok> Parser<'tok> {
         let expr = match self.parse_expr() {
             Ok(result) => result.resulting_expr,
             Err(e) => {
-                return grammar_fail!(ParsingError::ContextForError(
+                return self.grammar_fail(ParsingError::ContextForError(
                     "Expected expression for iterable in for statement".into(),
-                    e.into()
+                    e.into(),
                 ))
             }
         };
@@ -934,7 +904,7 @@ impl<'tok> Parser<'tok> {
             return None;
         };
 
-        if !self.can_go() {
+        if !self.can_advance_on_line() {
             return Some(ASTType::Simple(type_name.token_spanned(begin)));
         }
 
@@ -971,7 +941,7 @@ impl<'tok> Parser<'tok> {
         let Token::Identifier(name) = self.cur().token else { return Ok(None); };
         self.next();
 
-        if !self.can_go() {
+        if !self.can_advance_on_line() {
             return Ok(None);
         }
 
@@ -992,7 +962,6 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_def_statement(&mut self) -> ParsingEvent {
-        decl_macros!(self);
         let begin = self.cur().span_index;
         parse_guard!(self, Token::DefKeyword);
         let function_name = expect_identifier!(self, "function name");
@@ -1012,12 +981,17 @@ impl<'tok> Parser<'tok> {
                 break;
             }
         }
+        let mut is_varargs = false;
+        if let Token::Ellipsis = self.cur().token {
+            is_varargs = true;
+            self.next();
+        }
 
         if let Token::CloseParen = self.cur().token {
             self.next();
         } else {
-            return non_recoverable!(ParsingError::Fatal(
-                "Expected close paren after parameters in function declaration".to_string()
+            return self.non_recoverable(ParsingError::Fatal(
+                "Expected close paren after parameters in function declaration".to_string(),
             ));
         }
 
@@ -1028,9 +1002,9 @@ impl<'tok> Parser<'tok> {
 
             return_type = self.parse_type_name();
 
-            if !return_type.is_some() {
-                return non_recoverable!(ParsingError::Fatal(
-                    "Expected type name after arrow right on function declaration".into()
+            if return_type.is_none() {
+                return self.non_recoverable(ParsingError::Fatal(
+                    "Expected type name after arrow right on function declaration".into(),
                 ));
             }
             self.next();
@@ -1050,13 +1024,14 @@ impl<'tok> Parser<'tok> {
                 parameters: params,
                 body: ast,
                 return_type,
+                is_varargs,
             }
             .span_prefixed(begin)
         }))
     }
 
     pub fn parse_break(&mut self) -> ParsingEvent {
-        let tok = self.cur().clone();
+        let tok = *self.cur();
         if let Token::BreakKeyword = tok.token {
             self.next();
 
@@ -1067,17 +1042,16 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_return(&mut self) -> ParsingEvent {
-        decl_macros!(self);
-        let tok = self.cur().clone();
+        let tok = *self.cur();
         if let Token::ReturnKeyword = tok.token {
             self.next();
-            if self.can_go() {
+            if self.can_advance_on_line() {
                 let expr = match self.parse_expr() {
                     Ok(result) => result.resulting_expr,
                     Err(e) => {
-                        return grammar_fail!(ParsingError::ContextForError(
+                        return self.grammar_fail(ParsingError::ContextForError(
                             "Expected expression on return statement".into(),
-                            e.into()
+                            e.into(),
                         ))
                     }
                 };
@@ -1094,17 +1068,16 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_intrinsic(&mut self) -> ParsingEvent {
-        decl_macros!(self);
-        let tok = self.cur().clone();
+        let tok = *self.cur();
         if let Token::IntrinsicKeyword = tok.token {
             self.next();
-            if !self.can_go() {
+            if !self.can_advance_on_line() {
                 return ParsingEvent::Success(
                     AST::Intrinsic(tok.span_index.get_span()).self_spanning(),
                 );
             } else {
-                return grammar_fail!(ParsingError::InvalidSyntax(
-                    "Intrinsic must be the only content of the method if it's present".to_string()
+                return self.grammar_fail(ParsingError::InvalidSyntax(
+                    "Intrinsic must be the only content of the method if it's present".to_string(),
                 ));
             }
         }
@@ -1112,12 +1085,20 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_standalone_expr(&mut self) -> ParsingEvent {
-        ParsingEvent::Success(
-            self.parse_expr()
-                .ok()
-                .map(|expr| AST::StandaloneExpr(expr.resulting_expr).self_spanning())
-                .unwrap(),
-        )
+        let parsed_expr = self.parse_expr();
+        match parsed_expr {
+            Ok(result) => {
+                return ParsingEvent::Success(
+                    AST::StandaloneExpr(result.resulting_expr).self_spanning(),
+                )
+            }
+            Err(e) => {
+                return self.grammar_fail(ParsingError::ContextForError(
+                    "Expected expression".into(),
+                    e.into(),
+                ))
+            }
+        }
     }
 
     //returns the identation level until the first non-whitespace token
@@ -1152,52 +1133,68 @@ impl<'tok> Parser<'tok> {
         }
     }
 
+    //@TODO this is kinda hacky, I extracted this from the parse_ast method, but it's kinda ugly
+    fn handle_parsing_result(
+        &mut self,
+        name: &str,
+        parsing_result: ParsingEvent,
+        results: &mut Vec<SpanAST>,
+        parsed_successfully: &mut bool,
+    ) {
+        match parsing_result {
+            ParsingEvent::Success(parsed_result) => {
+                results.push(parsed_result);
+                *parsed_successfully = true;
+                let popped = self.pop_stack();
+                //correct indentation found: commit
+                self.set_cur(&popped);
+
+                if self.is_not_end() && !self.cur_is_newline() {
+                    let cur = self.cur();
+                    let span = &self.tokens.spans[cur.span_index.0];
+                    let file = span.file;
+                    let error_msg = format!(
+                        "Newline or EOF expected after {}, got {:?}",
+                        name, cur.token
+                    );
+
+                    self.errors.push((
+                        ParsingError::InvalidSyntax(error_msg),
+                        file,
+                        cur.span_index,
+                    ));
+                }
+            }
+            ParsingEvent::TryAnotherGrammarRule => {
+                self.pop_stack();
+            }
+            ParsingEvent::GrammarRuleFail(error, file, token) => {
+                self.skip_to_next_line();
+                self.errors.push((error, file, token))
+            }
+            ParsingEvent::NonRecoverable(error, file, token) => {
+                self.errors.push((error, file, token))
+            }
+        }
+    }
+
     pub fn parse_ast(&mut self) -> Vec<SpanAST> {
-        decl_macros!(self);
         let mut parsed_successfully: bool;
         let mut results: Vec<SpanAST> = vec![];
 
         macro_rules! try_parse {
             ($name:expr, $parse_method:tt) => {
                 if !parsed_successfully {
+                    //println!("Size of stack is {}", &self.parsing_state.len().to_string());
                     self.new_stack();
 
                     let parsing_result = self.$parse_method();
-
-                    match parsing_result {
-                        ParsingEvent::Success(parsed_result) => {
-                            results.push(parsed_result);
-                            parsed_successfully = true;
-                            let popped = self.pop_stack();
-                            //correct indentation found: commit
-                            self.set_cur(&popped);
-
-                            if (!(!self.is_not_end() || self.cur_is_newline())) {
-                                let cur = self.cur();
-                                let span = &self.tokens.spans[cur.span_index.0];
-                                let file = span.file;
-                                let error_msg = format!(
-                                    "Newline or EOF expected after {}, got {:?}",
-                                    $name, cur.token
-                                );
-                                self.errors.push((
-                                    ParsingError::InvalidSyntax(error_msg),
-                                    file,
-                                    cur.span_index,
-                                ));
-                            }
-                        }
-                        ParsingEvent::GrammarRuleFail(error, file, token) => {
-                            self.skip_to_next_line();
-                            self.errors.push((error, file, token))
-                        }
-                        ParsingEvent::TryAnotherGrammarRule => {
-                            self.pop_stack();
-                        }
-                        ParsingEvent::NonRecoverable(err, file, token) => {
-                            self.errors.push((err, file, token));
-                        }
-                    }
+                    self.handle_parsing_result(
+                        $name,
+                        parsing_result,
+                        &mut results,
+                        &mut parsed_successfully,
+                    );
                 }
             };
         }
@@ -1225,8 +1222,8 @@ impl<'tok> Parser<'tok> {
             }
 
             try_parse!("struct", parse_structdef);
-            try_parse!("assign", parse_assign);
-            try_parse!("assign with type", parse_assign_typed);
+            try_parse!("assignment", parse_assign);
+            try_parse!("declaration", parse_declaration);
             try_parse!("if block", parse_if_statement);
             try_parse!("while block", parse_while_statement);
             try_parse!("for block", parse_for_statement);
@@ -1237,9 +1234,10 @@ impl<'tok> Parser<'tok> {
             try_parse!("standalone expression", parse_standalone_expr);
 
             if !parsed_successfully {
-                non_recoverable!(ParsingError::Fatal(
-                    "Unrecognized expression/statement".to_string()
+                let error = self.non_recoverable(ParsingError::Fatal(
+                    "Unrecognized expression/statement".to_string(),
                 ));
+                self.handle_parsing_result("", error, &mut results, &mut parsed_successfully);
             }
 
             let is_end = !self.is_not_end();
@@ -1250,9 +1248,10 @@ impl<'tok> Parser<'tok> {
             if self.cur_is_newline() {
                 continue;
             };
-            non_recoverable!(ParsingError::Fatal(
-                "Unrecognized expression/statement".to_string()
+            let error = self.non_recoverable(ParsingError::Fatal(
+                "Unrecognized expression/statement".to_string(),
             ));
+            self.handle_parsing_result("", error, &mut results, &mut parsed_successfully);
         }
 
         results
@@ -1336,7 +1335,7 @@ impl<'tok> Parser<'tok> {
     #[allow(clippy::too_many_lines)] //no patience to fix this, expr parsing is messy and I will not touch it
     pub fn parse_expr(&mut self) -> Result<ParseExpressionResult, ParsingError> {
         loop {
-            if !self.can_go() {
+            if !self.can_advance_on_line() {
                 break;
             }
             let mut was_operand = false;
@@ -1556,6 +1555,10 @@ impl<'tok> Parser<'tok> {
                         self.push_operand(FloatValue(f, tok.span_index.get_span()).self_spanning());
                         was_operand = true;
                     }
+                    Token::LiteralChar(c) => {
+                        self.push_operand(CharValue(c, tok.span_index.get_span()).self_spanning());
+                        was_operand = true;
+                    }
                     Token::LiteralString(s) => {
                         //@TODO cloneless: store the literals somewhere it can be fetched by ref?
                         self.push_operand(
@@ -1564,7 +1567,7 @@ impl<'tok> Parser<'tok> {
                         was_operand = true;
                     }
                     Token::None => {
-                        self.push_operand(NoneExpr(tok.span_index.get_span()).self_spanning());
+                        self.push_operand(NoneValue(tok.span_index.get_span()).self_spanning());
                         was_operand = true;
                     }
                     Token::True => {
@@ -1593,7 +1596,7 @@ impl<'tok> Parser<'tok> {
             }
 
             self.next();
-            if self.can_go() && Token::MemberAccessor == self.cur().token {
+            if self.can_advance_on_line() && Token::MemberAccessor == self.cur().token {
                 continue;
             }
 
@@ -1601,7 +1604,7 @@ impl<'tok> Parser<'tok> {
             //same thing for an open bracket! could be an array!
             //try parse it first!
 
-            if self.can_go() {
+            if self.can_advance_on_line() {
                 if let Token::OpenArrayBracket = self.cur().token {
                     continue;
                 }
@@ -1750,12 +1753,12 @@ impl<'tok> Parser<'tok> {
                 Ok(r) => {
                     expressions.push(r.resulting_expr);
                 }
-                Err(e) => {
+                Err(_e) => {
                     break;
                 }
             }
 
-            if self.can_go() {
+            if self.can_advance_on_line() {
                 if let Token::Comma = self.cur().token {
                     self.next();
                     continue;
@@ -1772,6 +1775,21 @@ impl<'tok> Parser<'tok> {
         Ok(ParseListExpressionResult {
             resulting_expr_list: expressions,
         })
+    }
+
+    fn non_recoverable(&mut self, parsing_error: ParsingError) -> ParsingEvent {
+        self.irrecoverable_error = true;
+        let cur = self.cur();
+        let span = &self.tokens.spans[cur.span_index.0];
+
+        ParsingEvent::NonRecoverable(parsing_error, span.file, cur.span_index)
+    }
+
+    fn grammar_fail(&mut self, parsing_error: ParsingError) -> ParsingEvent {
+        let cur = self.cur();
+        let span = &self.tokens.spans[cur.span_index.0];
+
+        ParsingEvent::GrammarRuleFail(parsing_error, span.file, cur.span_index)
     }
 }
 
@@ -1793,13 +1811,13 @@ pub fn parse_ast<'a>(
 
     print_errors(&parser, file_table, tokens);
 
-    return (result, parser);
+    (result, parser)
 }
 
-fn print_errors(parser: &Parser, file_table: &[FileTableEntry], tokens: &TokenTable) {
+pub fn print_errors(parser: &Parser, file_table: &[FileTableEntry], tokens: &TokenTable) {
     for (error, file, token) in parser.errors.iter() {
         let err = error.to_string();
-        let file_name = &file_table[file.0].file_name;
+        let file_name = &file_table[file.0].path;
         let tok = tokens.tokens[token.0];
         let span = tokens.spans[tok.span_index.0];
         let line = span.start.line;
@@ -1816,11 +1834,11 @@ mod tests {
     }
 
     #[cfg(test)]
-    impl Deref for ExprBox {
-        type Target = Expr;
+    impl Deref for SpannedOperator {
+        type Target = Operator;
 
         fn deref(&self) -> &Self::Target {
-            &self.expr.expr
+            &self.0
         }
     }
 
@@ -1839,26 +1857,10 @@ mod tests {
         INTERNER.with(|x| crate::ast::lexer::tokenize(FileTableIndex(0), str, x))
     }
 
-    impl TypeBoundName {
-        //do not delete, used by tests!
-        pub fn simple(name: StringSpan, name_type: StringSpan) -> Self {
-            Self {
-                name,
-                name_type: ASTType::Simple(name_type),
-            }
-        }
-        pub fn generic_1(name: StringSpan, name_type: StringSpan, generic: StringSpan) -> Self {
-            Self {
-                name,
-                name_type: ASTType::Generic(name_type, vec![ASTType::Simple(generic)]),
-            }
-        }
-    }
-
     use std::{assert_matches::assert_matches, ops::Deref};
 
     use crate::{
-        ast::ast_printer::print_ast,
+        ast::ast_printer::{print_ast, print_fully_parenthesized_ast},
         interner::StringInterner,
         semantic::context::{test_utils::tls_interner, FileTableIndex},
     };
@@ -1872,11 +1874,13 @@ mod tests {
                 start: TokenSpanIndex(0),
                 end: TokenSpanIndex(0),
             }),
+            token_table: tokens,
+            index: FileTableIndex(0),
             contents: "none",
-            file_name: "test".to_string(),
+            path: "test".to_string(),
         }];
-        let mut parser = Parser::new(&tokens);
-        print_errors(&parser, table, &tokens);
+        let mut parser = Parser::new(&table[0].token_table);
+        print_errors(&parser, table, &table[0].token_table);
         parser.parse_expr().unwrap().resulting_expr
     }
 
@@ -1886,19 +1890,20 @@ mod tests {
                 start: TokenSpanIndex(0),
                 end: TokenSpanIndex(0),
             }),
+            token_table: tokens,
+            index: FileTableIndex(0),
             contents: "none",
-            file_name: "test".to_string(),
+            path: "test".to_string(),
         }];
-        let mut parser = Parser::new(&tokens);
+        let mut parser = Parser::new(&table[0].token_table);
         let result = parser.parse_ast();
-        print_errors(&parser, table, &tokens);
-        if parser.get_errors().len() > 0 {
-            panic!("Deu ruim");
+        print_errors(&parser, table, &table[0].token_table);
+        if !parser.get_errors().is_empty() {
+            panic!("Parsing failed");
         }
-        return result;
+        result
     }
 
-   
     #[test]
     fn just_an_identifier() {
         let _some_id = istr("some_identifier");
@@ -1910,19 +1915,11 @@ mod tests {
 
     use match_deref::match_deref;
 
-    impl Deref for SpanExpr {
-        type Target = Expr;
-
-        fn deref(&self) -> &Self::Target {
-            &self.expr
-        }
-    }
-
     #[cfg(test)]
     impl Deref for StringSpan {
         type Target = str;
 
-        fn deref<'s>(&'s self) -> &'s Self::Target {
+        fn deref(&self) -> &Self::Target {
             //@SAFETY actually not very safe.
             //This is, indeed, a hack.
             //The tradeoff here is to make testing easier.
@@ -2117,7 +2114,9 @@ mod tests {
                                 Deref @ BinaryOperation (
                                     Deref @ IntegerValue(2, _),
                                     SpannedOperator(Operator::Divide, _),
-                                    Deref @ FloatValue(FloatLiteral(3.4), _)
+                                    Deref @ FloatValue(FloatLiteral(_), _)
+                                    //not matching the exact 3.4 value here because rust doesn't like float matching
+                                    //maybe migrate to parse_and_print_back_to_original
                                 )
 
                             ],
@@ -2155,76 +2154,6 @@ mod tests {
     }
 
     #[test]
-    fn multiline_code() {
-        let tokens = tokenize(
-            "
-x = 'abc' + 'cde'
-y = x + str(True)",
-        )
-        .unwrap();
-        let result = test_parse(tokens);
-        assert!(match_deref! {
-            match &result {
-               Deref @ [
-                Deref @ AST::Assign {
-                    path: (Deref @ [ Deref @ "x" ], ..),
-                    expression: Deref @ BinaryOperation(
-                        Deref @ StringValue (Deref @ "abc"),
-                        SpannedOperator(Operator::Plus, _),
-                        Deref @ StringValue (Deref @ "cde"),
-                    )
-                },
-                Deref @ AST::Assign {
-                    path: (Deref @ [ Deref @ "y" ], ..),
-                    expression: Deref @ BinaryOperation(
-                        Deref @ Variable (Deref @ "x"),
-                        SpannedOperator(Operator::Plus, _),
-                        Deref @ FunctionCall(
-                            Deref @ Variable(Deref @ "str"),
-                            Deref @ [
-                                Deref @ BooleanValue(true, _)
-                            ],
-                            _
-                        )
-                    )
-                }
-               ] => true,
-               _ => false
-            }
-        });
-    }
-
-    #[test]
-    fn while_statement() {
-        let tokens = tokenize(
-            "
-while True:
-    x = 1
-    break
-    ",
-        )
-        .unwrap();
-        let result = test_parse(tokens);
-        assert!(match_deref! {
-            match &result {
-               Deref @ [
-                Deref @ AST::WhileStatement {
-                    expression: Deref @ BooleanValue(true, _),
-                    body: Deref @ [
-                        Deref @ AST::Assign {
-                            path: (Deref @ [ Deref @ "x" ], ..),
-                            expression: Deref @ IntegerValue(1, _)
-                        },
-                        Deref @ AST::Break(_)
-                   ]
-                }
-               ] => true,
-               _ => false
-            }
-        });
-    }
-
-    #[test]
     fn while_statement_with_if_and_expr() {
         parse_and_print_back_to_original(
             "
@@ -2237,8 +2166,7 @@ while True:
 
     #[test]
     fn function_call_with_nested_call_with_multiple_expr_also_unnested() {
-        parse_and_print_back_to_original(
-            "some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())");
+        parse_and_print_back_to_original("some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())");
     }
 
     fn unindent(str: &str) -> String {
@@ -2274,8 +2202,7 @@ while True:
 
     fn parse_and_print_back_to_original(source: &str) {
         let unindented = unindent(source);
-        dbg!(&unindented);
-        let tokens = tokenize(&unindent(source)).unwrap();
+        let tokens = tokenize(&unindented).unwrap();
         let result = test_parse(tokens);
         let printed = INTERNER.with(|i| print_ast(&result, i));
         pretty_assertions::assert_eq!(printed.trim(), unindented.trim());
@@ -2343,10 +2270,13 @@ while True:
     fn integration_with_lexer() {
         parse_and_print_back_to_original("(1 + 2) * 3");
     }
-    
+
     #[test]
     fn complex_parenthesized_expr() {
-        parse_and_compare("(1 + 2) * (3 + 1 + (10 / 5))", "(1 + 2) * ((3 + 1) + (10 / 5))");
+        parse_and_compare(
+            "(1 + 2) * (3 + 1 + (10 / 5))",
+            "(1 + 2) * ((3 + 1) + (10 / 5))",
+        );
     }
 
     #[test]
@@ -2371,7 +2301,7 @@ while True:
 
     #[test]
     fn bunch_of_newlines() {
-            let source_wacky = "
+        let source_wacky = "
 
 <tab><tab><tab><tab><tab><tab><tab>
 
@@ -2390,357 +2320,476 @@ print(x)
 
     ";
 
-    let source_replaced = source_wacky.replace("<tab>", "    ");
+        let source_replaced = source_wacky.replace("<tab>", "    ");
 
-
-    let tokens = tokenize(&unindent(&source_replaced)).unwrap();
-    let result = test_parse(tokens);
-    let printed = INTERNER.with(|i| print_ast(&result, i));
-    print!("{}", printed);
-    pretty_assertions::assert_eq!(printed.trim(), "
+        let tokens = tokenize(&unindent(&source_replaced)).unwrap();
+        let result = test_parse(tokens);
+        let printed = INTERNER.with(|i| print_ast(&result, i));
+        print!("{}", printed);
+        pretty_assertions::assert_eq!(
+            printed.trim(),
+            "
 if x == 0:
     x = x + 1
     if x == 1:
         print(2)
-print(x)".trim());
+print(x)"
+                .trim()
+        );
+    }
 
-        }
+    #[test]
+    fn multiply_fcall_nested_last() {
+        parse_and_print_back_to_original("some_identifier(nested()) * 5");
+    }
 
+    #[test]
+    fn multiply_fcall_multiple_args_nested_last() {
+        parse_and_print_back_to_original("some_identifier(1, nested()) * 5");
+    }
 
-        #[test]
-        fn multiply_fcall_nested_last() {
-            parse_and_print_back_to_original("some_identifier(nested()) * 5");
-        }
+    #[test]
+    fn function_call_with_nested_call_with_multiple_expr_also_unnested_used_in_expression_right() {
+        parse_and_print_back_to_original(
+            "some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2()) * 5",
+        );
+    }
 
-        #[test]
-        fn multiply_fcall_multiple_args_nested_last() {
-            parse_and_print_back_to_original("some_identifier(1, nested()) * 5");
-        }
+    #[test]
+    fn function_call_with_nested_call_with_multiple_expr_also_unnested_used_in_expression_left() {
+        parse_and_print_back_to_original(
+            "5 * some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())",
+        );
+    }
 
-        #[test]
-        fn function_call_with_nested_call_with_multiple_expr_also_unnested_used_in_expression_right() {
-            parse_and_print_back_to_original("some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2()) * 5");
-        }
+    #[test]
+    fn function_call_with_a_bunch_of_useless_params() {
+        parse_and_compare("func((((((1))))))", "func(1)");
+    }
 
-        #[test]
-        fn function_call_with_nested_call_with_multiple_expr_also_unnested_used_in_expression_left() {
-            parse_and_print_back_to_original("5 * some_identifier(nested(1 * 2, 2 / 3.4), 3, nested2())");
-        }
+    #[test]
+    fn function_call_in_right_binop() {
+        parse_and_print_back_to_original("2 * func(1)");
+    }
 
-        #[test]
-        fn function_call_with_a_bunch_of_useless_params() {
-            parse_and_compare("func((((((1))))))", "func(1)");
-        }
+    #[test]
+    fn unary_function_call() {
+        parse_and_compare("-func(1)", "- func(1)");
+    }
 
-        #[test]
-        fn function_call_in_right_binop() {
-            parse_and_print_back_to_original("2 * func(1)");
-        }
+    #[test]
+    fn function_call_in_left_binop() {
+        parse_and_print_back_to_original("func(1) * 2");
+    }
 
-        #[test]
-        fn unary_function_call() {
-            parse_and_compare("-func(1)", "- func(1)");
-        }
+    #[test]
+    fn function_call_in_both_sides_binop() {
+        parse_and_print_back_to_original("func(1) * func(2)");
+    }
 
-        #[test]
-        fn function_call_in_left_binop() {
-            parse_and_print_back_to_original("func(1) * 2");
-        }
+    #[test]
+    fn minus_one() {
+        parse_and_compare("-1", "- 1");
+    }
 
-        #[test]
-        fn function_call_in_both_sides_binop() {
-            parse_and_print_back_to_original("func(1) * func(2)");
-        }
+    #[test]
+    fn minus_expr() {
+        parse_and_compare("-(5.0 / 9.0)", "- (5 / 9)");
+    }
 
-        #[test]
-        fn minus_one() {
-            parse_and_compare("-1", "- 1");
-        }
+    #[test]
+    fn two_times_minus_one() {
+        parse_and_compare("2 * -1", "2 * - 1");
+    }
 
-        #[test]
-        fn minus_expr() {
-            parse_and_compare("-(5.0 / 9.0)", "- (5 / 9)");
-        }
+    #[test]
+    fn two_times_minus_repeated_one() {
+        parse_and_compare("2 * --1", "2 * - - 1");
+    }
 
-        #[test]
-        fn two_times_minus_one() {
-            parse_and_compare("2 * -1", "2 * - 1");
-        }
+    #[test]
+    fn two_times_minus_plus_minus_one() {
+        parse_and_compare("2 * -+-1", "2 * - + - 1");
+    }
 
-        #[test]
-        fn two_times_minus_repeated_one() {
-            parse_and_compare("2 * --1", "2 * - - 1");
-        }
+    #[test]
+    fn two_times_minus_plus_minus_one_parenthesized() {
+        parse_and_compare("2 * (-+-1)", "2 * - + - 1");
+    }
 
-        #[test]
-        fn two_times_minus_plus_minus_one() {
-            parse_and_compare("2 * -+-1", "2 * - + - 1");
-        }
+    #[test]
+    fn two_times_minus_plus_minus_one_in_function_call() {
+        parse_and_compare("2 * func(-+-1)", "2 * func(- + - 1)");
+    }
 
-        #[test]
-        fn two_times_minus_plus_minus_one_parenthesized() {
-            parse_and_compare("2 * (-+-1)", "2 * - + - 1");
-        }
+    #[test]
+    fn fahrenheit_1_expr() {
+        parse_and_compare("-(5.0 / 9.0) * 32", "- (5 / 9) * 32");
+    }
 
-        #[test]
-        fn two_times_minus_plus_minus_one_in_function_call() {
-            parse_and_compare("2 * func(-+-1)", "2 * func(- + - 1)");
-        }
+    #[test]
+    fn fahrenheit_expr() {
+        parse_and_compare(
+            "(-(5.0 / 9.0) * 32) / (1 - (5.0 / 9.0))",
+            "(- (5 / 9) * 32) / (1 - (5 / 9))",
+        );
+    }
 
-        #[test]
-        fn fahrenheit_1_expr() {
-            parse_and_compare("-(5.0 / 9.0) * 32", "- (5 / 9) * 32");
-        }
+    #[test]
+    fn test_assign() {
+        parse_and_print_back_to_original("x = 1");
+    }
 
-        #[test]
-        fn fahrenheit_expr() {
-            parse_and_compare("(-(5.0 / 9.0) * 32) / (1 - (5.0 / 9.0))", "(- (5 / 9) * 32) / (1 - (5 / 9))");
-        }
+    #[test]
+    fn test_parse_ast_first_token_is_identifier() {
+        parse_and_print_back_to_original("x * 1");
+    }
 
-        #[test]
-        fn test_assign() {
-            parse_and_print_back_to_original("x = 1");
-        }
+    #[test]
+    fn test_parse_assign_expr() {
+        parse_and_print_back_to_original("x = x * 1");
+    }
 
-        #[test]
-        fn test_parse_ast_first_token_is_identifier() {
-            parse_and_print_back_to_original("x * 1");
-        }
+    #[test]
+    fn test_parse_just_id_ast() {
+        parse_and_print_back_to_original("x");
+    }
 
-        #[test]
-        fn test_parse_assign_expr() {
-            parse_and_print_back_to_original("x = x * 1");
-        }
+    #[test]
+    fn not_operator() {
+        parse_and_print_back_to_original("not True");
+    }
 
-        #[test]
-        fn test_parse_just_id_ast() {
-            parse_and_print_back_to_original("x");
-        }
+    #[test]
+    fn none() {
+        parse_and_print_back_to_original("None");
+    }
 
-        #[test]
-        fn not_operator() {
-            parse_and_print_back_to_original("not True");
-        }
+    #[test]
+    fn not_true_and_false() {
+        parse_and_print_back_to_original("not (True and False)");
+    }
 
-        #[test]
-        fn none() {
-            parse_and_print_back_to_original("None");
-        }
+    #[test]
+    fn two_expressions_binary_that_needs_inverting_operands_no_information_is_lost() {
+        parse_and_compare("(1 + 2 * 3) + (4 + 5 * 6)", "(1 + (2 * 3)) + (4 + (5 * 6))");
+    }
 
-        #[test]
-        fn not_true_and_false() {
-            parse_and_print_back_to_original("not (True and False)");
-        }
+    #[test]
+    fn assign_boolean_expr() {
+        parse_and_compare(
+            "x = not (True and False) or (False)",
+            "x = not (True and False) or False",
+        );
+    }
 
-        #[test]
-        fn two_expressions_binary_that_needs_inverting_operands_no_information_is_lost() {
-            parse_and_compare("(1 + 2 * 3) + (4 + 5 * 6)", "(1 + (2 * 3)) + (4 + (5 * 6))");
-        }
+    #[test]
+    fn assign_string_expr() {
+        parse_and_compare("x = \"abc\"", "x = \"abc\"");
+    }
 
-        #[test]
-        fn assign_boolean_expr() {
-            parse_and_compare("x = not (True and False) or (False)", "x = not (True and False) or False");
-        }
+    #[test]
+    fn assign_char_expr() {
+        parse_and_compare("x = 'a'", "x = 'a'");
+    }
 
-        #[test]
-        fn assign_string_expr() {
-            parse_and_compare("x = 'abc'", "x = \"abc\"");
-        }
+    #[test]
+    fn declare_typed() {
+        parse_and_print_back_to_original("x: str = \"abc\"");
+    }
 
-        #[test]
-        fn declare_typed() {
-            parse_and_print_back_to_original("x: str = \"abc\"");
-        }
+    #[test]
+    fn assign_string_concat_expr() {
+        parse_and_compare("x = \"abc\" + \"cde\"", "x = \"abc\" + \"cde\"");
+    }
 
-        #[test]
-        fn assign_string_concat_expr() {
-            parse_and_compare("x = 'abc' + 'cde'", "x = \"abc\" + \"cde\"");
-        }
+    #[test]
+    fn array_of_ints() {
+        parse_and_print_back_to_original("[1, 2, 3]");
+    }
 
-        #[test]
-        fn array_of_ints() {
-            parse_and_print_back_to_original("[1, 2, 3]");
-        }
+    #[test]
+    fn array_of_strings() {
+        parse_and_print_back_to_original("[\"one\", \"two\", \"3\"]");
+    }
 
-        #[test]
-        fn array_of_strings() {
-            parse_and_print_back_to_original("[\"one\", \"two\", \"3\"]");
-        }
+    #[test]
+    fn array_of_stuff() {
+        parse_and_compare(
+            "[1, \"two\", '\\n', True, 4.565]",
+            "[1, \"two\", '\\n', True, 4.565]",
+        );
+    }
 
-        #[test]
-        fn array_of_stuff() {
-            parse_and_compare("[1, 'two', True, 4.565]", "[1, \"two\", True, 4.565]");
-        }
+    #[test]
+    fn assign_array() {
+        parse_and_print_back_to_original("x = [1, 2]");
+    }
 
-        #[test]
-        fn assign_array() {
-            parse_and_print_back_to_original("x = [1, 2]");
-        }
+    #[test]
+    fn member_acessor() {
+        parse_and_print_back_to_original("obj.prop");
+    }
 
-        #[test]
-        fn member_acessor() {
-            parse_and_print_back_to_original("obj.prop");
-        }
+    #[test]
+    fn assign_member() {
+        parse_and_print_back_to_original("obj.prop = 1");
+    }
 
-        #[test]
-        fn assign_member() {
-            parse_and_print_back_to_original("obj.prop = 1");
-        }
+    #[test]
+    fn member_compare() {
+        parse_and_print_back_to_original("self.current >= self.max");
+    }
 
-        #[test]
-        fn member_compare() {
-            parse_and_print_back_to_original("self.current >= self.max");
-        }
-
-        #[test]
-        fn for_item_in_list_print() {
-            parse_and_print_back_to_original(
-                "
+    #[test]
+    fn for_item_in_list_print() {
+        parse_and_print_back_to_original(
+            "
     for item in list:
         print(item)
     ",
-            );
-        }
+        );
+    }
 
-        #[test]
-        fn function_decl() {
-            parse_and_print_back_to_original(
-                "
+    #[test]
+    fn function_decl() {
+        parse_and_print_back_to_original(
+            "
     def function(x: i32):
         print(x)
     ",
-            );
-        }
+        );
+    }
 
-        #[test]
-        fn function_decl_noparams() {
-            parse_and_print_back_to_original(
-                "
+    #[test]
+    fn function_decl_noparams() {
+        parse_and_print_back_to_original(
+            "
     def function():
         print(x)
     ",
-            );
-        }
+        );
+    }
 
-        #[test]
-        fn function_decl_manyparams() {
-            parse_and_print_back_to_original(
-                "
+    #[test]
+    fn function_decl_manyparams() {
+        parse_and_print_back_to_original(
+            "
     def function(x: i32, y: u32, z: MyType):
         print(x)
     ",
-            );
-        }
+        );
+    }
 
-        #[test]
-        fn return_nothing() {
-            parse_and_print_back_to_original(
-                "
+    #[test]
+    fn return_nothing() {
+        parse_and_print_back_to_original(
+            "
     def function(x: i32):
         return
     ",
-            );
-        }
+        );
+    }
 
-        #[test]
-        fn return_expr() {
-            parse_and_print_back_to_original(
-                "
+    #[test]
+    fn return_expr() {
+        parse_and_print_back_to_original(
+            "
     def function(x: i32) -> i32:
         return x + 1
     ",
-            );
-        }
+        );
+    }
 
-        #[test]
-        fn generic_type() {
-            parse_and_print_back_to_original(
-                "
+    #[test]
+    fn parse_intrinsic_varargs() {
+        parse_and_print_back_to_original(
+            "
+    def varargs(x: i32, ...) -> i32:
+        intrinsic
+    ",
+        );
+    }
+
+    #[test]
+    fn parse_intrinsic_varargs_only() {
+        parse_and_print_back_to_original(
+            "
+    def varargs(...) -> i32:
+        intrinsic
+    ",
+        );
+    }
+
+    #[test]
+    fn generic_type() {
+        parse_and_print_back_to_original(
+            "
     some_var: List<i32> = [1, 2]
     ",
-            );
-        }
+        );
+    }
 
-        #[test]
-        fn struct_definition_and_then_method() {
-            parse_and_compare(
-                "
+    #[test]
+    fn struct_definition_and_then_method() {
+        parse_and_compare(
+            "
     struct Struct1:
         field1: i32
         field2: i64
 
     def my_function(param1: i32, param2: i32) -> i32:
         return param1 * param2 / (param2 - param1)
-    ", "
+    ",
+            "
     struct Struct1:
         field1: i32
         field2: i64
-    def my_function(param1: i32, param2: i32) -> i32:
-        return (param1 * param2) / (param2 - param1)"
-            );
-        }
 
-        #[test]
-        fn struct_definition() {
-            parse_and_print_back_to_original(
-                "
+    def my_function(param1: i32, param2: i32) -> i32:
+        return (param1 * param2) / (param2 - param1)",
+        );
+    }
+
+    #[test]
+    fn struct_definition() {
+        parse_and_print_back_to_original(
+            "
     struct SomeStruct:
         field: i32
         otherfield: str
     ",
-            );
-        }
+        );
+    }
 
-        #[test]
-        fn access_at_index() {
-            parse_and_print_back_to_original("list[1]");
-        }
+    #[test]
+    fn access_at_index() {
+        parse_and_print_back_to_original("list[1]");
+    }
 
-        #[test]
-        fn access_at_string() {
-            parse_and_print_back_to_original("a_map[\"value\"]");
-        }
+    #[test]
+    fn access_at_string() {
+        parse_and_print_back_to_original("a_map[\"value\"]");
+    }
 
-        #[test]
-        fn access_at_list() {
-            //this is crazy
-            parse_and_print_back_to_original("a_map[[]]");
-        }
+    #[test]
+    fn access_at_list() {
+        //this is crazy
+        parse_and_print_back_to_original("a_map[[]]");
+    }
 
-        #[test]
-        fn function_return_indexed() {
-            parse_and_print_back_to_original("some_call()[1]");
-        }
+    #[test]
+    fn function_return_indexed() {
+        parse_and_print_back_to_original("some_call()[1]");
+    }
 
-        #[test]
-        fn function_argument_is_indexed() {
-            parse_and_print_back_to_original("some_call(var[1])");
-        }
+    #[test]
+    fn function_argument_is_indexed() {
+        parse_and_print_back_to_original("some_call(var[1])");
+    }
 
-        #[test]
-        fn index_expression_lhs_in_binary_op() {
-            //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
-            parse_and_print_back_to_original("args[1] + 1");
-        }
+    #[test]
+    fn index_expression_lhs_in_binary_op() {
+        //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
+        parse_and_print_back_to_original("args[1] + 1");
+    }
 
-        #[test]
-        fn index_expression_rhs_in_binary_op() {
-            //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
-            parse_and_print_back_to_original("1 + args[1]");
-        }
+    #[test]
+    fn index_expression_rhs_in_binary_op() {
+        //1.0 * (1.0 + (2.3 * args.__index__(1)) / 87.1)
+        parse_and_print_back_to_original("1 + args[1]");
+    }
 
-        #[test]
-        fn method_call_empty() {
-            parse_and_print_back_to_original("method.call()");
-        }
-        #[test]
-        fn method_call_oneparam() {
-            parse_and_print_back_to_original("method.call(1)");
-        }
+    #[test]
+    fn method_call_empty() {
+        parse_and_print_back_to_original("method.call()");
+    }
+    #[test]
+    fn method_call_oneparam() {
+        parse_and_print_back_to_original("method.call(1)");
+    }
 
-        #[test]
-        fn method_call_manyargs() {
-            parse_and_print_back_to_original("method.call(1, 2)");
-        }
+    #[test]
+    fn method_call_manyargs() {
+        parse_and_print_back_to_original("method.call(1, 2)");
+    }
 
+    #[test]
+    fn index_assign() {
+        parse_and_print_back_to_original("array[0] = 1");
+    }
+
+    #[test]
+    fn obj_property_assign() {
+        parse_and_print_back_to_original("obj.array = [1]");
+    }
+
+    #[test]
+    fn obj_property_index_assign() {
+        parse_and_print_back_to_original("obj.array[0] = 1");
+    }
+
+    #[test]
+    fn obj_method_array_assign() {
+        parse_and_print_back_to_original("obj.getter()[0] = 1");
+    }
+
+    #[test]
+    fn obj_method_prop_array_assign() {
+        parse_and_print_back_to_original("obj.getter().prop[0] = 1");
+    }
+
+    #[test]
+    fn array_obj_method_prop_array_assign() {
+        parse_and_print_back_to_original("array[obj.getter().prop[0]] = 1");
+    }
+
+    #[test]
+    fn array_obj_method_prop_array_binexp_assign() {
+        parse_and_print_back_to_original("array[obj.getter().prop[0] + obj.getter().prop[1]] = 1");
+    }
+
+    #[test]
+    fn simple_index_binary_expression() {
+        parse_and_print_back_to_original("array[i + 1] = 1");
+    }
+
+    #[test]
+    fn deref_value() {
+        let tokens = tokenize("*val").unwrap();
+        let result = parse(tokens);
+        assert!(match_deref! {
+            match &result.expr {
+                UnaryExpression(
+                    Deref @ Operator::Multiply,
+                    Deref @ Variable(Deref @ "val")
+                ) => true,
+                _ => false
+            }
+        })
+    }
+
+    #[test]
+    fn ref_value() {
+        parse_and_print_back_to_original("& val");
+    }
+
+    #[test]
+    fn deref_value_and_set() {
+        parse_and_print_back_to_original("* val = 1");
+    }
+
+    #[test]
+    fn set_ptr_complex_expr() {
+        let unindented =
+            unindent("* array[obj.getter().prop[0].some_ptr + obj.getter().prop[1]] = 1");
+        let tokens = tokenize(&unindented).unwrap();
+        let result = test_parse(tokens);
+        let printed = INTERNER.with(|i| print_fully_parenthesized_ast(&result, i));
+
+        assert_eq!(
+            printed,
+            "* (array[(obj.getter().prop[0].some_ptr + obj.getter().prop[1])]) = 1"
+        );
+    }
 }

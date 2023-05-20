@@ -16,12 +16,12 @@ pub fn link(obj: &str, out: &str) -> Result<(), LinkerError> {
             .output()
             .expect("failed to execute process");
         if output.status.success() {
-            return Ok(());
+            Ok(())
         } else {
             let stderr = String::from_utf8(output.stderr).unwrap();
-            return Err(LinkerError::GenericLinkerError(stderr));
+            Err(LinkerError::GenericLinkerError(stderr))
         }
     } else {
         todo!("Implement link command here")
-    };
+    }
 }

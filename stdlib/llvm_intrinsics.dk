@@ -26,10 +26,10 @@ def exit(code: i32):
 def malloc(size: i32) -> ptr<u8>:
     intrinsic
 
-def free(buf: ptr<u8>):
+def realloc(buf: ptr<u8>, size: i32) -> ptr<u8>:
     intrinsic
 
-def itoa(num: i32, buf: ptr<u8>, base: i32) -> ptr<u8>:
+def free(buf: ptr<u8>):
     intrinsic
 
 def str_to_int(s: str) -> i32:
@@ -41,11 +41,17 @@ def get_str_buf(s: str) -> ptr<u8>:
 def print(str_to_print: str):
     puts(str_to_print.buf)
 
+def snprintf(buf: ptr<u8>, size: u64, format: ptr<u8>, ...) -> i64:
+    intrinsic
+
+def printf(format: ptr<u8>, ...) -> i64:
+    intrinsic
+
 def print_int(i: i32):
-    return
+    printf("%i\n".buf, i)
 
 def print_uint(u: u32):
-    return
+    printf("%i\n".buf, u)
 
 def panic(error: str):
     print(error)

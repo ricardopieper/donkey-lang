@@ -1,16 +1,137 @@
+use std::collections::VecDeque;
+
+use super::compiler_errors::CompilerError;
+use super::context::FileTableIndex;
 use super::hir::{
     Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
-    InferredTypeHIRRoot, NotChecked, HIR,
+    InferredTypeHIRRoot, LiteralHIRExpr, NotCheckedSimplified, HIR,
 };
+use super::hir_type_resolution::RootElementType;
+use crate::ast::parser::SpannedOperator;
+use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 
+use crate::types::type_errors::{DerefOnNonPointerError, TypeErrorAtLocation, TypeErrors};
 use crate::{
     ast::parser::{Expr, AST},
     types::type_instance_db::TypeInstanceId,
 };
 
-pub type TypecheckPendingExpression<'source> = HIRExpr<'source, TypeInstanceId, NotChecked>;
-pub type TypecheckedExpression<'source> = HIRExpr<'source, TypeInstanceId, Checked>;
+pub type TypecheckPendingExpression<'source> = MIRExpr<'source, NotCheckedSimplified>;
+pub type TypecheckedExpression<'source> = MIRExpr<'source, Checked>;
+
+pub type MIRExprMetadata<'source> = &'source Expr;
+pub type MIRAstMetadata<'source> = &'source AST;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiteralMIRExpr {
+    Integer(i128),
+    Float(FloatLiteral),
+    Char(char),
+    String(InternedString),
+    Boolean(bool),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MIRExprLValue<'source, TTypechecked> {
+    Variable(InternedString, TypeInstanceId, MIRExprMetadata<'source>),
+    MemberAccess(
+        Box<MIRExpr<'source, TTypechecked>>,
+        InternedString,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    Deref(
+        Box<MIRExpr<'source, TTypechecked>>,
+        //This type is the dereferenced type, i.e. if the original is ptr<u8>, this is u8
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+}
+impl<T> MIRExprLValue<'_, T> {
+    pub fn get_type(&self) -> TypeInstanceId {
+        match self {
+            MIRExprLValue::Variable(_, type_id, _) => *type_id,
+            MIRExprLValue::MemberAccess(_, _, type_id, _) => *type_id,
+            MIRExprLValue::Deref(_, type_id, _) => *type_id,
+        }
+    }
+}
+
+//@TODO This is a big one! Maybe this idea of scopes wasn't really that useful. I created it in order to evaluate whether variables are in scope, but this is already being done by
+//the HIR phase. I need it to judge whether declarations must be created from first assignments.
+//Maybe we can just nuke it.
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MIRExprRValue<'source, TTypechecked> {
+    Literal(LiteralMIRExpr, TypeInstanceId, MIRExprMetadata<'source>),
+    BinaryOperation(
+        Box<MIRExpr<'source, TTypechecked>>,
+        SpannedOperator,
+        Box<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    //obj_expr, method_name, args:type, return type, metadata
+    MethodCall(
+        Box<MIRExpr<'source, TTypechecked>>,
+        InternedString,
+        Vec<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    FunctionCall(
+        Box<MIRExprLValue<'source, TTypechecked>>,
+        Vec<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    StructInstantiate(TypeInstanceId, MIRExprMetadata<'source>),
+    Ref(
+        //you can only ref an lvalue
+        Box<MIRExprLValue<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    UnaryExpression(
+        SpannedOperator,
+        Box<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+    Array(
+        Vec<MIRExpr<'source, TTypechecked>>,
+        TypeInstanceId,
+        MIRExprMetadata<'source>,
+    ),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MIRExpr<'source, TTypechecked> {
+    RValue(MIRExprRValue<'source, TTypechecked>),
+    LValue(MIRExprLValue<'source, TTypechecked>),
+    #[allow(dead_code)]
+    TypecheckTag(TTypechecked),
+}
+
+impl<'source, T> MIRExpr<'source, T> {
+    pub fn get_type(&self) -> TypeInstanceId {
+        match self {
+            MIRExpr::RValue(rvalue_expr) => match rvalue_expr {
+                MIRExprRValue::Literal(_, type_id, _) => *type_id,
+                MIRExprRValue::BinaryOperation(_, _, _, type_id, _) => *type_id,
+                MIRExprRValue::MethodCall(_, _, _, type_id, _) => *type_id,
+                MIRExprRValue::FunctionCall(_, _, type_id, _) => *type_id,
+                MIRExprRValue::Ref(_, type_id, _) => *type_id,
+                MIRExprRValue::UnaryExpression(_, _, type_id, _) => *type_id,
+                MIRExprRValue::Array(_, type_id, _) => *type_id,
+                MIRExprRValue::StructInstantiate(type_id, _) => *type_id,
+            },
+            MIRExpr::LValue(lvalue) => lvalue.get_type(),
+            MIRExpr::TypecheckTag(_) => panic!("Cannot get type of a typecheck tag"),
+        }
+    }
+}
 
 /*
 The MIR is a representation of the HIR but in "code blocks". At this level we only have gotos
@@ -33,6 +154,7 @@ pub enum MIRTopLevelNode<'source, TTypecheckStateExpr> {
         function_name: InternedString,
         parameters: Vec<MIRTypedBoundName>,
         return_type: TypeInstanceId,
+        is_varargs: bool,
     },
     DeclareFunction {
         function_name: InternedString,
@@ -55,14 +177,15 @@ a scope and a block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MIRBlockNode<'source, TTypecheckState> {
     Assign {
-        path: Vec<InternedString>,
-        expression: HIRExpr<'source, TypeInstanceId, TTypecheckState>,
+        path: MIRExprLValue<'source, TTypecheckState>,
+        expression: MIRExpr<'source, TTypecheckState>,
         meta_ast: &'source AST,
         meta_expr: &'source Expr,
     },
     FunctionCall {
+        //@TODO maybe it should be an lvalue expr...
         function: InternedString,
-        args: Vec<HIRExpr<'source, TypeInstanceId, TTypecheckState>>,
+        args: Vec<MIRExpr<'source, TTypecheckState>>,
         meta_ast: &'source AST,
         meta_expr: &'source Expr,
         return_type: TypeInstanceId,
@@ -99,17 +222,14 @@ pub struct MIRScope {
 pub enum MIRBlockFinal<'source, TTypecheckState> {
     //expression, true, else, meta
     If(
-        HIRExpr<'source, TypeInstanceId, TTypecheckState>,
+        MIRExpr<'source, TTypecheckState>,
         BlockId,
         BlockId,
-        HIRAstMetadata<'source>,
+        MIRAstMetadata<'source>,
     ),
     GotoBlock(BlockId),
-    Return(
-        HIRExpr<'source, TypeInstanceId, TTypecheckState>,
-        HIRAstMetadata<'source>,
-    ),
-    EmptyReturn,
+    Return(MIRExpr<'source, TTypecheckState>, MIRAstMetadata<'source>),
+    EmptyReturn(MIRAstMetadata<'source>),
 }
 
 /*MIRBlock is the definition of an executable chunk of code.
@@ -127,37 +247,331 @@ pub struct MIRBlock<'source, TTypecheckState> {
     pub nodes: Vec<MIRBlockNode<'source, TTypecheckState>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRMaybeUnfinishedBlock<'source> {
-    pub index: usize,
-    pub scope: ScopeId,
-    pub finish: Option<MIRBlockFinal<'source, NotChecked>>,
-    pub block: Vec<MIRBlockNode<'source, NotChecked>>,
-}
-
 pub type TypecheckedMIRBlock<'source> = MIRBlock<'source, Checked>;
 
-struct MIRFunctionEmitter<'source> {
-    current_scope: ScopeId,
-    current_block: BlockId,
-    blocks: Vec<MIRMaybeUnfinishedBlock<'source>>,
-    scopes: Vec<MIRScope>,
-    goto_stack: Vec<BlockId>,
+//returns the simplified expression, and whether the expression was simplified at all. Can be called until no simplification is possible.
+//In theory this could do constant folding, but we're just removing &* and *&
+fn simplify_expression<T>(
+    expr: HIRExpr<'_, TypeInstanceId, T>,
+) -> (HIRExpr<'_, TypeInstanceId, NotCheckedSimplified>, bool) {
+    match expr {
+        HIRExpr::Literal(literal, ty, meta) => (HIRExpr::Literal(literal, ty, meta), false),
+        HIRExpr::StructInstantiate(expr, meta) => (HIRExpr::StructInstantiate(expr, meta), false),
+        HIRExpr::Variable(var_name, ty, meta) => (HIRExpr::Variable(var_name, ty, meta), false),
+        //@TODO casting a literal to a type can be optimized here, just change the inferred type instead of generating an actual cast
+        HIRExpr::Cast(expr, ty, meta) => {
+            let (expr, simplified) = simplify_expression(*expr);
+            (HIRExpr::Cast(Box::new(expr), ty, meta), simplified)
+        }
+        HIRExpr::BinaryOperation(lhs, op, rhs, ty, meta) => {
+            let (lhs, simplified_lhs) = simplify_expression(*lhs);
+            let (rhs, simplified_rhs) = simplify_expression(*rhs);
+            let simplified = simplified_lhs || simplified_rhs;
+            (
+                HIRExpr::BinaryOperation(lhs.into(), op, rhs.into(), ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::MethodCall(object, name, args, ty, meta) => {
+            let (object, simplified_object) = simplify_expression(*object);
+            let (args, simplified_args): (_, Vec<_>) =
+                args.into_iter().map(|arg| simplify_expression(arg)).unzip();
+            let simplified =
+                simplified_object || simplified_args.iter().any(|simplified| *simplified);
+            (
+                HIRExpr::MethodCall(object.into(), name, args, ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::FunctionCall(function, args, ty, meta) => {
+            let (function, simplified_function) = simplify_expression(*function);
+            let (args, simplified_args): (Vec<_>, Vec<_>) =
+                args.into_iter().map(|arg| simplify_expression(arg)).unzip();
+            let simplified =
+                simplified_function || simplified_args.iter().any(|simplified| *simplified);
+            (
+                HIRExpr::FunctionCall(function.into(), args, ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::Deref(derefed_expr, ty, meta) => match *derefed_expr {
+            HIRExpr::Ref(refed_expr, _, _) => {
+                //we can remove the deref and the ref
+                let (refed_expr, simplified) = simplify_expression(*refed_expr);
+                //we might lose some metadata here but it's okay I guess
+                (refed_expr, simplified)
+            }
+            _ => {
+                let (derefed_expr, simplified) = simplify_expression(*derefed_expr);
+                (HIRExpr::Deref(Box::new(derefed_expr), ty, meta), simplified)
+            }
+        },
+        HIRExpr::Ref(refed_expr, ty, meta) => match *refed_expr {
+            //do the inverse as the code above
+            HIRExpr::Deref(derefed_expr, _, _) => {
+                let (derefed_expr, simplified) = simplify_expression(*derefed_expr);
+                (derefed_expr, simplified)
+            }
+            _ => {
+                let (refed_expr, simplified) = simplify_expression(*refed_expr);
+                (HIRExpr::Ref(Box::new(refed_expr), ty, meta), simplified)
+            }
+        },
+        HIRExpr::UnaryExpression(op, rhs, ty, meta) => {
+            let (rhs, simplified) = simplify_expression(*rhs);
+            (
+                HIRExpr::UnaryExpression(op, rhs.into(), ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::MemberAccess(obj, member, ty, meta) => {
+            let (obj, simplified) = simplify_expression(*obj);
+            (
+                HIRExpr::MemberAccess(obj.into(), member, ty, meta),
+                simplified,
+            )
+        }
+        HIRExpr::Array(items, ty, meta) => {
+            let (items, simplified_items): (Vec<_>, Vec<_>) = items
+                .into_iter()
+                .map(|item| simplify_expression(item))
+                .unzip();
+            let simplified = simplified_items.iter().any(|simplified| *simplified);
+            (HIRExpr::Array(items, ty, meta), simplified)
+        }
+        HIRExpr::TypecheckTag(_) => panic!("TypecheckTag should have been removed by now"),
+    }
 }
 
-impl<'source> MIRFunctionEmitter<'source> {
-    fn new() -> Self {
-        MIRFunctionEmitter {
-            current_block: BlockId(0),
-            current_scope: ScopeId(0),
+fn hir_expr_to_mir<'a, T>(
+    file: FileTableIndex,
+    element: RootElementType,
+    expr: HIRExpr<'a, TypeInstanceId, T>,
+    errors: &mut TypeErrors<'a>,
+) -> Result<MIRExpr<'a, NotCheckedSimplified>, CompilerError> {
+    let (mut current_expr, mut simplified) = simplify_expression(expr);
+    loop {
+        if !simplified {
+            return convert_expr_to_mir(file, element, current_expr, errors);
+        }
+        (current_expr, simplified) = simplify_expression(current_expr);
+    }
+}
+
+macro_rules! expect_lvalue {
+    ($element:expr, $file:expr, $expr:expr, $errors:expr, $meta:expr) => {
+        match $expr {
+            MIRExpr::RValue(_) => {
+                $errors.invalid_derefed_type.push(
+                    DerefOnNonPointerError {
+                        attempted_type: $expr.get_type(),
+                    }
+                    .at_spanned($element, $file, $meta),
+                );
+                return Err(CompilerError::TypeCheckError);
+            }
+            MIRExpr::LValue(lvalue) => lvalue,
+            MIRExpr::TypecheckTag(_) => unreachable!(),
+        }
+    };
+}
+
+fn convert_expr_to_mir<'a>(
+    file: FileTableIndex,
+    element: RootElementType,
+    expr: HIRExpr<'a, TypeInstanceId, NotCheckedSimplified>,
+    errors: &mut TypeErrors<'a>,
+) -> Result<MIRExpr<'a, NotCheckedSimplified>, CompilerError> {
+    match expr {
+        HIRExpr::Literal(literal, ty, meta) => {
+            let mir_literal: LiteralMIRExpr = match literal {
+                LiteralHIRExpr::Integer(i) => LiteralMIRExpr::Integer(i),
+                LiteralHIRExpr::Float(f) => LiteralMIRExpr::Float(f),
+                LiteralHIRExpr::Char(c) => LiteralMIRExpr::Char(c),
+                LiteralHIRExpr::String(s) => LiteralMIRExpr::String(s),
+                LiteralHIRExpr::Boolean(b) => LiteralMIRExpr::Boolean(b),
+                LiteralHIRExpr::None => todo!("None not implemented in MIR"),
+            };
+            Ok(MIRExpr::RValue(MIRExprRValue::Literal(
+                mir_literal,
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::Variable(name, ty, meta) => {
+            Ok(MIRExpr::LValue(MIRExprLValue::Variable(name, ty, meta)))
+        }
+        HIRExpr::Cast(..) => todo!(),
+        HIRExpr::BinaryOperation(lhs, op, rhs, ty, meta) => {
+            let lhs = hir_expr_to_mir(file, element, *lhs, errors)?;
+            let rhs = hir_expr_to_mir(file, element, *rhs, errors)?;
+            Ok(MIRExpr::RValue(MIRExprRValue::BinaryOperation(
+                lhs.into(),
+                op,
+                rhs.into(),
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::MethodCall(obj, method_name, args, ty, meta) => {
+            let obj = hir_expr_to_mir(file, element, *obj, errors)?;
+            let args: Result<Vec<_>, _> = args
+                .into_iter()
+                .map(|arg| hir_expr_to_mir(file, element, arg, errors))
+                .collect();
+
+            Ok(MIRExpr::RValue(MIRExprRValue::MethodCall(
+                obj.into(),
+                method_name,
+                args?,
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::FunctionCall(function_expr, args, ty, meta) => {
+            let function_expr = hir_expr_to_mir(file, element, *function_expr, errors)?;
+            let args: Result<Vec<_>, _> = args
+                .into_iter()
+                .map(|arg| hir_expr_to_mir(file, element, arg, errors))
+                .collect();
+
+            let function_lvalue = expect_lvalue!(element, file, function_expr, errors, meta);
+
+            Ok(MIRExpr::RValue(MIRExprRValue::FunctionCall(
+                function_lvalue.into(),
+                args?,
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::Deref(expr, ty, meta) => {
+            let expr = hir_expr_to_mir(file, element, *expr, errors)?;
+            Ok(MIRExpr::LValue(MIRExprLValue::Deref(expr.into(), ty, meta)))
+        }
+        HIRExpr::Ref(expr, ty, meta) => {
+            let expr = hir_expr_to_mir(file, element, *expr, errors)?;
+
+            let ref_lvalue = expect_lvalue!(element, file, expr, errors, meta);
+
+            Ok(MIRExpr::RValue(MIRExprRValue::Ref(
+                ref_lvalue.into(),
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::UnaryExpression(op, rhs, ty, meta) => {
+            let rhs = hir_expr_to_mir(file, element, *rhs, errors)?;
+            Ok(MIRExpr::RValue(MIRExprRValue::UnaryExpression(
+                op,
+                rhs.into(),
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::MemberAccess(obj, field, ty, meta) => {
+            let obj = hir_expr_to_mir(file, element, *obj, errors)?;
+            Ok(MIRExpr::LValue(MIRExprLValue::MemberAccess(
+                obj.into(),
+                field,
+                ty,
+                meta,
+            )))
+        }
+        HIRExpr::Array(items, ty, meta) => {
+            let items: Result<Vec<_>, _> = items
+                .into_iter()
+                .map(|item| hir_expr_to_mir(file, element, item, errors))
+                .collect();
+            Ok(MIRExpr::RValue(MIRExprRValue::Array(items?, ty, meta)))
+        }
+        HIRExpr::StructInstantiate(ty, meta) => {
+            Ok(MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, meta)))
+        }
+        HIRExpr::TypecheckTag(_) => panic!("TypecheckTag should have been removed by now"),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodegenJobType<'source> {
+    List(Vec<InferredTypeHIR<'source>>),
+    Group(Vec<InferredTypeHIR<'source>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DefaultFinish {
+    Goto(BlockId),
+    //@TODO: Maybe there should be always an implicit, lazily-intantiated default empty return block?
+    EmptyReturn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodegenJob<'source> {
+    block: BlockId,
+    scope: ScopeId,
+    job: CodegenJobType<'source>,
+    default_finish: DefaultFinish,
+}
+
+pub struct MIRFunctionEmitter<'source, 'errors> {
+    file: FileTableIndex,
+    function_name: RootElementType,
+    errors: &'errors mut TypeErrors<'source>,
+    root_ast: HIRAstMetadata<'source>,
+    queue: VecDeque<CodegenJob<'source>>,
+    blocks: Vec<MIRBlock<'source, NotCheckedSimplified>>,
+    scopes: Vec<MIRScope>,
+    empty_return_block: Option<BlockId>,
+}
+
+impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
+    pub fn new(
+        file: FileTableIndex,
+        function_name: InternedString,
+        errors: &'errors mut TypeErrors<'source>,
+        root: HIRAstMetadata<'source>,
+    ) -> Self {
+        Self {
+            file,
+            function_name: RootElementType::Function(function_name),
+            errors,
+            root_ast: root,
             blocks: vec![],
             scopes: vec![],
-            goto_stack: vec![],
+            empty_return_block: None,
+            queue: VecDeque::new(),
         }
     }
 
-    fn emit(&mut self, node: MIRBlockNode<'source, NotChecked>) {
-        self.blocks[self.current_block.0].block.push(node);
+    pub fn run(
+        &mut self,
+        body: Vec<InferredTypeHIR<'source>>,
+        parameters: Vec<HIRTypedBoundName<TypeInstanceId>>,
+    ) -> Result<(), CompilerError> {
+        //the function has a starting scope, create it
+        let starting_scope = self.create_scope(ScopeId(0));
+        //add all parameters to the scope 0
+        for param in parameters.iter() {
+            self.scope_add_variable(starting_scope, param.name, param.typename);
+            //   self.scopes[0].boundnames.push(MIRTypedBoundName { name: param.name, type_instance: param.typename });
+        }
+
+        //let starting_scope = if parameters.is_empty() { starting_scope } else { self.create_scope(starting_scope) };
+
+        //the function has a starting block, create it
+        let starting_block = self.new_block(starting_scope);
+
+        self.queue.push_back(CodegenJob {
+            scope: starting_scope,
+            block: starting_block,
+            job: CodegenJobType::List(body),
+            default_finish: DefaultFinish::EmptyReturn,
+        });
+
+        while !self.queue.is_empty() {
+            let item = self.queue.pop_front().unwrap();
+            self.codegen(item)?;
+        }
+        Ok(())
     }
 
     fn create_scope(&mut self, parent_scope: ScopeId) -> ScopeId {
@@ -173,11 +587,11 @@ impl<'source> MIRFunctionEmitter<'source> {
 
     fn new_block(&mut self, block_scope: ScopeId) -> BlockId {
         let current_len = self.blocks.len();
-        let new_block = MIRMaybeUnfinishedBlock {
-            finish: None,
+        let new_block = MIRBlock {
+            finish: MIRBlockFinal::EmptyReturn(self.root_ast),
             scope: block_scope,
             index: current_len,
-            block: vec![],
+            nodes: vec![],
         };
         self.blocks.push(new_block);
         BlockId(current_len)
@@ -196,397 +610,344 @@ impl<'source> MIRFunctionEmitter<'source> {
         });
     }
 
-    fn finish_with_goto_block(&mut self, goto: BlockId) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::GotoBlock(goto));
+    fn emit(&mut self, block: BlockId, node: MIRBlockNode<'source, NotCheckedSimplified>) {
+        self.blocks[block.0].nodes.push(node);
     }
 
-    fn set_current_block(&mut self, current: BlockId) {
-        self.current_block = current;
-    }
-    fn set_current_scope(&mut self, current: ScopeId) {
-        self.current_scope = current;
+    fn finish_with(&mut self, block: BlockId, node: MIRBlockFinal<'source, NotCheckedSimplified>) {
+        self.blocks[block.0].finish = node;
     }
 
-    fn finish_with_branch(
-        &mut self,
-        condition: HIRExpr<'source, TypeInstanceId>,
-        true_branch: BlockId,
-        false_branch: BlockId,
-        meta_ast: HIRAstMetadata<'source>,
-    ) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::If(
-            condition,
-            true_branch,
-            false_branch,
-            meta_ast,
-        ));
-    }
+    fn codegen(&mut self, job: CodegenJob<'source>) -> Result<(), CompilerError> {
+        let CodegenJob {
+            scope,
+            block,
+            job,
+            default_finish,
+        } = job;
 
-    fn finish_with_return(
-        &mut self,
-        expr: HIRExpr<'source, TypeInstanceId>,
-        meta_ast: HIRAstMetadata<'source>,
-    ) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::Return(expr, meta_ast));
-    }
+        match job {
+            CodegenJobType::List(items) => {
+                //group items by breaking into groups, where the breaking points are if statements, while statements, and declarations
+                //another thing is that we need to group by scope, but this is complicated:
+                //  - if it's a variable declaration, we need to create a new scope, and the next groups must use it instead, even if they are in the same indentation level.
+                //  - if it's a if/while, we need to create a new scope for their inner contents
 
-    fn finish_with_empty_return(&mut self) {
-        self.blocks[self.current_block.0].finish = Some(MIRBlockFinal::EmptyReturn);
-    }
+                let mut groups: Vec<Vec<InferredTypeHIR<'source>>> = vec![];
+                let mut current_group: Vec<InferredTypeHIR<'source>> = vec![];
 
-    fn finish(self) -> (Vec<MIRScope>, Vec<MIRBlock<'source, NotChecked>>) {
-        let blocks = self
-            .blocks
-            .into_iter()
-            .map(|x| {
-                let finisher = match x.finish {
-                    Some(f) => f,
-                    None => panic!("Found unfinished MIR block! {:#?}", x),
-                };
-                MIRBlock {
-                    index: x.index,
-                    scope: x.scope,
-                    finish: finisher,
-                    nodes: x.block,
+                for item in items {
+                    match item {
+                        item @ (InferredTypeHIR::If(..)
+                        | InferredTypeHIR::While(..)
+                        | InferredTypeHIR::Declare { .. }) => {
+                            current_group.push(item);
+                            groups.push(current_group);
+                            current_group = vec![];
+                        }
+                        item => {
+                            current_group.push(item);
+                        }
+                    }
                 }
-            })
-            .collect::<Vec<_>>();
 
-        (self.scopes, blocks)
-    }
+                if !current_group.is_empty() {
+                    groups.push(current_group);
+                }
 
-    fn check_if_block_is_finished(&self, block_id: BlockId) -> bool {
-        self.blocks[block_id.0].finish.is_some()
-    }
+                let mut groups_blocks = vec![];
 
-    fn push_goto_block(&mut self, block: BlockId) {
-        self.goto_stack.push(block)
-    }
+                for (i, _) in groups.iter().enumerate() {
+                    if i == 0 {
+                        //since we are doing a rescheduling, we can reuse the current block
+                        groups_blocks.push((scope, block));
+                        continue;
+                    } else {
+                        let new_scope = self.create_scope(scope);
+                        let new_block = self.new_block(new_scope);
+                        groups_blocks.push((new_scope, new_block));
+                    }
+                }
 
-    fn pop_goto_block(&mut self) {
-        self.goto_stack.pop();
-    }
+                //This skip(1) is because block 0 must by default flow into the next block (1) and the last one is the current default finish
+                let default_finishes = groups_blocks
+                    .clone()
+                    .into_iter()
+                    .skip(1)
+                    .map(|(_, block)| DefaultFinish::Goto(block))
+                    .chain(std::iter::once(default_finish.clone()));
 
-    fn peek_goto_block(&self) -> Option<&BlockId> {
-        self.goto_stack.last()
-    }
-}
+                //schedule groups
+                for ((group, (scope, block)), finish) in groups
+                    .into_iter()
+                    .zip(groups_blocks.into_iter())
+                    .zip(default_finishes)
+                {
+                    self.queue.push_back(CodegenJob {
+                        block,
+                        scope,
+                        job: CodegenJobType::Group(group),
+                        default_finish: finish,
+                    });
+                }
 
-//returns the "root block" that this execution generated (or started with)
-#[allow(clippy::too_many_lines)] //too lazy for now, and I think it's ok here
-fn process_body<'source>(
-    emitter: &mut MIRFunctionEmitter<'source>,
-    body: Vec<InferredTypeHIR<'source>>,
-) {
-    for hir in body {
-        match hir {
-            HIR::Assign {
-                path,
-                expression,
-                meta_ast,
-                meta_expr,
-            } => {
-                emitter.emit(MIRBlockNode::Assign {
-                    path,
-                    expression,
-                    meta_ast,
-                    meta_expr,
-                });
+                return Ok(());
             }
-            HIR::Declare {
-                var,
-                typedef,
-                expression,
-                meta_ast,
-                meta_expr,
-            } => {
-                //we need to finalize the block we currently are,
-                //define a new scope inheriting the current one,
-                //declare a new variable in the new scope,
-                //then emit the declaration.
 
-                let current_scope = emitter.current_scope; //scope 0
-
-                let new_scope = emitter.create_scope(current_scope); //defscope 1
-                let new_block = emitter.new_block(new_scope); //defblock 1
-
-                //on block 0 make it so that the current block goes to this new one (block 1)
-                emitter.finish_with_goto_block(new_block);
-
-                //now we add the variable to scope 1
-                emitter.scope_add_variable(new_scope, var, typedef);
-
-                //go to block 1
-                emitter.set_current_block(new_block);
-                //and *finally* assign the variable
-                emitter.emit(MIRBlockNode::Assign {
-                    path: vec![var],
-                    expression,
-                    meta_ast,
-                    meta_expr,
-                });
-
-                //allow other blocks to read and write from scope:
-                let after_creation_variable_scope = emitter.create_scope(new_scope); //defscope 1
-                let after_creation_variable_block =
-                    emitter.new_block(after_creation_variable_scope); //defblock 1
-
-                emitter.finish_with_goto_block(after_creation_variable_block);
-                emitter.set_current_block(after_creation_variable_block);
-                emitter.set_current_scope(after_creation_variable_scope);
-            }
-            HIR::FunctionCall {
-                function,
-                args,
-                meta_ast,
-                meta_expr,
-            } => {
-                match &function {
-                    HIRExpr::Variable(var, function_type, ..) => {
-                        let pending_args = args.iter().map(std::clone::Clone::clone).collect();
-
-                        emitter.emit(MIRBlockNode::FunctionCall {
-                            function: *var,
-                            args: pending_args,
+            //@TODO the fact is that the only operations that can be "grouped" really are only assignments and function calls, as they don't become any control flow
+            //structure... maybe this should be taken more advantage of?
+            CodegenJobType::Group(items) => {
+                let len = items.len();
+                for (i, item) in items.into_iter().enumerate() {
+                    let is_last = i == len - 1;
+                    match item {
+                        //assigns are trivial
+                        HIR::Assign {
+                            path,
+                            expression,
                             meta_ast,
                             meta_expr,
-                            return_type: *function_type,
-                        });
+                        } => {
+                            let mir_expr =
+                                hir_expr_to_mir(self.file, self.function_name, path, self.errors)?;
+
+                            match mir_expr {
+                                MIRExpr::RValue(_) => {
+                                    self.errors.invalid_derefed_type.push(
+                                        DerefOnNonPointerError {
+                                            attempted_type: mir_expr.get_type(),
+                                        }
+                                        .at_spanned(
+                                            self.function_name,
+                                            self.file,
+                                            meta_expr,
+                                        ),
+                                    );
+                                }
+                                MIRExpr::LValue(lvalue) => {
+                                    let lvalue_rhs_expr = hir_expr_to_mir(
+                                        self.file,
+                                        self.function_name,
+                                        expression,
+                                        self.errors,
+                                    )?;
+                                    self.emit(
+                                        block,
+                                        MIRBlockNode::Assign {
+                                            path: lvalue,
+                                            expression: lvalue_rhs_expr,
+                                            meta_ast,
+                                            meta_expr,
+                                        },
+                                    );
+                                    //will return with the default finish
+                                }
+                                MIRExpr::TypecheckTag(_) => unreachable!(),
+                            }
+                        }
+                        HIR::FunctionCall {
+                            function,
+                            args,
+                            meta_ast,
+                            meta_expr,
+                        } => match &function {
+                            HIRExpr::Variable(var, function_type, ..) => {
+                                let pending_args: Result<Vec<_>, _> = args
+                                    .into_iter()
+                                    .map(|x| {
+                                        hir_expr_to_mir(
+                                            self.file,
+                                            self.function_name,
+                                            x,
+                                            self.errors,
+                                        )
+                                    })
+                                    .collect();
+
+                                self.emit(
+                                    block,
+                                    MIRBlockNode::FunctionCall {
+                                        function: *var,
+                                        args: pending_args?,
+                                        meta_ast,
+                                        meta_expr,
+                                        return_type: *function_type,
+                                    },
+                                );
+                                //will return with the default finish
+                            }
+                            other => panic!("{other:?} is not a function!"),
+                        },
+                        HIR::Declare {
+                            var,
+                            typedef,
+                            expression,
+                            meta_ast,
+                            meta_expr,
+                        } => {
+                            self.scope_add_variable(scope, var, typedef);
+                            let expr_type = expression.get_type();
+                            let declare_rhs_expr = hir_expr_to_mir(
+                                self.file,
+                                self.function_name,
+                                expression,
+                                self.errors,
+                            )?;
+                            self.emit(
+                                block,
+                                MIRBlockNode::Assign {
+                                    path: MIRExprLValue::Variable(var, expr_type, meta_expr),
+                                    expression: declare_rhs_expr,
+                                    meta_ast,
+                                    meta_expr,
+                                },
+                            );
+                            assert!(
+                                is_last,
+                                "declare statements must be the last statement in a group"
+                            );
+                            //will return with the default finish
+                        }
+
+                        HIR::If(expr, true_branch, false_branch, meta_ast) => {
+                            //create a new block for the true branch
+                            let true_scope = self.create_scope(scope);
+                            let true_block = self.new_block(true_scope);
+                            self.queue.push_back(CodegenJob {
+                                block: true_block,
+                                scope: true_scope,
+                                job: CodegenJobType::List(true_branch),
+                                default_finish: default_finish.clone(), //this is correct: default finish will be either empty rreturn or the next block
+                            });
+
+                            //if the false branch is empty, we can just jump to the default finish
+                            let false_block = if false_branch.is_empty() {
+                                self.block_from_default_finish(&default_finish)
+                            } else {
+                                //otherwise, we need to create a new block for the false branch, schedule the codegen, etc
+                                let false_scope = self.create_scope(scope);
+                                let false_block = self.new_block(false_scope);
+                                self.queue.push_back(CodegenJob {
+                                    block: false_block,
+                                    scope: false_scope,
+                                    job: CodegenJobType::List(false_branch),
+                                    default_finish: default_finish.clone(),
+                                });
+                                false_block
+                            };
+
+                            let condition_expr =
+                                hir_expr_to_mir(self.file, self.function_name, expr, self.errors)?;
+
+                            //emit the if statement
+                            self.finish_with(
+                                block,
+                                MIRBlockFinal::If(
+                                    condition_expr,
+                                    true_block,
+                                    false_block,
+                                    meta_ast,
+                                ),
+                            );
+                            assert!(
+                                is_last,
+                                "if statements must be the last statement in a group"
+                            );
+                            return Ok(());
+                        }
+                        HIR::While(expr, body, meta_ast) => {
+                            //We need a block, with a new scope, for the while body
+                            let while_scope = self.create_scope(scope);
+                            let while_block = self.new_block(while_scope);
+
+                            //compile the condition
+
+                            self.queue.push_back(CodegenJob {
+                                block: while_block,
+                                scope: while_scope,
+                                job: CodegenJobType::List(body),
+                                default_finish: DefaultFinish::Goto(block), //by default the body must loop back to us
+                            });
+
+                            let condition_expr =
+                                hir_expr_to_mir(self.file, self.function_name, expr, self.errors)?;
+
+                            //the current block is the condition evaluation
+
+                            let default_finish_block =
+                                self.block_from_default_finish(&default_finish);
+
+                            self.finish_with(
+                                block,
+                                MIRBlockFinal::If(
+                                    condition_expr,
+                                    while_block,
+                                    default_finish_block,
+                                    meta_ast,
+                                ),
+                            );
+                            assert!(
+                                is_last,
+                                "while statements must be the last statement in a group"
+                            );
+                            return Ok(());
+                        }
+                        HIR::Return(expr, meta_ast) => {
+                            //if there are multiple returns in sequence, the rest of the block is unreachable, so we can actually just finish it and return
+                            let return_expr =
+                                hir_expr_to_mir(self.file, self.function_name, expr, self.errors)?;
+                            self.finish_with(block, MIRBlockFinal::Return(return_expr, meta_ast));
+                            return Ok(());
+                        }
+                        HIR::EmptyReturn(meta_ast) => {
+                            self.finish_with(block, MIRBlockFinal::EmptyReturn(meta_ast));
+                            return Ok(());
+                        }
                     }
-                    other => panic!("{:?} is not a function!", other),
-                };
-            }
-            HIR::While(expr, body, meta_ast) => {
-                let current_scope = emitter.current_scope;
-                let current_block = emitter.current_block;
-
-                assert!(
-                    !body.is_empty(),
-                    "Empty body on while statement reached MIR"
-                );
-
-                //create a block for the while branch
-                let while_body_scope = emitter.create_scope(current_scope);
-                let while_body_block = emitter.new_block(while_body_scope);
-
-                let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
-
-                //the code inside the the body needs to know where to return when their scope ends
-                //so we add this goto stack block for the body, otherwise it will make the function return
-                //so we make them return to the current block, reevaluate the condition and loop again
-                emitter.push_goto_block(current_block);
-
-                //go to the while block
-                emitter.set_current_block(while_body_block);
-                process_body(emitter, body);
-
-                emitter.pop_goto_block();
-
-                //do the loop
-                //ensure we are in the while block first
-                emitter.set_current_block(while_body_block);
-
-                //check if the user returned. Kinda weird to do it directly in the while loop
-                //but ok
-                let emitted_block_returns = emitter.check_if_block_is_finished(while_body_block);
-
-                //if they don't return, go back to the beginning of the loop
-                if !emitted_block_returns {
-                    emitter.finish_with_goto_block(current_block);
                 }
 
-                emitter.set_current_block(current_block);
-                emitter.finish_with_branch(
-                    expr,
-                    while_body_block, //return to the block
-                    fallback_block,   //go to the fallback block
-                    meta_ast,
-                );
+                match default_finish {
+                    DefaultFinish::Goto(default_goto_block) => {
+                        self.finish_with(block, MIRBlockFinal::GotoBlock(default_goto_block));
+                    }
+                    DefaultFinish::EmptyReturn => {
+                        self.finish_with(block, MIRBlockFinal::EmptyReturn(self.root_ast));
+                    }
+                }
 
-                emitter.set_current_block(fallback_block);
+                return Ok(());
             }
+        }
+    }
 
-            HIR::If(condition, true_branch_hir, false_branch_hir, ast) => {
-                //we need to finalize the block we currently are,
-                //define a new scope inheriting the current one,
-                //generate both sides of the branch
-                //but also need to create a fallback block so that we know where to go when there is no "else" code
-                //or when the if does not return
-
-                let current_scope = emitter.current_scope;
-                let current_block = emitter.current_block;
-
-                //we will generate the fallback block only if necessary
-                let mut fallback_scope_and_block = None;
-
-                let has_else_code = !false_branch_hir.is_empty();
-
-                let (true_block, true_branch_returns) = {
-                    assert!(
-                        !true_branch_hir.is_empty(),
-                        "Empty true branch on if statement reached MIR"
-                    );
-                    //create a block for the true branch
-                    let true_branch_scope = emitter.create_scope(current_scope);
-                    let true_branch_block = emitter.new_block(true_branch_scope);
-                    //go to the true branch block
-                    emitter.set_current_block(true_branch_block);
-                    process_body(emitter, true_branch_hir);
-
-                    //does the branch have a return instruction, or is already finished
-                    let emitted_block_returns =
-                        emitter.check_if_block_is_finished(true_branch_block);
-
-                    if !emitted_block_returns {
-                        if fallback_scope_and_block.is_none() {
-                            let fallback_block =
-                                generate_or_get_fallback_block(emitter, current_scope);
-                            fallback_scope_and_block = Some(fallback_block);
-                        }
-                        let fallback_block = fallback_scope_and_block.unwrap();
-                        //if no then goto the fallback block
-                        //make sure we are emitting on the true branch block we generated
-                        emitter.set_current_block(true_branch_block);
-                        emitter.finish_with_goto_block(fallback_block);
-                        emitter.set_current_block(fallback_block);
-                    }
-
-                    (true_branch_block, emitted_block_returns)
-                };
-
-                if has_else_code {
-                    let false_branch_scope = emitter.create_scope(current_scope);
-                    let false_branch_block = emitter.new_block(false_branch_scope);
-
-                    //go to the false branch block
-                    emitter.set_current_block(false_branch_block);
-
-                    process_body(emitter, false_branch_hir);
-
-                    let emitted_block_returns =
-                        emitter.check_if_block_is_finished(false_branch_block);
-
-                    //ok go back for a second
-                    emitter.set_current_block(current_block);
-
-                    //emit the branch
-                    emitter.finish_with_branch(condition, true_block, false_branch_block, ast);
-
-                    if !emitted_block_returns {
-                        if fallback_scope_and_block.is_none() {
-                            let fallback_block =
-                                generate_or_get_fallback_block(emitter, current_scope);
-                            fallback_scope_and_block = Some(fallback_block);
-                        }
-                        let fallback_block = fallback_scope_and_block.unwrap();
-                        emitter.set_current_block(false_branch_block);
-                        emitter.finish_with_goto_block(fallback_block);
-                        emitter.set_current_block(fallback_block);
-                    } else if !true_branch_returns {
-                        emitter.set_current_block(fallback_scope_and_block.unwrap());
-                    }
+    fn block_from_default_finish(&mut self, default_finish: &DefaultFinish) -> BlockId {
+        match *default_finish {
+            DefaultFinish::Goto(block) => block,
+            DefaultFinish::EmptyReturn => {
+                //we will lazy-create the empty return block if necessary
+                if let Some(block) = self.empty_return_block {
+                    block
                 } else {
-                    //no else code, go to the fallback
-                    //generate the branch, but the false branch just jumps to the fallback block
-                    emitter.set_current_block(current_block);
-
-                    if fallback_scope_and_block.is_none() {
-                        let fallback_block = generate_or_get_fallback_block(emitter, current_scope);
-                        fallback_scope_and_block = Some(fallback_block);
-                    }
-                    let fallback_block = fallback_scope_and_block.unwrap();
-                    emitter.finish_with_branch(condition, true_block, fallback_block, ast);
-
-                    //in this case the function continues in the fallback block
-                    emitter.set_current_block(fallback_block);
+                    //the scope doesn't really matter.
+                    let block = self.new_block(
+                        self.scopes
+                            .last()
+                            .expect("At least one scope should've been created by now")
+                            .id,
+                    );
+                    self.empty_return_block = Some(block);
+                    block
                 }
             }
-            HIR::Return(expr, meta_ast) => {
-                emitter.finish_with_return(expr, meta_ast);
-            }
-            HIR::EmptyReturn => {
-                emitter.finish_with_empty_return();
-            }
         }
     }
-}
-
-fn generate_or_get_fallback_block<'source>(
-    emitter: &mut MIRFunctionEmitter<'source>,
-    current_scope: ScopeId,
-) -> BlockId {
-    let fallback_block = if let Some(block) = emitter.peek_goto_block() {
-        *block
-    } else {
-        //create a fallback block, for after the while statement
-        let fallback_scope = emitter.create_scope(current_scope);
-        emitter.new_block(fallback_scope)
-    };
-    fallback_block
-}
-
-pub fn process_hir_funcdecl<'source>(
-    function_name: InternedString,
-    parameters: Vec<HIRTypedBoundName<TypeInstanceId>>,
-    body: Vec<InferredTypeHIR<'source>>,
-    return_type: TypeInstanceId,
-    is_intrinsic: bool,
-) -> MIRTopLevelNode<'source, NotChecked> {
-    if is_intrinsic {
-        return MIRTopLevelNode::IntrinsicFunction {
-            function_name,
-            parameters: parameters
-                .iter()
-                .map(|x| MIRTypedBoundName {
-                    name: x.name,
-                    type_instance: x.typename,
-                })
-                .collect::<Vec<_>>(),
-            return_type,
-        };
-    }
-
-    let mut emitter = MIRFunctionEmitter::new();
-
-    //create a new block for the main function decl node
-    let function_zero_scope = emitter.create_scope(ScopeId(0));
-    let function_zero_block = emitter.new_block(function_zero_scope);
-    emitter.set_current_block(function_zero_block);
-
-    for param in parameters.iter() {
-        emitter.scope_add_variable(function_zero_scope, param.name, param.typename);
-    }
-
-    process_body(&mut emitter, body);
-
-    //check for blocks with no returns (like fallback blocks or blocks that the user didnt specify a return)
-    for block_id in 0..emitter.blocks.len() {
-        let block = &emitter.blocks[block_id];
-        if block.finish.is_none() {
-            emitter.set_current_block(BlockId(block.index));
-            emitter.finish_with_empty_return();
-        }
-    }
-
-    let (scopes, body) = emitter.finish();
-    return MIRTopLevelNode::DeclareFunction {
-        function_name,
-        parameters: parameters
-            .iter()
-            .map(|x| MIRTypedBoundName {
-                name: x.name,
-                type_instance: x.typename,
-            })
-            .collect::<Vec<_>>(),
-        body,
-        scopes,
-        return_type,
-    };
 }
 
 pub fn hir_to_mir<'source>(
+    file: FileTableIndex,
     hir_nodes: Vec<InferredTypeHIRRoot<'source>>,
-) -> Vec<MIRTopLevelNode<'source, NotChecked>> {
+    errors: &mut TypeErrors<'source>,
+) -> Result<Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>, CompilerError> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
@@ -595,17 +956,41 @@ pub fn hir_to_mir<'source>(
                 parameters,
                 body,
                 return_type,
-                meta: _,
+                meta,
                 is_intrinsic,
+                is_varargs,
             } => {
-                let fdecl = process_hir_funcdecl(
-                    function_name,
-                    parameters,
-                    body,
-                    return_type,
-                    is_intrinsic,
-                );
-                top_levels.push(fdecl);
+                let mir_parameters = parameters
+                    .iter()
+                    .map(|x| MIRTypedBoundName {
+                        name: x.name,
+                        type_instance: x.typename,
+                    })
+                    .collect::<Vec<_>>();
+
+                if is_intrinsic {
+                    top_levels.push(MIRTopLevelNode::IntrinsicFunction {
+                        function_name,
+                        parameters: mir_parameters,
+                        return_type,
+                        is_varargs,
+                    });
+                    continue;
+                } else {
+                    let mut mir_emitter =
+                        MIRFunctionEmitter::new(file, function_name, errors, meta);
+
+                    mir_emitter.run(body, parameters)?;
+
+                    let result = MIRTopLevelNode::DeclareFunction {
+                        function_name,
+                        parameters: mir_parameters,
+                        body: mir_emitter.blocks,
+                        scopes: mir_emitter.scopes,
+                        return_type,
+                    };
+                    top_levels.push(result);
+                }
             }
             HIRRoot::StructDeclaration {
                 struct_name: _,
@@ -617,7 +1002,7 @@ pub fn hir_to_mir<'source>(
             }
         }
     }
-    top_levels
+    Ok(top_levels)
 }
 
 #[cfg(test)]
@@ -638,8 +1023,8 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &result.interner);
-        println!("{}", final_result);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, result.interner);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
@@ -662,25 +1047,15 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> Void:
     defscope 0:
         inheritscope 0
-    defscope 1:
-        inheritscope 0
         x : i32
-    defscope 2:
-        inheritscope 1
     defblock 0:
         usescope 0
-        gotoblock 1
-    defblock 1:
-        usescope 1
         x = 1
-        gotoblock 2
-    defblock 2:
-        usescope 2
         return";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -696,7 +1071,7 @@ def main(x: i32) -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     defscope 0:
@@ -720,7 +1095,7 @@ def main(x: i32, y: i64, z: f64, name: str) -> i32:
         let result = do_analysis_no_typecheck(&src);
         let final_result =
             mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32, y: i64, z: f64, name: str) -> i32:
     defscope 0:
@@ -746,7 +1121,7 @@ def main(x: i32) -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     defscope 0:
@@ -761,6 +1136,7 @@ def main(x: i32) -> i32:
 
     #[test]
     fn create_variable() {
+        //@TODO replace by new result
         let src = parse_no_std(
             "
 def main(x: i32) -> i32:
@@ -771,26 +1147,21 @@ def main(x: i32) -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     defscope 0:
         inheritscope 0
         x : i32
+        y : i32
     defscope 1:
         inheritscope 0
-        y : i32
-    defscope 2:
-        inheritscope 1
     defblock 0:
         usescope 0
+        y = 0
         gotoblock 1
     defblock 1:
         usescope 1
-        y = 0
-        gotoblock 2
-    defblock 2:
-        usescope 2
         return x + y";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -808,40 +1179,29 @@ def main(x: i32) -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     defscope 0:
         inheritscope 0
         x : i32
+        y : i32
     defscope 1:
         inheritscope 0
-        y : i32
-    defscope 2:
-        inheritscope 1
-    defscope 3:
-        inheritscope 2
         z : i32
-    defscope 4:
-        inheritscope 3
+    defscope 2:
+        inheritscope 0
     defblock 0:
         usescope 0
+        y = 1
         gotoblock 1
     defblock 1:
         usescope 1
-        y = 1
+        z = 2 + x
         gotoblock 2
     defblock 2:
         usescope 2
-        gotoblock 3
-    defblock 3:
-        usescope 3
-        z = 2 + x
-        gotoblock 4
-    defblock 4:
-        usescope 4
-        return x / y + z
-        ";
+        return x / y + z";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -859,25 +1219,20 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
         inheritscope 0
+        y : i32
     defscope 1:
         inheritscope 0
-        y : i32
-    defscope 2:
-        inheritscope 1
     defblock 0:
         usescope 0
+        y = 1
         gotoblock 1
     defblock 1:
         usescope 1
-        y = 1
-        gotoblock 2
-    defblock 2:
-        usescope 2
         y = 2
         y = 3
         y = 4
@@ -898,37 +1253,22 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> Void:
     defscope 0:
         inheritscope 0
+        y : i32
     defscope 1:
         inheritscope 0
-        y : i32
-    defscope 2:
-        inheritscope 1
-    defscope 3:
-        inheritscope 2
         x : i32
-    defscope 4:
-        inheritscope 3
     defblock 0:
         usescope 0
+        y = 1
         gotoblock 1
     defblock 1:
         usescope 1
-        y = 1
-        gotoblock 2
-    defblock 2:
-        usescope 2
-        gotoblock 3
-    defblock 3:
-        usescope 3
         x = y + 1
-        gotoblock 4
-    defblock 4:
-        usescope 4
         return
         ";
 
@@ -947,39 +1287,32 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> Void:
     defscope 0:
         inheritscope 0
+        y : i32
     defscope 1:
         inheritscope 0
-        y : i32
     defscope 2:
         inheritscope 1
-    defscope 3:
-        inheritscope 2
-    defscope 4:
-        inheritscope 2
     defblock 0:
         usescope 0
+        y = 1
         gotoblock 1
     defblock 1:
         usescope 1
-        y = 1
-        gotoblock 2
+        if y == 1:
+            gotoblock 2
+        else:
+            gotoblock 3
     defblock 2:
         usescope 2
-        if y == 1:
-            gotoblock 3
-        else:
-            gotoblock 4
-    defblock 3:
-        usescope 3
         y = y + 1
-        gotoblock 4
-    defblock 4:
-        usescope 4
+        return
+    defblock 3:
+        usescope 2
         return
         ";
 
@@ -1002,7 +1335,7 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> Void:
@@ -1012,25 +1345,84 @@ def main() -> Void:
         inheritscope 0
     defscope 2:
         inheritscope 0
-    defscope 3:
-        inheritscope 0
     defblock 0:
         usescope 0
         if True:
             gotoblock 1
         else:
-            gotoblock 3
+            gotoblock 2
     defblock 1:
         usescope 1
         print(1)
+        return
+    defblock 2:
+        usescope 2
+        print(2)
+        return
+        ";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn if_statement_return_deeply_nested() {
+        let src = parse_no_std(
+            "
+def main() -> i32:
+    if True:
+        x = 1
+        if True:
+            return 1
+    y = 1
+    return 2
+",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
+        println!("{final_result}");
+        let expected = "
+def main() -> i32:
+    defscope 0:
+        inheritscope 0
+    defscope 1:
+        inheritscope 0
+        y : i32
+    defscope 2:
+        inheritscope 0
+    defscope 3:
+        inheritscope 0
+        x : i32
+    defscope 4:
+        inheritscope 3
+    defscope 5:
+        inheritscope 4
+    defblock 0:
+        usescope 0
+        if True:
+            gotoblock 3
+        else:
+            gotoblock 1
+    defblock 1:
+        usescope 1
+        y = 1
         gotoblock 2
     defblock 2:
         usescope 2
-        return
+        return 2
     defblock 3:
         usescope 3
-        print(2)
-        gotoblock 2
+        x = 1
+        gotoblock 4
+    defblock 4:
+        usescope 4
+        if True:
+            gotoblock 5
+        else:
+            gotoblock 1
+    defblock 5:
+        usescope 5
+        return 1
         ";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -1049,7 +1441,7 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
@@ -1093,64 +1485,50 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
         inheritscope 0
+        x : i32
     defscope 1:
         inheritscope 0
-        x : i32
     defscope 2:
         inheritscope 1
+        y : i32
     defscope 3:
-        inheritscope 2
+        inheritscope 1
+        y : i32
     defscope 4:
         inheritscope 2
-        y : i32
     defscope 5:
-        inheritscope 4
-    defscope 6:
-        inheritscope 2
-    defscope 7:
-        inheritscope 5
-        y : i32
-    defscope 8:
-        inheritscope 7
+        inheritscope 3
     defblock 0:
         usescope 0
+        x = 0
         gotoblock 1
     defblock 1:
         usescope 1
-        x = 0
-        gotoblock 2
+        if True:
+            gotoblock 2
+        else:
+            gotoblock 3
     defblock 2:
         usescope 2
-        if True:
-            gotoblock 3
-        else:
-            gotoblock 6
+        y = x + 1
+        gotoblock 4
     defblock 3:
         usescope 3
-        gotoblock 4
+        x = 1
+        y = 2 + x
+        gotoblock 5
     defblock 4:
         usescope 4
-        y = x + 1
-        gotoblock 5
+        return y
     defblock 5:
         usescope 5
-        return y
-    defblock 6:
-        usescope 6
-        x = 1
-        gotoblock 7
-    defblock 7:
-        usescope 7
-        y = 2 + x
-        gotoblock 8
-    defblock 8:
-        usescope 8
-        return x + y";
+        return x + y
+";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -1159,7 +1537,7 @@ def main() -> i32:
     fn code_after_if_is_correctly_placed_true_branch_only() {
         let src = parse_no_std(
             "
-def print(x: i32): 
+def print(x: i32):
     intrinsic
 
 def main() -> i32:
@@ -1171,42 +1549,38 @@ def main() -> i32:
         );
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> i32:
     defscope 0:
         inheritscope 0
+        x : i32
     defscope 1:
         inheritscope 0
-        x : i32
     defscope 2:
-        inheritscope 1
+        inheritscope 0
     defscope 3:
-        inheritscope 2
-    defscope 4:
-        inheritscope 2
+        inheritscope 1
     defblock 0:
         usescope 0
+        x = 0
         gotoblock 1
     defblock 1:
         usescope 1
-        x = 0
-        gotoblock 2
-    defblock 2:
-        usescope 2
         if x == 0:
             gotoblock 3
         else:
-            gotoblock 4
+            gotoblock 2
+    defblock 2:
+        usescope 2
+        print(x)
+        return
     defblock 3:
         usescope 3
         x = x + 1
-        gotoblock 4
-    defblock 4:
-        usescope 4
-        print(x)
-        return";
+        gotoblock 2
+";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -1215,7 +1589,7 @@ def main() -> i32:
     fn code_after_if_is_correctly_placed_return_on_false_branch() {
         let src = parse_no_std(
             "
-def print(x: i32): 
+def print(x: i32):
     intrinsic
 
 def main() -> i32:
@@ -1229,46 +1603,42 @@ def main() -> i32:
         );
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> i32:
     defscope 0:
         inheritscope 0
+        x : i32
     defscope 1:
         inheritscope 0
-        x : i32
     defscope 2:
-        inheritscope 1
+        inheritscope 0
     defscope 3:
-        inheritscope 2
+        inheritscope 1
     defscope 4:
-        inheritscope 2
-    defscope 5:
-        inheritscope 2
+        inheritscope 1
     defblock 0:
         usescope 0
+        x = 0
         gotoblock 1
     defblock 1:
         usescope 1
-        x = 0
-        gotoblock 2
-    defblock 2:
-        usescope 2
         if x == 0:
             gotoblock 3
         else:
-            gotoblock 5
+            gotoblock 4
+    defblock 2:
+        usescope 2
+        return x
     defblock 3:
         usescope 3
         print(1)
-        gotoblock 4
+        gotoblock 2
     defblock 4:
         usescope 4
         return x
-    defblock 5:
-        usescope 5
-        return x";
+        ";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -1291,49 +1661,44 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> i32:
     defscope 0:
         inheritscope 0
+        x : i32
     defscope 1:
         inheritscope 0
-        x : i32
     defscope 2:
-        inheritscope 1
+        inheritscope 0
     defscope 3:
-        inheritscope 2
+        inheritscope 1
     defscope 4:
-        inheritscope 2
-    defscope 5:
-        inheritscope 2
+        inheritscope 1
     defblock 0:
         usescope 0
+        x = 0
         gotoblock 1
     defblock 1:
         usescope 1
-        x = 0
-        gotoblock 2
-    defblock 2:
-        usescope 2
         if x == 0:
             gotoblock 3
         else:
-            gotoblock 5
+            gotoblock 4
+    defblock 2:
+        usescope 2
+        print(x)
+        return
     defblock 3:
         usescope 3
         x = x + 1
-        gotoblock 4
+        gotoblock 2
     defblock 4:
         usescope 4
-        print(x)
-        return
-    defblock 5:
-        usescope 5
         x = 2
-        gotoblock 4
-        ";
+        gotoblock 2
+";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -1359,66 +1724,52 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def print(x: i32) -> Void
 def main() -> i32:
     defscope 0:
         inheritscope 0
+        x : i32
     defscope 1:
         inheritscope 0
-        x : i32
     defscope 2:
         inheritscope 1
+        y : i32
     defscope 3:
-        inheritscope 2
+        inheritscope 1
+        y : i32
     defscope 4:
         inheritscope 2
-        y : i32
     defscope 5:
-        inheritscope 4
-    defscope 6:
-        inheritscope 2
-    defscope 7:
-        inheritscope 5
-        y : i32
-    defscope 8:
-        inheritscope 7
+        inheritscope 3
     defblock 0:
         usescope 0
+        x = 0
         gotoblock 1
     defblock 1:
         usescope 1
-        x = 0
-        gotoblock 2
+        if True:
+            gotoblock 2
+        else:
+            gotoblock 3
     defblock 2:
         usescope 2
-        if True:
-            gotoblock 3
-        else:
-            gotoblock 6
+        y = x + 1
+        gotoblock 4
     defblock 3:
         usescope 3
-        gotoblock 4
+        x = 1
+        y = 2 + x
+        gotoblock 5
     defblock 4:
         usescope 4
-        y = x + 1
-        gotoblock 5
-    defblock 5:
-        usescope 5
         print(x)
         return
-    defblock 6:
-        usescope 6
-        x = 1
-        gotoblock 7
-    defblock 7:
-        usescope 7
-        y = 2 + x
-        gotoblock 8
-    defblock 8:
-        usescope 8
-        return x + y";
+    defblock 5:
+        usescope 5
+        return x + y
+";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -1447,78 +1798,68 @@ def main() -> i32:
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
         inheritscope 0
     defscope 1:
         inheritscope 0
+        x : i32
     defscope 2:
         inheritscope 0
-        x : i32
+        y : i32
     defscope 3:
-        inheritscope 2
+        inheritscope 1
     defscope 4:
-        inheritscope 3
+        inheritscope 2
     defscope 5:
         inheritscope 3
     defscope 6:
-        inheritscope 0
-    defscope 7:
         inheritscope 3
-        y : i32
+    defscope 7:
+        inheritscope 4
     defscope 8:
-        inheritscope 7
-    defscope 9:
-        inheritscope 8
-    defscope 10:
-        inheritscope 8
+        inheritscope 4
     defblock 0:
         usescope 0
         if True:
             gotoblock 1
         else:
-            gotoblock 6
+            gotoblock 2
     defblock 1:
         usescope 1
-        gotoblock 2
-    defblock 2:
-        usescope 2
         x = 1
         gotoblock 3
+    defblock 2:
+        usescope 2
+        y = 3
+        gotoblock 4
     defblock 3:
         usescope 3
         if 1 == 1:
-            gotoblock 4
-        else:
             gotoblock 5
+        else:
+            gotoblock 6
     defblock 4:
         usescope 4
-        x = x + 3
-        return x
+        if 2 == 2:
+            gotoblock 7
+        else:
+            gotoblock 8
     defblock 5:
         usescope 5
-        x = x + 1
+        x = x + 3
         return x
     defblock 6:
         usescope 6
-        gotoblock 7
+        x = x + 1
+        return x
     defblock 7:
         usescope 7
-        y = 3
-        gotoblock 8
+        return y + 1
     defblock 8:
         usescope 8
-        if 2 == 2:
-            gotoblock 9
-        else:
-            gotoblock 10
-    defblock 9:
-        usescope 9
-        return y + 1
-    defblock 10:
-        usescope 10
         return 4 * y";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -1552,97 +1893,79 @@ def main() -> i32:
         );
 
         let result = do_analysis_no_typecheck(&src);
-        let final_result = mir_printer::print_mir_node(
-            &result.mir.last().unwrap(),
-            &result.type_db,
-            &src.interner,
-        );
-        println!("{}", final_result);
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     defscope 0:
         inheritscope 0
     defscope 1:
         inheritscope 0
+        x : i32
     defscope 2:
         inheritscope 0
-        x : i32
+        y : i32
     defscope 3:
-        inheritscope 2
+        inheritscope 1
     defscope 4:
-        inheritscope 3
+        inheritscope 1
     defscope 5:
-        inheritscope 3
+        inheritscope 2
     defscope 6:
         inheritscope 3
     defscope 7:
-        inheritscope 0
-    defscope 8:
         inheritscope 3
-        y : i32
+    defscope 8:
+        inheritscope 5
     defscope 9:
-        inheritscope 8
-    defscope 10:
-        inheritscope 9
-    defscope 11:
-        inheritscope 9
-    defscope 12:
-        inheritscope 9
+        inheritscope 5
     defblock 0:
         usescope 0
         if True:
             gotoblock 1
         else:
-            gotoblock 7
+            gotoblock 2
     defblock 1:
         usescope 1
-        gotoblock 2
-    defblock 2:
-        usescope 2
         x = 1
         gotoblock 3
+    defblock 2:
+        usescope 2
+        y = 3
+        gotoblock 5
     defblock 3:
         usescope 3
         if 1 == 1:
-            gotoblock 4
+            gotoblock 6
         else:
-            gotoblock 5
+            gotoblock 7
     defblock 4:
         usescope 4
-        x = x + 3
-        return x
-    defblock 5:
-        usescope 5
-        x = x + 1
-        print(x)
-        gotoblock 6
-    defblock 6:
-        usescope 6
         print(\"nice\")
         return
+    defblock 5:
+        usescope 5
+        if 2 == 2:
+            gotoblock 8
+        else:
+            gotoblock 9
+    defblock 6:
+        usescope 6
+        x = x + 3
+        return x
     defblock 7:
         usescope 7
-        gotoblock 8
+        x = x + 1
+        print(x)
+        gotoblock 4
     defblock 8:
         usescope 8
-        y = 3
-        gotoblock 9
-    defblock 9:
-        usescope 9
-        if 2 == 2:
-            gotoblock 10
-        else:
-            gotoblock 12
-    defblock 10:
-        usescope 10
         y = y + 1
         print(y)
-        gotoblock 11
-    defblock 11:
-        usescope 11
         return
-    defblock 12:
-        usescope 12
+    defblock 9:
+        usescope 9
         return 4 * y";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -1662,64 +1985,207 @@ def main():
 
         let result = do_analysis_no_typecheck(&src);
         let final_result = mir_printer::print_mir(&result.mir, &result.type_db, &src.interner);
-        println!("{}", final_result);
+        println!("{final_result}");
         let expected = "
 def main() -> Void:
     defscope 0:
         inheritscope 0
+        x : i32
     defscope 1:
         inheritscope 0
-        x : i32
-    defscope 2:
-        inheritscope 1
-    defscope 3:
-        inheritscope 2
         y : i32
-    defscope 4:
-        inheritscope 3
-    defscope 5:
-        inheritscope 4
+    defscope 2:
+        inheritscope 0
         z : i32
-    defscope 6:
-        inheritscope 5
-    defscope 7:
-        inheritscope 6
+    defscope 3:
+        inheritscope 0
         result : i32
-    defscope 8:
-        inheritscope 7
+    defscope 4:
+        inheritscope 0
     defblock 0:
         usescope 0
+        x = 15
         gotoblock 1
     defblock 1:
         usescope 1
-        x = 15
+        y = 3
         gotoblock 2
     defblock 2:
         usescope 2
+        z = x + y
         gotoblock 3
     defblock 3:
         usescope 3
-        y = 3
+        result = 5 + z
         gotoblock 4
     defblock 4:
         usescope 4
-        gotoblock 5
-    defblock 5:
-        usescope 5
-        z = x + y
-        gotoblock 6
-    defblock 6:
-        usescope 6
-        gotoblock 7
-    defblock 7:
-        usescope 7
-        result = 5 + z
-        gotoblock 8
-    defblock 8:
-        usescope 8
         result = result + y
-        return";
+        return
+";
 
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn ref_deref_pattern_is_cancelled_out() {
+        let src = parse(
+            "
+def main(args: array<str>) -> ptr<str>:
+    return &args[0]",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
+        //the return would be actually &*args.__index_ptr__(0) but we should cancel out the deref &*
+        let expected = "
+def main(args: array<str>) -> ptr<str>:
+    defscope 0:
+        inheritscope 0
+        args : array<str>
+    defblock 0:
+        usescope 0
+        return args.__index_ptr__(0)
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn deref_ref_pattern_is_cancelled_out() {
+        let src = parse(
+            "
+def main():
+    some_var = 1
+    deref_ref = *&some_var
+",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
+        println!("{final_result}");
+        //the return would be actually &*args.__index_ptr__(0) but we should cancel out the deref &*
+        let expected = "
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+        some_var : i32
+    defscope 1:
+        inheritscope 0
+        deref_ref : i32
+    defblock 0:
+        usescope 0
+        some_var = 1
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        deref_ref = some_var
+        return
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn multiple_ref_deref_cancellation() {
+        let src = parse(
+            "
+def main(args: array<str>) -> ptr<str>:
+    return &*&*&args[0]",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
+        let expected = "
+def main(args: array<str>) -> ptr<str>:
+    defscope 0:
+        inheritscope 0
+        args : array<str>
+    defblock 0:
+        usescope 0
+        return args.__index_ptr__(0)
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn multiple_deref_ref_cancellation() {
+        let src = parse(
+            "
+def main(args: array<str>) -> str:
+    return *&*&args[0]",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
+        let expected = "
+def main(args: array<str>) -> str:
+    defscope 0:
+        inheritscope 0
+        args : array<str>
+    defblock 0:
+        usescope 0
+        return *args.__index_ptr__(0)
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
+    fn while_loop() {
+        let src = parse(
+            "
+def main():
+    i = 10
+    while i > 0:
+        x = i + 1
+        i = i - 1
+",
+        );
+
+        let result = do_analysis_no_typecheck(&src);
+        let final_result =
+            mir_printer::print_mir_node(result.mir.last().unwrap(), &result.type_db, &src.interner);
+        println!("{final_result}");
+        let expected = "
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+        i : i32
+    defscope 1:
+        inheritscope 0
+    defscope 2:
+        inheritscope 1
+        x : i32
+    defscope 3:
+        inheritscope 2
+    defblock 0:
+        usescope 0
+        i = 10
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        if i > 0:
+            gotoblock 2
+        else:
+            gotoblock 3
+    defblock 2:
+        usescope 2
+        x = i + 1
+        gotoblock 4
+    defblock 3:
+        usescope 2
+        return
+    defblock 4:
+        usescope 3
+        i = i - 1
+        gotoblock 1
+";
         assert_eq!(expected.trim(), final_result.trim());
     }
 }

@@ -65,6 +65,7 @@ pub struct TypeInstance {
     pub size: Bytes,
     pub name: String,
     pub is_function: bool,
+    pub is_variadic: bool,
     //only valid if this is a function
     pub function_args: Vec<TypeInstanceId>,
     //only valid if this is a function
@@ -94,6 +95,7 @@ pub struct CommonTypeInstances {
     pub f32: TypeInstanceId,
     pub f64: TypeInstanceId,
     pub u8: TypeInstanceId,
+    pub char: TypeInstanceId,
     pub bool: TypeInstanceId,
 }
 
@@ -114,9 +116,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         let mut item = TypeInstanceManager {
             types: vec![],
             constructors: TypeConstructorDatabase::new(interner),
-            common_types: CommonTypeInstances {
-                ..Default::default()
-            },
+            common_types: Default::default(),
         };
         item.init_builtin();
         item
@@ -130,11 +130,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         &self.types[id.0]
     }
 
-    pub fn find_struct_member<'this>(
-        &'this self,
-        id: TypeInstanceId,
-        name: InternedString,
-    ) -> StructMember<'this> {
+    pub fn find_struct_member(&self, id: TypeInstanceId, name: InternedString) -> StructMember {
         let instance = self.get_instance(id);
         if let Some((index, field)) = instance
             .fields
@@ -154,8 +150,9 @@ impl<'interner> TypeInstanceManager<'interner> {
         &mut self,
         arg_types: &[TypeInstanceId],
         return_type: TypeInstanceId,
+        is_variadic: bool,
     ) -> TypeInstanceId {
-        self.construct_function_method(None, arg_types, return_type)
+        self.construct_function_method(None, arg_types, return_type, is_variadic)
     }
 
     pub fn construct_method(
@@ -163,8 +160,9 @@ impl<'interner> TypeInstanceManager<'interner> {
         method_of: TypeInstanceId,
         arg_types: &[TypeInstanceId],
         return_type: TypeInstanceId,
+        is_variadic: bool,
     ) -> TypeInstanceId {
-        self.construct_function_method(Some(method_of), arg_types, return_type)
+        self.construct_function_method(Some(method_of), arg_types, return_type, is_variadic)
     }
 
     fn construct_function_method(
@@ -172,6 +170,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         method_of: Option<TypeInstanceId>,
         arg_types: &[TypeInstanceId],
         return_type: TypeInstanceId,
+        is_variadic: bool,
     ) -> TypeInstanceId {
         for instance in &self.types {
             if !instance.is_function {
@@ -199,6 +198,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             base: self.constructors.common_types.function,
             is_function: true,
             size,
+            is_variadic,
             name: String::new(), //@TODO build name
             function_args: arg_types.to_vec(),
             function_return_type: Some(return_type),
@@ -232,7 +232,20 @@ impl<'interner> TypeInstanceManager<'interner> {
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
+    /*
 
+    struct ptr<TPtr>:
+        intrinsic
+
+    struct array<TItem>:
+        data: ptr<TItem>
+        length: u32
+
+    impl array<TItem>:
+        def __index__(i: u32): TItem
+        def __index_ptr__(i: u32): ptr<TItem>
+
+    */
     pub fn construct_usage_generic(
         &mut self,
         usage: &TypeUsage,
@@ -242,13 +255,13 @@ impl<'interner> TypeInstanceManager<'interner> {
             TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
             TypeUsage::Generic(param) => type_args
                 .get(&param.0)
-                .ok_or_else(|| TypeConstructionError::TypeNotFound { name: param.0 })
+                .ok_or(TypeConstructionError::TypeNotFound { name: param.0 })
                 .map(|op| *op),
             TypeUsage::Parameterized(constructor_id, params) => {
                 let mut constructed = vec![];
 
                 for item in params.iter() {
-                    let type_id = self.construct_usage_generic(item, &HashMap::new())?;
+                    let type_id = self.construct_usage_generic(item, type_args)?;
                     constructed.push(type_id);
                 }
                 self.construct_type(*constructor_id, &constructed)
@@ -274,7 +287,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             id,
             c,
             positional_args,
-            &self.constructors.interner,
+            self.constructors.interner,
         ));
 
         //build a map of argname => type id
@@ -301,10 +314,7 @@ impl<'interner> TypeInstanceManager<'interner> {
 
         let name = if positional_args.is_empty() {
             let constructor = self.constructors.find(constructor_id);
-            self.constructors
-                .interner
-                .get_string(constructor.name)
-                .to_string()
+            self.constructors.interner.get_string(constructor.name)
         } else {
             let constructor = self.constructors.find(constructor_id);
             let generics = positional_args
@@ -331,6 +341,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             let size = self.compute_size(&self.types[id.0]);
             self.types[id.0].size = size;
         }
+
         Ok(id)
     }
 
@@ -342,7 +353,7 @@ impl<'interner> TypeInstanceManager<'interner> {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
             for type_usage in constructor.allowed_casts.clone().iter() {
-                let constructed = self.construct_usage(&type_usage)?;
+                let constructed = self.construct_usage(type_usage)?;
                 result.push(constructed);
             }
             result
@@ -430,7 +441,8 @@ impl<'interner> TypeInstanceManager<'interner> {
                 let return_type =
                     self.construct_usage_generic(&method_decl.return_type, type_args)?;
 
-                let method_type_id = self.construct_method(id, &args, return_type);
+                let method_type_id =
+                    self.construct_method(id, &args, return_type, method_decl.is_variadic);
 
                 result.push(TypeInstanceStructMethod {
                     name: method_decl.name,
@@ -474,6 +486,7 @@ impl<'interner> TypeInstanceManager<'interner> {
         make_type!(f32);
         make_type!(f64);
         make_type!(u8);
+        make_type!(char);
     }
 }
 
@@ -487,7 +500,7 @@ fn make_base_instance(
         id,
         base: constructor.id,
         size: Bytes(0),
-        name: interner.get_string(constructor.name).to_string(),
+        name: interner.get_string(constructor.name),
         allowed_casts: vec![],
         rhs_binary_ops: vec![],
         unary_ops: vec![],
@@ -495,6 +508,7 @@ fn make_base_instance(
         methods: vec![],
         type_args: positional_args.to_vec(),
         is_function: false,
+        is_variadic: false,
         function_args: vec![],
         function_return_type: None,
         is_method_of: None,

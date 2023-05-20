@@ -1,5 +1,4 @@
-use crate::ast::lexer::Operator;
-use crate::interner::{JoinableInternedStringSlice, StringInterner};
+use crate::interner::StringInterner;
 
 use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR};
 
@@ -8,20 +7,20 @@ use crate::types::type_instance_db::TypeInstanceManager;
 use super::hir::HIRRoot;
 use super::type_name_printer::TypeNamePrinter;
 
-pub fn operator_str(op: Operator) -> String {
-    op.to_string()
-}
-
-pub struct HIRExprPrinter<'interner> {
+pub struct HIRExprPrinter<'interner, 'type_db> {
     interner: &'interner StringInterner,
+    type_db: &'type_db TypeInstanceManager<'interner>,
 }
 
-impl<'interner> HIRExprPrinter<'interner> {
-    pub fn new(interner: &'interner StringInterner) -> Self {
-        HIRExprPrinter { interner }
+impl<'interner, 'type_db> HIRExprPrinter<'interner, 'type_db> {
+    pub fn new(
+        interner: &'interner StringInterner,
+        type_db: &'type_db TypeInstanceManager<'interner>,
+    ) -> Self {
+        HIRExprPrinter { interner, type_db }
     }
 
-    pub fn print<'source, T, T1>(&self, expr: &HIRExpr<'source, T, T1>) -> String {
+    pub fn print<T, T1>(&self, expr: &HIRExpr<T, T1>) -> String {
         match expr {
             HIRExpr::Variable(s, ..) => s.to_string(self.interner),
             HIRExpr::Literal(literal, ..) => self.print_literal_expr(literal),
@@ -31,7 +30,7 @@ impl<'interner> HIRExprPrinter<'interner> {
                     .map(|x| self.print(x))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}({})", self.print(f), args_str).into()
+                format!("{}({})", self.print(f), args_str)
             }
             HIRExpr::MethodCall(obj, name, args, ..) => {
                 let args_str = args
@@ -45,38 +44,43 @@ impl<'interner> HIRExprPrinter<'interner> {
                     name.to_string(self.interner),
                     args_str
                 )
-                .into()
             }
             HIRExpr::BinaryOperation(var, op, var2, ..) => format!(
                 "{} {} {}",
                 self.print(var),
-                operator_str(*op),
+                op.0.to_string(),
                 self.print(var2)
-            )
-            .into(),
+            ),
             HIRExpr::Array(items, ..) => {
                 let array_items_str = items
                     .iter()
                     .map(|x| self.print(x))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("[{}]", array_items_str).into()
+                format!("[{array_items_str}]")
             }
             HIRExpr::UnaryExpression(op, expr, ..) => {
-                format!("{}{}", operator_str(*op), self.print(expr)).into()
+                format!("{}{}", op.0.to_string(), self.print(expr))
             }
             HIRExpr::MemberAccess(obj, elem, ..) => {
-                format!("{}.{}", self.print(obj), elem.to_string(self.interner)).into()
+                format!("{}.{}", self.print(obj), elem.to_string(self.interner))
             }
             HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".into(),
             HIRExpr::TypecheckTag(_) => unreachable!(),
+            HIRExpr::Deref(expr, ..) => format!("*{}", self.print(expr)),
+            HIRExpr::Ref(expr, ..) => format!("&{}", self.print(expr)),
+            HIRExpr::StructInstantiate(ty, _) => {
+                let struct_name = ty.as_string(self.type_db);
+                format!("{}()", struct_name)
+            }
         }
     }
 
     pub fn print_literal_expr(&self, expr: &LiteralHIRExpr) -> String {
         match &expr {
             LiteralHIRExpr::Float(f) => format!("{:?}", f.0),
-            LiteralHIRExpr::Integer(i) => format!("{}", i),
+            LiteralHIRExpr::Integer(i) => format!("{i}"),
+            LiteralHIRExpr::Char(c) => format!("\'{c}\'"),
             LiteralHIRExpr::String(s) => format!("\"{}\"", self.interner.borrow(*s)),
             LiteralHIRExpr::Boolean(true) => self.interner.get("True").to_string(self.interner),
             LiteralHIRExpr::Boolean(false) => self.interner.get("False").to_string(self.interner),
@@ -88,7 +92,7 @@ impl<'interner> HIRExprPrinter<'interner> {
 pub struct HIRPrinter<'type_db, 'interner> {
     type_db: &'type_db TypeInstanceManager<'interner>,
     interner: &'interner StringInterner,
-    expr_printer: HIRExprPrinter<'interner>,
+    expr_printer: HIRExprPrinter<'interner, 'type_db>,
 }
 
 impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
@@ -100,7 +104,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
         HIRPrinter {
             type_db,
             interner,
-            expr_printer: HIRExprPrinter { interner },
+            expr_printer: HIRExprPrinter::new(interner, type_db),
         }
     }
 
@@ -113,11 +117,11 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
             HIR::Assign {
                 path, expression, ..
             } => {
-                let p = path.join_interned(self.interner, ".");
+                let lhs = self.expr_printer.print(path);
                 format!(
                     "{}{} = {}\n",
                     indent,
-                    p,
+                    lhs,
                     self.expr_printer.print(expression)
                 )
             }
@@ -138,8 +142,8 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
             HIR::Return(expr, ..) => {
                 format!("{}return {}\n", indent, self.expr_printer.print(expr))
             }
-            HIR::EmptyReturn => {
-                format!("{}return\n", indent)
+            HIR::EmptyReturn(..) => {
+                format!("{indent}return\n")
             }
 
             HIR::FunctionCall { function, args, .. } => {
@@ -158,27 +162,27 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
             }
             HIR::If(condition, true_body, false_body, ..) => {
                 let condition_str = self.expr_printer.print(condition);
-                let mut ifdecl = format!("{}if {}:\n", indent, condition_str);
-                let indent_block = format!("{}    ", indent);
+                let mut ifdecl = format!("{indent}if {condition_str}:\n");
+                let indent_block = format!("{indent}    ");
                 for statement in true_body {
                     let statement_str = self.print_hir_body_str(statement, &indent_block);
                     ifdecl.push_str(&statement_str);
                 }
-                ifdecl.push_str(&format!("{}else:\n", indent));
+                ifdecl.push_str(&format!("{indent}else:\n"));
                 for statement in false_body {
                     let statement_str = self.print_hir_body_str(statement, &indent_block);
                     ifdecl.push_str(&statement_str);
                 }
 
                 if false_body.is_empty() {
-                    ifdecl.push_str(&format!("{}pass\n", indent_block));
+                    ifdecl.push_str(&format!("{indent_block}pass\n"));
                 }
                 ifdecl
             }
             HIR::While(expr, body, ..) => {
                 let expr_str = self.expr_printer.print(expr);
-                let mut while_decl = format!("{}while {}:\n", indent, expr_str);
-                let indent_block = format!("{}    ", indent);
+                let mut while_decl = format!("{indent}while {expr_str}:\n");
+                let indent_block = format!("{indent}    ");
                 for statement in body {
                     let statement_str = self.print_hir_body_str(statement, &indent_block);
                     while_decl.push_str(&statement_str);
@@ -225,7 +229,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
                     parameters,
                     return_type.print_name(self.type_db, self.interner)
                 );
-                let indent_block = format!("{}    ", indent);
+                let indent_block = format!("{indent}    ");
                 for n in body {
                     function.push_str(&self.print_hir_body_str(n, &indent_block));
                 }

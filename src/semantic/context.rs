@@ -1,15 +1,18 @@
+use core::panic;
 use std::fs;
 
-use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotChecked};
+use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotCheckedSimplified};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
+use super::mir_printer::print_mir;
 use super::name_registry::NameRegistry;
+use super::struct_instantiations;
 use super::type_checker::typecheck;
-use crate::ast::ast_printer::print_ast;
-use crate::ast::lexer::TokenSpanIndex;
-use crate::ast::parser::AstSpan;
+
+use crate::ast::lexer::{TokenSpanIndex, TokenTable};
+use crate::ast::parser::{print_errors, AstSpan, Parser};
 use crate::ast::{lexer, parser};
 use crate::interner::StringInterner;
-use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
+use crate::semantic::{first_assignments, name_registry, type_inference};
 use crate::types::type_errors::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
@@ -18,9 +21,11 @@ use crate::{ast::parser::AST, types::type_errors::TypeErrors};
 pub struct FileTableIndex(pub usize);
 
 pub struct FileTableEntry {
-    pub file_name: String,
+    pub path: String,
+    pub index: FileTableIndex,
     pub ast: AST,
     pub contents: &'static str,
+    pub token_table: TokenTable,
 }
 
 pub struct Source {
@@ -38,45 +43,66 @@ impl Source {
 }
 impl Source {
     #[allow(dead_code)]
-    pub fn load_str_ref(self: &mut Source, file_name: &str, source: &str) {
+    pub fn load_str_ref(self: &mut Source, file_name: &str, source: &str) -> bool {
         self.load(file_name.to_string(), source.to_string())
     }
 
-    pub fn load(self: &mut Source, file_name: String, source: String) {
+    pub fn load(self: &mut Source, file_name: String, source: String) -> bool {
         let prev_count = self.file_table.len();
-        self.file_table.push(FileTableEntry {
-            file_name,
+        let mut file_table_entry = FileTableEntry {
+            path: file_name,
+            index: FileTableIndex(prev_count),
             ast: AST::Break(AstSpan {
                 start: TokenSpanIndex(0),
                 end: TokenSpanIndex(0),
             }),
             contents: source.leak(),
-        });
-        let tokens = lexer::tokenize(
+            token_table: TokenTable {
+                tokens: vec![],
+                spans: vec![],
+            },
+        };
+        file_table_entry.token_table = lexer::tokenize(
             FileTableIndex(prev_count),
-            self.file_table.last().unwrap().contents.as_ref(),
+            file_table_entry.contents,
             &self.interner,
-        );
-        let (ast, _) = parser::parse_ast(&tokens.unwrap(), &self.file_table);
-        println!("{}", print_ast(&ast, &self.interner));
-        let root = parser::AST::Root(ast);
+        )
+        .unwrap();
+
+        self.file_table.push(file_table_entry);
+        let last = &self.file_table.last().unwrap();
+        let mut parser = Parser::new(&last.token_table);
+        let result = parser.parse_ast();
+
+        if !parser.errors.is_empty() {
+            print_errors(&parser, &self.file_table, &last.token_table);
+            return false;
+        }
+
+        //println!("{}\n", print_ast(&ast, &self.interner));
+        let root = parser::AST::Root(result);
         self.file_table.last_mut().unwrap().ast = root;
+
+        return true;
     }
 
-    pub fn load_file(&mut self, file_location: &str) {
+    pub fn load_file(&mut self, file_location: &str) -> bool {
         let input = fs::read_to_string(file_location)
-            .unwrap_or_else(|_| panic!("Could not read file {}", file_location));
-        self.load(file_location.to_string(), input);
+            .unwrap_or_else(|_| panic!("Could not read file {file_location}"));
+        self.load(file_location.to_string(), input)
     }
 
-    pub fn load_stdlib(&mut self) {
+    #[allow(dead_code)]
+    pub fn load_stdlib(&mut self) -> bool {
         self.load_file("./stdlib/llvm_intrinsics.dk");
+        self.load_file("./stdlib/asserts.dk");
+        return true;
     }
 }
 
 pub struct Analyzer<'source, 'interner> {
     pub mir: Vec<MIRTopLevelNode<'source, Checked>>,
-    pub unchecked_mir: Vec<MIRTopLevelNode<'source, NotChecked>>,
+    pub unchecked_mir: Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>,
     pub type_db: TypeInstanceManager<'interner>,
     pub globals: NameRegistry,
     pub type_errors: TypeErrors<'source>,
@@ -101,12 +127,17 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
     pub fn print_errors(&self) {
         println!(
             "{}",
-            TypeErrorPrinter::new(&self.type_errors, &self.type_db, &self.source.interner)
+            TypeErrorPrinter::new(
+                &self.type_errors,
+                &self.type_db,
+                &self.source.interner,
+                &self.source.file_table
+            )
         )
     }
 
     #[allow(dead_code)]
-    pub fn generate_mir(&mut self, source: &'source Source) {
+    pub fn generate_mir_without_typecheck(&mut self, source: &'source Source) {
         self.generate_mir_and_typecheck(source, false);
     }
     pub fn analyze(&mut self, source: &'source Source) {
@@ -121,18 +152,17 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                     &mut self.globals,
                     &mut self.type_errors,
                     ast_hir,
+                    file.index,
                 ) {
                     Ok(hir) => hir,
-                    Err(_e) => {
+                    Err(e) => {
                         let printer = TypeErrorPrinter::new(
                             &self.type_errors,
                             &self.type_db,
                             &source.interner,
+                            &source.file_table,
                         );
-                        panic!(
-                            "build_name_registry_and_resolve_signatures Err\n{}",
-                            printer
-                        );
+                        panic!("build_name_registry_and_resolve_signatures {e:?}\n{printer}");
                     }
                 };
 
@@ -141,46 +171,53 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                     inferred_globals_hir,
                 );
 
-            if let Err(e) = undeclared_vars::detect_undeclared_vars_and_redeclarations(
-                &self.globals,
-                &first_assignment_hir,
-                &mut self.type_errors,
-                &source.interner,
-            ) {
-                panic!("detect_undeclared_vars_and_redeclarations Err: {e:#?}");
-            }
+            let struct_instantiations = struct_instantiations::construct_struct_instantiations(
+                first_assignment_hir,
+                &mut self.type_db,
+            );
 
             match type_inference::infer_types(
                 &mut self.globals,
                 &mut self.type_db,
-                first_assignment_hir,
+                struct_instantiations,
                 &mut self.type_errors,
                 &source.interner,
+                file.index,
             ) {
-                Ok(_) if self.type_errors.count() > 0 => {
-                    let printer =
-                        TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.interner);
-                    panic!("{}", printer);
-                }
                 Ok(final_hir) => {
                     self.hir.push(final_hir.clone());
-                    let mir = hir_to_mir(final_hir);
-                    if do_typecheck {
-                        let typechecked = typecheck(
-                            mir,
-                            &self.type_db,
-                            &self.globals,
-                            &mut self.type_errors,
-                            &source.interner,
-                        );
-                        if self.type_errors.count() == 0 {
-                            self.mir.extend(typechecked.unwrap());
+
+                    let mir = hir_to_mir(file.index, final_hir, &mut self.type_errors);
+
+                    if let Ok(mir) = mir {
+                        if do_typecheck {
+                            let typechecked = typecheck(
+                                mir,
+                                &self.type_db,
+                                &self.globals,
+                                &mut self.type_errors,
+                                &source.interner,
+                                file.index,
+                            );
+                            if self.type_errors.count() == 0 {
+                                self.mir.extend(typechecked.unwrap());
+                            }
+                        } else {
+                            self.unchecked_mir.extend(mir);
                         }
-                    } else {
-                        self.unchecked_mir.extend(mir);
                     }
                 }
-                Err(_) => {}
+                Err(e) => {
+                    println!(
+                        "{e:?}\nType errors:\n{}",
+                        TypeErrorPrinter::new(
+                            &self.type_errors,
+                            &self.type_db,
+                            &source.interner,
+                            &source.file_table,
+                        )
+                    );
+                }
             }
         }
     }
@@ -190,7 +227,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
 pub mod test_utils {
     use crate::{
         interner::StringInterner,
-        semantic::{hir::NotChecked, mir::MIRTopLevelNode},
+        semantic::{hir::NotCheckedSimplified, mir::MIRTopLevelNode},
         types::type_instance_db::TypeInstanceManager,
     };
 
@@ -198,6 +235,7 @@ pub mod test_utils {
 
     macro_rules! tls_interner {
         ($interner:expr) => {
+            #[allow(dead_code)]
             fn istr(str: &'static str) -> InternedString {
                 $interner.with(|i| i.get(str))
             }
@@ -206,7 +244,7 @@ pub mod test_utils {
     pub(crate) use tls_interner;
 
     pub struct AnalysisWithoutTypecheckResult<'source, 'interner> {
-        pub mir: Vec<MIRTopLevelNode<'source, NotChecked>>,
+        pub mir: Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>,
         pub type_db: TypeInstanceManager<'interner>,
         pub interner: &'interner StringInterner,
     }
@@ -215,31 +253,29 @@ pub mod test_utils {
         let mut source = Source::new();
         source.load_stdlib();
         source.load_str_ref("test", s);
-        return source;
+        source
     }
 
     pub fn parse_no_std<'a, 'f: 'a>(s: &'a str) -> Source {
         let mut source = Source::new();
         source.load_str_ref("test", s);
-        return source;
+        source
     }
 
-    pub fn do_analysis<'s>(source: &'s Source) -> Analyzer<'s, 's> {
+    pub fn do_analysis(source: &Source) -> Analyzer {
         let mut ctx = Analyzer::new(source);
         ctx.analyze(source);
-        return ctx;
+        ctx
     }
 
-    pub fn do_analysis_no_typecheck<'s>(
-        source: &'s Source,
-    ) -> AnalysisWithoutTypecheckResult<'s, 's> {
-        let mut ctx = Analyzer::new(&source);
-        ctx.generate_mir(source);
-        return AnalysisWithoutTypecheckResult {
+    pub fn do_analysis_no_typecheck(source: &Source) -> AnalysisWithoutTypecheckResult {
+        let mut ctx = Analyzer::new(source);
+        ctx.generate_mir_without_typecheck(source);
+        AnalysisWithoutTypecheckResult {
             mir: ctx.unchecked_mir,
             type_db: ctx.type_db,
             interner: &source.interner,
-        };
+        }
     }
 }
 
@@ -255,12 +291,13 @@ mod tests {
             context::test_utils::{do_analysis, parse},
             hir::HIRTypeDisplayer,
             hir_printer::HIRPrinter,
+            mir_printer::print_mir,
         },
     };
 
     use super::*;
 
-    fn print_hir<'source>(hir: &[InferredTypeHIRRoot<'source>], analyzer: &Analyzer) -> String {
+    fn print_hir(hir: &[InferredTypeHIRRoot], analyzer: &Analyzer) -> String {
         HIRPrinter::new(&analyzer.type_db, &analyzer.source.interner).print_hir(hir)
     }
 
@@ -274,7 +311,7 @@ def my_function():
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
 
         let expected = "
 def my_function() -> Void:
@@ -297,8 +334,8 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", result);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{result}");
 
         let expected = "
 def my_function() -> Void:
@@ -306,6 +343,21 @@ def my_function() -> Void:
     powf(x, 2.0)";
 
         assert_eq!(expected.trim(), result.trim());
+    }
+
+    #[test]
+    fn use_undeclared_var_in_expr() {
+        let parsed = parse(
+            "
+def my_function():
+    x = 1.0
+    y = xx + 20"
+        );
+
+        let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+
+        assert_eq!(analyzed.type_errors.count(), 1);
     }
 
     #[test]
@@ -318,8 +370,8 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", result);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{result}");
 
         let expected = "
 def my_function() -> Void:
@@ -338,7 +390,7 @@ def my_function(arg1: i32, arg2: i32) -> i32:
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("Result: {result} {:#?}", analyzed.hir);
 
         let expected = "
@@ -357,7 +409,7 @@ def main(args: array<str>):
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
 
         let expected = "
 def main(args: array<str>) -> Void:
@@ -377,7 +429,7 @@ def main(args: array<str>):
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
 
         let expected = "
 def main(args: array<str>) -> Void:
@@ -388,7 +440,6 @@ def main(args: array<str>) -> Void:
     }
 
     #[test]
-    #[ignore = "we do not have integer literal promotion yet"]
     fn infer_generic_type_as_str() {
         let parsed = parse(
             "
@@ -399,11 +450,11 @@ def main(args: array<str>):
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
 def main(args: array<str>) -> Void:
-    my_var : str = args.__index__(0)
+    my_var : str = *args.__index_ptr__(0)
     print(my_var)";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -421,15 +472,21 @@ def my_function() -> f32:
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
 
-        assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", result);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+
+        println!("Result: \n{result}\n====end result");
 
         let expected = "
 def my_function() -> f32:
     x : f32 = 1.3 + sqrtf(16.0 / 4.0 + 2.0 * 2.1) / 2.0 * 4.0 + 3.0 * powf(2.0, 2.0)
     return x
 ";
+
+        let result_mir = print_mir(&analyzed.mir, &analyzed.type_db, &analyzed.source.interner);
+
+        println!("Result mir: \n{result_mir}\n====end result mir");
+
+        assert_eq!(analyzed.type_errors.count(), 0);
 
         assert_eq!(expected.trim(), result.trim());
     }
@@ -447,8 +504,8 @@ def main():
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
 def sum(x: i32, y: i32) -> i32:
     return x + y
@@ -459,9 +516,8 @@ def main() -> Void:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-    #[test]
-    #[ignore = "we do not have integer literal promotion yet"]
-    fn infer_defined_function_generic_param() {
+    #[test] //#ignored
+    fn integer_promotion_for_wildly_different_type() {
         let parsed = parse(
             "
 def id(x: array<str>) -> str:
@@ -475,44 +531,32 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
 
-        assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
-        let expected = "
-def id(x: array<str>) -> str:
-    first_item : str = x.__index__(0)
-    return first_item
-def main() -> Void:
-    my_var : str = id(1)
-    print(my_var)";
-
-        assert_eq!(expected.trim(), final_result.trim());
+        assert_eq!(analyzed.type_errors.count(), 1);
     }
 
     #[test]
-    #[ignore = "we do not have integer literal promotion yet"]
-    fn semi_first_class_functions() {
+    fn functions_assignable_to_variables() {
         let parsed = parse(
             "
-def id(x: array<str>) -> str:
-    return x[0]
+def id(x: i32) -> i32:
+    return x
 
 def main():
     my_func = id
-    my_var = my_func(1)
-    print(my_var)",
+    my_var = my_func(1)",
         );
         let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
-def id(x: array<str>) -> str:
-    return x.__index__(0)
+def id(x: i32) -> i32:
+    return x
 def main() -> Void:
-    my_func : fn (array<str>) -> str = id
-    my_var : str = my_func(1)
-    print(my_var)";
+    my_func : fn (i32) -> i32 = id
+    my_var : i32 = my_func(1)";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -526,10 +570,14 @@ def main():
     my_array_length = my_array.length
     print_uint(my_array_length)",
         );
+        println!("Doing analysis");
+
         let analyzed = do_analysis(&parsed);
+
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+
+        println!("HIR printed:\n{final_result}");
         let expected = "
 def main() -> Void:
     my_array : array<i32> = [1, 2, 3]
@@ -550,8 +598,8 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     y : i32 = 0
@@ -570,7 +618,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         let err = &analyzed.type_errors.variable_not_found[0];
-        assert_eq!(err.variable_name, analyzed.source.interner.get("y"));
+        assert_eq!(err.error.variable_name, analyzed.source.interner.get("y"));
     }
 
     #[test]
@@ -585,7 +633,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         let err = &analyzed.type_errors.variable_not_found[0];
-        assert_eq!(err.variable_name, analyzed.source.interner.get("y"));
+        assert_eq!(err.error.variable_name, analyzed.source.interner.get("y"));
     }
 
     #[test]
@@ -601,8 +649,8 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     if x == 0:
@@ -629,8 +677,8 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     if x == 0:
@@ -660,8 +708,8 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 1);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
     if x == 0:
@@ -692,8 +740,8 @@ def main() -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     x : i32 = 0
@@ -735,8 +783,8 @@ def main() -> i32:
         analyzed.print_errors();
 
         assert_eq!(analyzed.type_errors.count(), 1);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{}", final_result);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
         let expected = "
 def main() -> i32:
     if True:
@@ -773,6 +821,7 @@ def my_function():
 
         assert_eq!(
             analyzed.type_errors.binary_op_not_found[0]
+                .error
                 .lhs
                 .as_string(&analyzed.type_db),
             "i32"
@@ -780,13 +829,14 @@ def my_function():
 
         assert_eq!(
             analyzed.type_errors.binary_op_not_found[0]
+                .error
                 .rhs
                 .as_string(&analyzed.type_db),
             "str"
         );
 
         assert_eq!(
-            analyzed.type_errors.binary_op_not_found[0].operator,
+            analyzed.type_errors.binary_op_not_found[0].error.operator,
             Operator::Plus
         );
     }
@@ -801,18 +851,21 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{}", result);
+        println!("{result}");
 
         assert_eq!(analyzed.type_errors.count(), 1);
 
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            analyzed.type_errors.field_or_method_not_found[0]
+                .error
+                .field_or_method,
             analyzed.source.interner.get("sizee")
         );
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
+                .error
                 .object_type
                 .as_string(&analyzed.type_db),
             "array<i32>"
@@ -839,11 +892,14 @@ def my_function():
         assert_eq!(analyzed.type_errors.field_or_method_not_found.len(), 1);
 
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            analyzed.type_errors.field_or_method_not_found[0]
+                .error
+                .field_or_method,
             analyzed.source.interner.get("reevert")
         );
         assert_eq!(
             analyzed.type_errors.field_or_method_not_found[0]
+                .error
                 .object_type
                 .as_string(&analyzed.type_db),
             "array<i32>"
@@ -870,7 +926,7 @@ def my_function():
         assert_eq!(analyzed.type_errors.type_not_found.len(), 1);
 
         let printer = HIRTypeDisplayer::new(
-            &analyzed.type_errors.type_not_found[0].type_name,
+            &analyzed.type_errors.type_not_found[0].error.type_name,
             &analyzed.source.interner,
         );
 
@@ -894,10 +950,12 @@ def my_function():
 
         let analyzed = do_analysis(&parsed);
         let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{}", result);
+        println!("{result}");
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            analyzed.type_errors.field_or_method_not_found[0]
+                .error
+                .field_or_method,
             analyzed.source.interner.get("as_i32")
         );
     }
@@ -914,7 +972,9 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
-            analyzed.type_errors.field_or_method_not_found[0].field_or_method,
+            analyzed.type_errors.field_or_method_not_found[0]
+                .error
+                .field_or_method,
             analyzed.source.interner.get("as_i32")
         );
     }
@@ -934,12 +994,13 @@ def my_function():
 
         assert_eq!(
             analyzed.type_errors.unary_op_not_found[0]
+                .error
                 .rhs
                 .as_string(&analyzed.type_db),
             "str"
         );
         assert_eq!(
-            analyzed.type_errors.unary_op_not_found[0].operator,
+            analyzed.type_errors.unary_op_not_found[0].error.operator,
             Operator::Plus
         );
         assert_eq!(
@@ -980,19 +1041,51 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{}", result);
+        println!("{result}");
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.call_non_callable.len(), 1);
         println!(
             "{:?}",
-            analyzed.type_errors.call_non_callable[0].actual_type
+            analyzed.type_errors.call_non_callable[0].error.actual_type
         );
 
         assert_eq!(
             analyzed.type_errors.call_non_callable[0]
+                .error
                 .actual_type
                 .as_string(&analyzed.type_db),
             "array<i32>"
         );
+    }
+
+    #[test]
+    fn instantiate_struct_and_assign_variables() {
+        let parsed = parse(
+            "
+struct Point2D:
+    x: i32
+    y: i32
+
+def main():
+    my_point = Point2D()
+    my_point.x = 1
+    my_point.y = 2
+    my_var = my_point.y
+",
+        );
+        let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+        assert_eq!(analyzed.type_errors.count(), 0);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
+        let expected = "
+def main() -> Void:
+    my_point : Point2D = Point2D()
+    my_point.x = 1
+    my_point.y = 2
+    my_var : i32 = my_point.y
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
     }
 }

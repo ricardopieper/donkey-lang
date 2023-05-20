@@ -1,5 +1,8 @@
+use super::context::FileTableIndex;
 use super::{compiler_errors::CompilerError, hir::HIRType};
+use crate::ast::lexer::TokenSpanIndex;
 use crate::interner::{InternedString, StringInterner};
+use crate::types::type_errors::TypeErrorAtLocation;
 use crate::types::{
     type_constructor_db::TypeUsage,
     type_errors::{TypeErrors, TypeNotFound},
@@ -12,13 +15,11 @@ pub enum RootElementType {
     Function(InternedString),
 }
 
-impl<'s> RootElementType {
+impl RootElementType {
     #[allow(dead_code)]
     pub fn get_name(&self, interner: &StringInterner) -> String {
         match self {
-            RootElementType::Struct(s) | RootElementType::Function(s) => {
-                interner.get_string(*s).to_string()
-            }
+            RootElementType::Struct(s) | RootElementType::Function(s) => interner.get_string(*s),
         }
     }
 
@@ -30,21 +31,25 @@ impl<'s> RootElementType {
     }
 }
 
-pub fn hir_type_to_usage<'source, 'interner>(
+pub fn hir_type_to_usage(
     on_code_element: RootElementType,
     typedef: &HIRType,
-    type_db: &TypeInstanceManager<'interner>,
-    errors: &mut TypeErrors<'source>,
+    type_db: &TypeInstanceManager,
+    errors: &mut TypeErrors,
+    location: TokenSpanIndex,
+    file: FileTableIndex,
 ) -> Result<TypeUsage, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
             if let Some(type_id) = type_db.constructors.find_by_name(*name) {
                 Ok(TypeUsage::Given(type_id.id))
             } else {
-                errors.type_not_found.push(TypeNotFound {
-                    on_element: on_code_element,
-                    type_name: HIRType::Simple(*name),
-                });
+                errors.type_not_found.push(
+                    TypeNotFound {
+                        type_name: HIRType::Simple(*name),
+                    }
+                    .at(on_code_element, file, location),
+                );
                 Err(CompilerError::TypeInferenceError)
             }
         }
@@ -53,16 +58,19 @@ pub fn hir_type_to_usage<'source, 'interner>(
                 let base_id = type_id.id;
                 let mut generics = vec![];
                 for arg in args.iter() {
-                    let usage = hir_type_to_usage(on_code_element, arg, type_db, errors)?;
+                    let usage =
+                        hir_type_to_usage(on_code_element, arg, type_db, errors, location, file)?;
                     generics.push(usage);
                 }
 
                 Ok(TypeUsage::Parameterized(base_id, generics))
             } else {
-                errors.type_not_found.push(TypeNotFound {
-                    on_element: on_code_element,
-                    type_name: HIRType::Simple(*base),
-                });
+                errors.type_not_found.push(
+                    TypeNotFound {
+                        type_name: HIRType::Simple(*base),
+                    }
+                    .at(on_code_element, file, location),
+                );
                 Err(CompilerError::TypeInferenceError)
             }
         }

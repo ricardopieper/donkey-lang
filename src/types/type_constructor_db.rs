@@ -34,6 +34,7 @@ pub struct TypeConstructorFunctionDeclaration {
     //pub type_args: Vec<GenericParameter>,
     pub args: Vec<TypeUsage>,
     pub return_type: TypeUsage,
+    pub is_variadic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,10 +82,12 @@ pub struct CommonTypeConstructors {
     pub f32: TypeConstructorId,
     pub f64: TypeConstructorId,
     pub u8: TypeConstructorId,
+    pub char: TypeConstructorId,
     pub bool: TypeConstructorId,
     pub array: TypeConstructorId,
     pub function: TypeConstructorId,
     pub ptr: TypeConstructorId,
+    pub str: TypeConstructorId,
 }
 
 pub struct TypeConstructorDatabase<'interner> {
@@ -97,9 +100,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
     pub fn new(interner: &'interner StringInterner) -> Self {
         let mut item = Self {
             types: vec![],
-            common_types: CommonTypeConstructors {
-                ..Default::default()
-            },
+            common_types: Default::default(),
             interner,
         };
         item.init_builtin();
@@ -116,7 +117,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.types.push(TypeConstructor {
             id: next_id,
             kind,
-            name: name.into(),
+            name,
             sign,
             allowed_casts: vec![],
             fields: vec![],
@@ -153,7 +154,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.types.push(TypeConstructor {
             id: next_id,
             kind,
-            name: name.into(),
+            name,
             type_args,
             allowed_casts: vec![],
             fields: vec![],
@@ -190,6 +191,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
     }
 
     pub fn find_by_name(&self, name: InternedString) -> Option<&TypeConstructor> {
+        //@TODO maybe it would be faster to have a map of ids -> instances, this has the potential to grow a lot and be slow
         self.types.iter().find(|t| t.name == name)
     }
 
@@ -312,10 +314,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
 
     #[allow(clippy::similar_names)]
     fn init_builtin(&mut self) {
-
-        let istr = |s| {
-            self.interner.get(s)
-        };
+        let istr = |s| self.interner.get(s);
 
         let void_type = self.add(
             TypeKind::Primitive {
@@ -367,6 +366,12 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.common_types.u8 =
             self.register_primitive_number(istr("u8"), Bytes::size_of::<u8>(), TypeSign::Unsigned);
 
+        self.common_types.char = self.register_primitive_number(
+            istr("char"),
+            Bytes::size_of::<u8>(),
+            TypeSign::Unsigned,
+        );
+
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
         let ptr_type = self.add_generic(
             TypeKind::Primitive {
@@ -382,7 +387,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         let arr_type = self.add_generic(
             TypeKind::Struct,
             istr("array"),
-            vec![GenericParameter(istr("TItem").into())],
+            vec![GenericParameter(istr("TItem"))],
             Some(Bytes::size_of::<usize>() + Bytes::size_of::<u32>()),
         );
 
@@ -393,12 +398,17 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             TypeSign::Unsigned,
             istr("function"),
         );
+
         self.add_method(
             arr_type,
             TypeConstructorFunctionDeclaration {
-                name: istr("__index__"),
+                name: istr("__index_ptr__"),
                 args: vec![TypeUsage::Given(u32_type)],
-                return_type: TypeUsage::Generic(GenericParameter(istr("TItem"))),
+                return_type: TypeUsage::Parameterized(
+                    ptr_type,
+                    vec![TypeUsage::Generic(GenericParameter(istr("TItem")))],
+                ),
+                is_variadic: false,
             },
         );
 
