@@ -32,10 +32,6 @@ use std::env;
 
 //use crate::donkey_vm::vm::runner;
 
-#[allow(unused_imports)]
-#[macro_use]
-extern crate time_test;
-
 use crate::semantic::mir_printer;
 
 //use compiler::donkey_backend::DonkeyEmitter;

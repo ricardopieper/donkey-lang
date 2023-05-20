@@ -105,7 +105,6 @@ dependencies = [
  "rand",
  "rustc_version_runtime",
  "rustyline",
- "time-test",
  "tracy-client",
 ]
 
@@ -652,25 +651,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5516c27b78311c50bf42c071425c560ac799b11c30b31f87e3081965fe5e0180"
 dependencies = [
  "once_cell",
-]
-
-[[package]]
-name = "time"
-version = "0.1.43"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca8a50ef2360fbd1eeb0ecd46795a87a19024eb4b53c5dc916ca1fd95fe62438"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
-name = "time-test"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0027850c0de35afb59aa27f468f25aed155e057236a57e442b528751f79e9eb"
-dependencies = [
- "time",
 ]
 
 [[package]]
