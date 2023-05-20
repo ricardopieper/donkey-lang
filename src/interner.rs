@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, collections::HashMap, ops::Deref};
+use std::{cell::UnsafeCell, collections::BTreeMap, ops::Deref};
 
 #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
 pub struct InternedString(pub usize);
@@ -9,7 +9,7 @@ pub struct StringInterner {
     //The key is actually a string inside the strings vec.
     //However, we never return this reference. Instead we return a reference to strings
     //which will have a lifetime bounded to Self.
-    table: UnsafeCell<HashMap<&'static str, InternedString>>,
+    table: UnsafeCell<BTreeMap<&'static str, InternedString>>,
 }
 
 //I swear I know what I'm doing!
@@ -20,7 +20,7 @@ impl StringInterner {
     pub fn new() -> Self {
         StringInterner {
             strings: UnsafeCell::new(vec![]),
-            table: UnsafeCell::new(HashMap::new()),
+            table: UnsafeCell::new(BTreeMap::new()),
         }
     }
 

@@ -7,13 +7,17 @@ use crate::types::type_instance_db::TypeInstanceManager;
 use super::hir::HIRRoot;
 use super::type_name_printer::TypeNamePrinter;
 
-pub struct HIRExprPrinter<'interner> {
+pub struct HIRExprPrinter<'interner, 'type_db> {
     interner: &'interner StringInterner,
+    type_db: &'type_db TypeInstanceManager<'interner>,
 }
 
-impl<'interner> HIRExprPrinter<'interner> {
-    pub fn new(interner: &'interner StringInterner) -> Self {
-        HIRExprPrinter { interner }
+impl<'interner, 'type_db> HIRExprPrinter<'interner, 'type_db> {
+    pub fn new(
+        interner: &'interner StringInterner,
+        type_db: &'type_db TypeInstanceManager<'interner>,
+    ) -> Self {
+        HIRExprPrinter { interner, type_db }
     }
 
     pub fn print<T, T1>(&self, expr: &HIRExpr<T, T1>) -> String {
@@ -65,6 +69,10 @@ impl<'interner> HIRExprPrinter<'interner> {
             HIRExpr::TypecheckTag(_) => unreachable!(),
             HIRExpr::Deref(expr, ..) => format!("*{}", self.print(expr)),
             HIRExpr::Ref(expr, ..) => format!("&{}", self.print(expr)),
+            HIRExpr::StructInstantiate(ty, _) => {
+                let struct_name = ty.as_string(self.type_db);
+                format!("{}()", struct_name)
+            }
         }
     }
 
@@ -84,7 +92,7 @@ impl<'interner> HIRExprPrinter<'interner> {
 pub struct HIRPrinter<'type_db, 'interner> {
     type_db: &'type_db TypeInstanceManager<'interner>,
     interner: &'interner StringInterner,
-    expr_printer: HIRExprPrinter<'interner>,
+    expr_printer: HIRExprPrinter<'interner, 'type_db>,
 }
 
 impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
@@ -96,7 +104,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
         HIRPrinter {
             type_db,
             interner,
-            expr_printer: HIRExprPrinter::new(interner),
+            expr_printer: HIRExprPrinter::new(interner, type_db),
         }
     }
 

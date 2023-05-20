@@ -1,0 +1,9 @@
+def panic(message: str):
+    print(message)
+    exit(1)
+
+def assert_i32_equals(a: i32, b: i32):
+    if a != b:
+        printf("assertion failed: %d != %d\n".buf, a, b)
+        exit(1)
+

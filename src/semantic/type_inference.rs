@@ -8,8 +8,8 @@ use crate::semantic::name_registry::NameRegistry;
 use crate::types::type_errors::{
     BinaryOperatorNotFound, CallToNonCallableType, DerefOnNonPointerError, FieldOrMethodNotFound,
     InsufficientTypeInformationForArray, OutOfTypeBounds, RefOnNonLValueError,
-    TypeConstructionFailure, TypeErrorAtLocation, TypeErrors, UnaryOperatorNotFound,
-    VariableNotFound,
+    TypeConstructionFailure, TypeErrorAtLocation, TypeErrors, TypePromotionFailure,
+    UnaryOperatorNotFound, VariableNotFound,
 };
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 
@@ -105,6 +105,13 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
                     i64: self.type_db.common_types.i64
                 );
 
+                self.errors.type_promotion_failure.push(
+                    TypePromotionFailure {
+                        target_type: type_hint,
+                    }
+                    .at_spanned(self.on_function, self.on_file, meta),
+                );
+
                 Err(CompilerError::TypeInferenceError)
             }
             _ => panic!("Cannot promote value: {:?}", literal),
@@ -178,6 +185,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
             HIRExpr::MethodCall(obj, method_name, params, _, meta) => {
                 self.compute_infer_method_call(*obj, method_name, params, meta)
             }
+            HIRExpr::StructInstantiate(ty, meta) => Ok(HIRExpr::StructInstantiate(ty, meta)),
             HIRExpr::TypecheckTag(_) => todo!(),
         }
     }
@@ -428,7 +436,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
         meta: HIRExprMetadata<'source>,
     ) -> Result<HIRExpr<'source, TypeInstanceId>, CompilerError> {
         let HIRExpr::Variable(var, .., fcall_meta) = fun_expr else {
-            panic!("Functions should be bound to a name! This is a bug in the type inference phase or HIR expression reduction phase.");
+            todo!("Currently only function calls on names are supported");
         };
 
         let Some(decl_type) = self.decls_in_scope.get(&var).copied() else {
@@ -703,6 +711,9 @@ pub fn infer_types<'source, 'interner>(
     interner: &'interner StringInterner,
     file: FileTableIndex,
 ) -> Result<Vec<InferredTypeHIRRoot<'source>>, CompilerError> {
+    //println!("globals:");
+    //globals.print(interner, type_db);
+
     let mut new_mir = vec![];
 
     for node in mir {

@@ -191,6 +191,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
     }
 
     pub fn find_by_name(&self, name: InternedString) -> Option<&TypeConstructor> {
+        //@TODO maybe it would be faster to have a map of ids -> instances, this has the potential to grow a lot and be slow
         self.types.iter().find(|t| t.name == name)
     }
 

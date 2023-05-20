@@ -39,6 +39,8 @@ pub enum LlvmExpression<'ctx> {
 
 impl<'ctx> LlvmExpression<'ctx> {
     //If this is a variable or a deref expression result or a field access, we load it. Otherwise just return it.
+
+    //@TODO maybe officialize these state transitions as types without possibility of panic.
     pub fn load_if_lvalue(self, builder: &Builder<'ctx>) -> LlvmExpression<'ctx> {
         match self {
             Self::LValue(ptr) => Self::LoadedLValue(builder.build_load(ptr, "loaded_ptr"), ptr),
@@ -300,27 +302,32 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     for node in block.nodes.iter() {
                         match node {
                             MIRBlockNode::Assign {
-                                path: MIRExprLValue::Variable(var, ..),
-                                expression,
-                                ..
-                            } => {
-                                let ptr = *symbol_table.get(&(*var, block.scope)).unwrap();
+                                path, expression, ..
+                            } => match path {
+                                MIRExprLValue::Variable(var, _, _) => {
+                                    let ptr = *symbol_table.get(&(*var, block.scope)).unwrap();
 
-                                let expr_compiled = self
-                                    .compile_expr(block.scope, &symbol_table, expression)
-                                    .load_if_lvalue(self.builder)
-                                    .expect_rvalue();
+                                    let expr_compiled = self
+                                        .compile_expr(block.scope, &symbol_table, expression)
+                                        .load_if_lvalue(self.builder)
+                                        .expect_rvalue();
 
-                                self.builder.build_store(ptr, expr_compiled);
-                            }
-                            MIRBlockNode::Assign { .. } => {
-                                /*@TODO we need to evalue the lhs expression, however, if the
-                                root expression is a dereference, we need to build a store instead of a load
-                                */
-                                todo!(
-                                    "Assign to arbitrary expressions in left side in llvm backend"
-                                )
-                            }
+                                    self.builder.build_store(ptr, expr_compiled);
+                                }
+                                mem_access @ MIRExprLValue::MemberAccess(_, _, _, _) => {
+                                    let ptr =
+                                        self.compile_lvalue(mem_access, &symbol_table, block.scope);
+                                    let lvalue = ptr.expect_lvalue();
+                                    let expr_compiled = self
+                                        .compile_expr(block.scope, &symbol_table, expression)
+                                        .load_if_lvalue(self.builder)
+                                        .expect_rvalue();
+
+                                    self.builder.build_store(lvalue, expr_compiled);
+                                }
+                                MIRExprLValue::Deref(_, _, _) => todo!(),
+                            },
+
                             MIRBlockNode::FunctionCall { function, args, .. } => {
                                 //TODO deduplicate this code
                                 let llvm_args = args
@@ -498,6 +505,13 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 LlvmExpression::RValue(expr)
             }
             MIRExprRValue::Array(_, _, _) => todo!(),
+            MIRExprRValue::StructInstantiate(ty, _) => {
+                let llvm_str_type = self.make_llvm_type(*ty);
+                let llvm_struct = self
+                    .builder
+                    .build_alloca(llvm_str_type.into_struct_type(), &self.make_temp("struct"));
+                LlvmExpression::LValue(llvm_struct)
+            }
         }
     }
 

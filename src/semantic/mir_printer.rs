@@ -5,13 +5,17 @@ use super::mir::{
     MIRScope, MIRTopLevelNode,
 };
 
-pub struct MIRExprPrinter<'interner> {
+pub struct MIRExprPrinter<'interner, 'type_db> {
     interner: &'interner StringInterner,
+    type_db: &'type_db TypeInstanceManager<'interner>,
 }
 
-impl<'interner> MIRExprPrinter<'interner> {
-    pub fn new(interner: &'interner StringInterner) -> Self {
-        Self { interner }
+impl<'interner, 'type_db> MIRExprPrinter<'interner, 'type_db> {
+    pub fn new(
+        interner: &'interner StringInterner,
+        type_db: &'type_db TypeInstanceManager<'interner>,
+    ) -> Self {
+        Self { interner, type_db }
     }
 
     pub fn print<T>(&self, expr: &MIRExpr<T>) -> String {
@@ -28,6 +32,10 @@ impl<'interner> MIRExprPrinter<'interner> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{}({})", self.print_lvalue(f), args_str)
+            }
+            MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, _)) => {
+                let struct_name = ty.as_string(self.type_db);
+                format!("{struct_name}()")
             }
             MIRExpr::RValue(MIRExprRValue::MethodCall(obj, name, args, ..)) => {
                 let args_str = args
@@ -92,9 +100,13 @@ impl<'interner> MIRExprPrinter<'interner> {
 
 use crate::interner::StringInterner;
 
-fn print_mir_block<T>(block: &MIRBlock<T>, interner: &StringInterner) -> String {
+fn print_mir_block<T>(
+    block: &MIRBlock<T>,
+    interner: &StringInterner,
+    type_db: &TypeInstanceManager,
+) -> String {
     let mut buffer = String::new();
-    let expr_printer = MIRExprPrinter::new(interner);
+    let expr_printer = MIRExprPrinter::new(interner, type_db);
     buffer.push_str(&format!("    defblock {}:\n", block.index));
     buffer.push_str(&format!("        usescope {}\n", block.scope.0));
 
@@ -236,7 +248,7 @@ fn print_mir_str<T>(
             }
 
             for n in body {
-                function.push_str(&print_mir_block(n, interner));
+                function.push_str(&print_mir_block(n, interner, type_db));
             }
 
             function

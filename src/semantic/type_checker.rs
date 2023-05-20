@@ -11,8 +11,8 @@ use crate::ast::parser::{Expr, SpannedOperator};
 use crate::interner::{InternedString, StringInterner};
 use crate::types::type_errors::{
     ArrayExpressionsNotAllTheSameType, AssignContext, DerefOnNonPointerError,
-    FunctionCallArgumentCountMismatch, FunctionCallContext, RefOnNonLValueError, ReturnTypeContext,
-    TypeErrorAtLocation, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
+    FunctionCallArgumentCountMismatch, FunctionCallContext, RefOnNonLValueError,
+    ReturnTypeContext, TypeErrorAtLocation, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
     UnexpectedTypeInferenceMismatch,
 };
 use crate::types::type_errors::{
@@ -91,6 +91,9 @@ impl<'compiler_context, 'source, 'interner>
                 return_type,
                 meta,
             )) => self.check_expr_function_call(*function_expr, args, return_type, meta),
+            MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, meta)) => {
+                Ok(MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, meta)))
+            }
 
             MIRExpr::RValue(MIRExprRValue::UnaryExpression(op, rhs, inferred_type, meta)) => {
                 self.check_expr_unary(*rhs, op, inferred_type, meta)
@@ -212,7 +215,7 @@ impl<'compiler_context, 'source, 'interner>
             function_type_id,
             || {
                 //@TODO invoking the printer here is kinda sus
-                let printer = MIRExprPrinter::new(self.interner);
+                let printer = MIRExprPrinter::new(self.interner, self.type_db);
                 let interned = self
                     .interner
                     .get(&printer.print_lvalue(&checked_func.clone()));
@@ -652,7 +655,6 @@ impl<'compiler_context, 'source, 'interner>
                 has_errors = true;
             }
         }
-
         if has_errors {
             return Err(CompilerError::TypeCheckError);
         }
@@ -725,7 +727,6 @@ impl<'compiler_context, 'source, 'interner>
                     Err(_) => has_errors = true,
                 }
             }
-
             if has_errors {
                 return Err(CompilerError::TypeCheckError);
             }
@@ -754,39 +755,108 @@ impl<'compiler_context, 'source, 'interner>
                 meta_ast,
                 meta_expr,
             } => {
-                let MIRExprLValue::Variable(var_name, ..) = path else {
-                    todo!("assign to non-variable")
-                };
+                match path {
+                    MIRExprLValue::Variable(var_name, _, _) => {
+                        let variable_type =
+                            self.find_variable_and_get_type(var_name, scope, scopes);
+                        let expr_type = expression.get_type();
+                        let typechecked_lhs = self.typecheck_lvalue(path)?;
 
-                //find variable
-                let variable_type = self.find_variable_and_get_type(var_name, scope, scopes);
-                let expr_type = expression.get_type();
-
-                if variable_type == expr_type {
-                    let typechecked_lhs = self.typecheck_lvalue(path)?;
-                    let typechecked_value = self.typecheck(expression)?;
-                    Ok(MIRBlockNode::Assign {
-                        path: typechecked_lhs,
-                        expression: typechecked_value,
-                        meta_ast,
-                        meta_expr,
-                    })
-                } else {
-                    self.errors.assign_mismatches.push(
-                        TypeMismatch {
-                            context: AssignContext {
-                                target_variable_name: var_name,
-                            },
-                            expected: variable_type,
-                            actual: expr_type,
+                        if variable_type == expr_type {
+                            let typechecked_value = self.typecheck(expression)?;
+                            Ok(MIRBlockNode::Assign {
+                                path: typechecked_lhs,
+                                expression: typechecked_value,
+                                meta_ast,
+                                meta_expr,
+                            })
+                        } else {
+                            self.errors.assign_mismatches.push(
+                                TypeMismatch {
+                                    context: AssignContext {
+                                        assign_lvalue_expr: typechecked_lhs.clone(),
+                                    },
+                                    expected: variable_type,
+                                    actual: expr_type,
+                                }
+                                .at_spanned(
+                                    self.on_element,
+                                    self.on_file,
+                                    meta_ast,
+                                ),
+                            );
+                            Err(CompilerError::TypeCheckError)
                         }
-                        .at_spanned(
-                            self.on_element,
-                            self.on_file,
-                            meta_ast,
-                        ),
-                    );
-                    Err(CompilerError::TypeCheckError)
+                    }
+                    MIRExprLValue::MemberAccess(object, member, ty, meta) => {
+                        //in this case, we check that the member exists on the object,
+                        //and that the type of the member is the same as the type of the expression
+                        //this is redundant with the check in the type inference, but it's better to be safe
+
+                        let lhs_type = ty;
+                        let rhs_type = expression.get_type();
+                        let checked_member_access =
+                            self.check_expr_member_access(*object, member, ty, meta)?;
+
+                        if lhs_type == rhs_type {
+                            let checked_expression = self.typecheck(expression)?;
+
+                            Ok(MIRBlockNode::Assign {
+                                path: checked_member_access,
+                                expression: checked_expression,
+                                meta_ast,
+                                meta_expr,
+                            })
+                        } else {
+                            self.errors.assign_mismatches.push(
+                                TypeMismatch {
+                                    context: AssignContext {
+                                        assign_lvalue_expr: checked_member_access,
+                                    },
+                                    expected: lhs_type,
+                                    actual: expression.get_type(),
+                                }
+                                .at_spanned(
+                                    self.on_element,
+                                    self.on_file,
+                                    meta_ast,
+                                ),
+                            );
+                            Err(CompilerError::TypeCheckError)
+                        }
+                    }
+                    MIRExprLValue::Deref(ptr, ty, meta) => {
+                        let lhs_type = ty;
+                        let rhs_type = expression.get_type();
+                        let checked_deref = self.check_deref_expr(*ptr, ty, meta)?;
+
+                        if lhs_type == rhs_type {
+                            let checked_expression = self.typecheck(expression)?;
+
+                            Ok(MIRBlockNode::Assign {
+                                path: checked_deref,
+                                expression: checked_expression,
+                                meta_ast,
+                                meta_expr,
+                            })
+                        } else {
+                            self.errors.assign_mismatches.push(
+                                TypeMismatch {
+                                    context: AssignContext {
+                                        assign_lvalue_expr: checked_deref,
+                                    },
+                                    expected: lhs_type,
+                                    actual: expression.get_type(),
+                                }
+                                .at_spanned(
+                                    self.on_element,
+                                    self.on_file,
+                                    meta_ast,
+                                ),
+                            );
+                            Err(CompilerError::TypeCheckError)
+                        }
+                    }
                 }
             }
             MIRBlockNode::FunctionCall {

@@ -1,0 +1,19 @@
+def fib(i: i32)-> i32:
+    if i <= 1:
+        return 1
+    else:
+        return fib(i - 1) + fib(i - 2)
+
+def main():
+    result0 = fib(0)
+    result1 = fib(1)
+    result5 = fib(5)
+    result10 = fib(10)
+    result20 = fib(20)
+
+    assert_i32_equals(result0, 1)
+    assert_i32_equals(result1, 1)
+    assert_i32_equals(result5, 8)
+    assert_i32_equals(result10, 89)
+    assert_i32_equals(result20, 10946)
+    

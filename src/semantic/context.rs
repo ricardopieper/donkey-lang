@@ -3,14 +3,16 @@ use std::fs;
 
 use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotCheckedSimplified};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
+use super::mir_printer::print_mir;
 use super::name_registry::NameRegistry;
+use super::struct_instantiations;
 use super::type_checker::typecheck;
 
 use crate::ast::lexer::{TokenSpanIndex, TokenTable};
 use crate::ast::parser::{print_errors, AstSpan, Parser};
 use crate::ast::{lexer, parser};
 use crate::interner::StringInterner;
-use crate::semantic::{first_assignments, name_registry, type_inference, undeclared_vars};
+use crate::semantic::{first_assignments, name_registry, type_inference};
 use crate::types::type_errors::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
@@ -92,7 +94,9 @@ impl Source {
 
     #[allow(dead_code)]
     pub fn load_stdlib(&mut self) -> bool {
-        self.load_file("./stdlib/llvm_intrinsics.dk")
+        self.load_file("./stdlib/llvm_intrinsics.dk");
+        self.load_file("./stdlib/asserts.dk");
+        return true;
     }
 }
 
@@ -167,41 +171,22 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                     inferred_globals_hir,
                 );
 
-            if let Err(_e) = undeclared_vars::detect_undeclared_vars_and_redeclarations(
-                &self.globals,
-                &first_assignment_hir,
-                &mut self.type_errors,
-                &source.interner,
-                file.index,
-            ) {
-                let printer = TypeErrorPrinter::new(
-                    &self.type_errors,
-                    &self.type_db,
-                    &source.interner,
-                    &source.file_table,
-                );
-                panic!("Type errors:\n{}", printer);
-            }
+            let struct_instantiations = struct_instantiations::construct_struct_instantiations(
+                first_assignment_hir,
+                &mut self.type_db,
+            );
 
             match type_inference::infer_types(
                 &mut self.globals,
                 &mut self.type_db,
-                first_assignment_hir,
+                struct_instantiations,
                 &mut self.type_errors,
                 &source.interner,
                 file.index,
             ) {
-                Ok(_) if self.type_errors.count() > 0 => {
-                    let printer = TypeErrorPrinter::new(
-                        &self.type_errors,
-                        &self.type_db,
-                        &source.interner,
-                        &source.file_table,
-                    );
-                    panic!("Type errors:\n{}", printer);
-                }
                 Ok(final_hir) => {
                     self.hir.push(final_hir.clone());
+
                     let mir = hir_to_mir(file.index, final_hir, &mut self.type_errors);
 
                     if let Ok(mir) = mir {
@@ -222,7 +207,17 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                         }
                     }
                 }
-                Err(_) => {}
+                Err(e) => {
+                    println!(
+                        "{e:?}\nType errors:\n{}",
+                        TypeErrorPrinter::new(
+                            &self.type_errors,
+                            &self.type_db,
+                            &source.interner,
+                            &source.file_table,
+                        )
+                    );
+                }
             }
         }
     }
@@ -296,6 +291,7 @@ mod tests {
             context::test_utils::{do_analysis, parse},
             hir::HIRTypeDisplayer,
             hir_printer::HIRPrinter,
+            mir_printer::print_mir,
         },
     };
 
@@ -315,7 +311,7 @@ def my_function():
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
 
         let expected = "
 def my_function() -> Void:
@@ -338,7 +334,7 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{result}");
 
         let expected = "
@@ -347,6 +343,21 @@ def my_function() -> Void:
     powf(x, 2.0)";
 
         assert_eq!(expected.trim(), result.trim());
+    }
+
+    #[test]
+    fn use_undeclared_var_in_expr() {
+        let parsed = parse(
+            "
+def my_function():
+    x = 1.0
+    y = xx + 20"
+        );
+
+        let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+
+        assert_eq!(analyzed.type_errors.count(), 1);
     }
 
     #[test]
@@ -359,7 +370,7 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{result}");
 
         let expected = "
@@ -379,7 +390,7 @@ def my_function(arg1: i32, arg2: i32) -> i32:
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("Result: {result} {:#?}", analyzed.hir);
 
         let expected = "
@@ -398,7 +409,7 @@ def main(args: array<str>):
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
 
         let expected = "
 def main(args: array<str>) -> Void:
@@ -418,7 +429,7 @@ def main(args: array<str>):
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir[1], &analyzed);
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
 
         let expected = "
 def main(args: array<str>) -> Void:
@@ -429,7 +440,6 @@ def main(args: array<str>) -> Void:
     }
 
     #[test]
-    #[ignore = "we do not have integer literal promotion yet"]
     fn infer_generic_type_as_str() {
         let parsed = parse(
             "
@@ -440,11 +450,11 @@ def main(args: array<str>):
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(args: array<str>) -> Void:
-    my_var : str = args.__index__(0)
+    my_var : str = *args.__index_ptr__(0)
     print(my_var)";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -462,15 +472,21 @@ def my_function() -> f32:
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
 
-        assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{result}");
+        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+
+        println!("Result: \n{result}\n====end result");
 
         let expected = "
 def my_function() -> f32:
     x : f32 = 1.3 + sqrtf(16.0 / 4.0 + 2.0 * 2.1) / 2.0 * 4.0 + 3.0 * powf(2.0, 2.0)
     return x
 ";
+
+        let result_mir = print_mir(&analyzed.mir, &analyzed.type_db, &analyzed.source.interner);
+
+        println!("Result mir: \n{result_mir}\n====end result mir");
+
+        assert_eq!(analyzed.type_errors.count(), 0);
 
         assert_eq!(expected.trim(), result.trim());
     }
@@ -488,7 +504,7 @@ def main():
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
 def sum(x: i32, y: i32) -> i32:
@@ -500,9 +516,8 @@ def main() -> Void:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-    #[test]
-    #[ignore = "we do not have integer literal promotion yet"]
-    fn infer_defined_function_generic_param() {
+    #[test] //#ignored
+    fn integer_promotion_for_wildly_different_type() {
         let parsed = parse(
             "
 def id(x: array<str>) -> str:
@@ -516,44 +531,32 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
 
-        assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
-        println!("{final_result}");
-        let expected = "
-def id(x: array<str>) -> str:
-    first_item : str = x.__index__(0)
-    return first_item
-def main() -> Void:
-    my_var : str = id(1)
-    print(my_var)";
-
-        assert_eq!(expected.trim(), final_result.trim());
+        assert_eq!(analyzed.type_errors.count(), 1);
     }
 
     #[test]
-    #[ignore = "we do not have integer literal promotion yet"]
-    fn semi_first_class_functions() {
+    fn functions_assignable_to_variables() {
         let parsed = parse(
             "
-def id(x: array<str>) -> str:
-    return x[0]
+def id(x: i32) -> i32:
+    return x
 
 def main():
     my_func = id
-    my_var = my_func(1)
-    print(my_var)",
+    my_var = my_func(1)",
         );
         let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
-def id(x: array<str>) -> str:
-    return x.__index__(0)
+def id(x: i32) -> i32:
+    return x
 def main() -> Void:
-    my_func : fn (array<str>) -> str = id
-    my_var : str = my_func(1)
-    print(my_var)";
+    my_func : fn (i32) -> i32 = id
+    my_var : i32 = my_func(1)";
 
         assert_eq!(expected.trim(), final_result.trim());
     }
@@ -572,7 +575,7 @@ def main():
         let analyzed = do_analysis(&parsed);
 
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
 
         println!("HIR printed:\n{final_result}");
         let expected = "
@@ -595,7 +598,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
@@ -646,7 +649,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
@@ -674,7 +677,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
@@ -705,7 +708,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 1);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
@@ -737,7 +740,7 @@ def main() -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
 def main() -> i32:
@@ -780,7 +783,7 @@ def main() -> i32:
         analyzed.print_errors();
 
         assert_eq!(analyzed.type_errors.count(), 1);
-        let final_result = print_hir(&analyzed.hir[1], &analyzed);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
         println!("{final_result}");
         let expected = "
 def main() -> i32:
@@ -1053,5 +1056,36 @@ def my_function():
                 .as_string(&analyzed.type_db),
             "array<i32>"
         );
+    }
+
+    #[test]
+    fn instantiate_struct_and_assign_variables() {
+        let parsed = parse(
+            "
+struct Point2D:
+    x: i32
+    y: i32
+
+def main():
+    my_point = Point2D()
+    my_point.x = 1
+    my_point.y = 2
+    my_var = my_point.y
+",
+        );
+        let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+        assert_eq!(analyzed.type_errors.count(), 0);
+        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        println!("{final_result}");
+        let expected = "
+def main() -> Void:
+    my_point : Point2D = Point2D()
+    my_point.x = 1
+    my_point.y = 2
+    my_var : i32 = my_point.y
+";
+
+        assert_eq!(expected.trim(), final_result.trim());
     }
 }

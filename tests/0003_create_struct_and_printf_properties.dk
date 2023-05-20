@@ -1,0 +1,13 @@
+struct Point2D:
+    x: i32
+    y: i32
+
+def main() -> i32:
+
+    my_point = Point2D()
+    my_point.x = 1
+    my_point.y = 2
+
+
+    printf("integer y = %i".buf, my_point.y)
+    return 1

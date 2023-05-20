@@ -3,7 +3,8 @@ use crate::ast::parser::Spanned;
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::context::{FileTableEntry, FileTableIndex};
 
-use crate::semantic::mir::MIRExpr;
+
+use crate::semantic::mir::{MIRExpr, MIRExprLValue};
 use crate::semantic::mir_printer::MIRExprPrinter;
 use crate::{
     ast::lexer::Operator,
@@ -86,11 +87,11 @@ pub struct TypeMismatch<TContext> {
 }
 impl<T> TypeError for TypeMismatch<T> {}
 
-pub struct AssignContext {
-    pub target_variable_name: InternedString,
+pub struct AssignContext<'source> {
+    pub assign_lvalue_expr: MIRExprLValue<'source, Checked>,
 }
 
-impl TypeErrorDisplay for TypeErrorData<TypeMismatch<AssignContext>> {
+impl<'source> TypeErrorDisplay for TypeErrorData<TypeMismatch<AssignContext<'source>>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -102,7 +103,7 @@ impl TypeErrorDisplay for TypeErrorData<TypeMismatch<AssignContext>> {
 
         write!(f, "Assigned type mismatch: {on_element}, assignment to variable {var}: variable has type {var_type_str} but got assigned a value of type {expr_type_str}",
             on_element = self.on_element.diag_name(interner),
-            var = interner.borrow(self.error.context.target_variable_name)
+            var = MIRExprPrinter::new(interner, type_db).print_lvalue(&self.error.context.assign_lvalue_expr),
         )
     }
 }
@@ -248,6 +249,27 @@ impl TypeErrorDisplay for TypeErrorData<TypeNotFound> {
     }
 }
 
+pub struct TypePromotionFailure {
+    pub target_type: TypeInstanceId,
+}
+impl TypeError for TypePromotionFailure {}
+
+impl TypeErrorDisplay for TypeErrorData<TypePromotionFailure> {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager<'_>,
+        interner: &StringInterner,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, type promotion failure: Cannot promote an integer literal to type: {target_type_name}",
+            on_element = self.on_element.diag_name(interner),
+            target_type_name = self.error.target_type.as_string(type_db),
+        )
+    }
+}
+
 pub struct UnexpectedTypeFound {
     pub type_def: TypeInstanceId,
 }
@@ -309,7 +331,7 @@ impl<'source> TypeErrorDisplay for TypeErrorData<InvalidCast<'source>> {
             f,
             "{on_element}, value {expr} of type {type} cannot be casted to {cast_type}",
             on_element = self.on_element.diag_name(interner),
-            expr = MIRExprPrinter::new(interner).print(&self.error.expr),
+            expr = MIRExprPrinter::new(interner, type_db).print(&self.error.expr),
             type = self.error.expr.get_type().as_string(type_db),
             cast_type = self.error.cast_to.as_string(type_db),
         )
@@ -486,9 +508,30 @@ impl<'source> TypeErrorDisplay for TypeErrorData<UnexpectedTypeInferenceMismatch
             f,
             "Type inference/check bug: {on_element}, type inferred for expression {expr_str} was {inferred_type}, but type checker detected {checked_type}",
             on_element = self.on_element.diag_name(interner),
-            expr_str = MIRExprPrinter::new(interner).print(&self.error.expr),
+            expr_str = MIRExprPrinter::new(interner, type_db).print(&self.error.expr),
             inferred_type = self.error.inferred.as_string(type_db),
             checked_type = self.error.checked.as_string(type_db)
+        )
+    }
+}
+
+pub struct InternalError {
+    pub error: String,
+}
+impl TypeError for InternalError {}
+
+impl TypeErrorDisplay for TypeErrorData<InternalError> {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeInstanceManager<'_>,
+        interner: &StringInterner,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, Compiler internal error: {err}",
+            on_element = self.on_element.diag_name(interner),
+            err = self.error.error
         )
     }
 }
@@ -686,12 +729,13 @@ macro_rules! make_type_errors {
 }
 
 make_type_errors!(
-    assign_mismatches = TypeMismatch<AssignContext>,
+    assign_mismatches = TypeMismatch<AssignContext<'source>>,
     return_type_mismatches = TypeMismatch<ReturnTypeContext>,
     function_call_mismatches = TypeMismatch<FunctionCallContext>,
     function_call_argument_count = FunctionCallArgumentCountMismatch,
     call_non_callable = CallToNonCallableType,
     type_not_found = TypeNotFound,
+    type_promotion_failure = TypePromotionFailure,
     variable_not_found = VariableNotFound,
     unexpected_types = UnexpectedTypeFound,
     binary_op_not_found = BinaryOperatorNotFound,
@@ -707,5 +751,6 @@ make_type_errors!(
     type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>,
     invalid_derefed_type = DerefOnNonPointerError,
     invalid_refed_type = RefOnNonLValueError,
-    varargs_not_supported = VarargsNotSupported
+    varargs_not_supported = VarargsNotSupported,
+    internal_error = InternalError
 );

@@ -116,6 +116,7 @@ pub enum HIRExpr<'source, TExprType, TTypechecked = NotChecked> {
         TExprType,
         HIRExprMetadata<'source>,
     ),
+    StructInstantiate(TypeInstanceId, HIRExprMetadata<'source>),
     Deref(
         Box<HIRExpr<'source, TExprType, TTypechecked>>,
         TExprType,
@@ -214,6 +215,7 @@ impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
             | HIRExpr::Cast(.., t, _)
             | HIRExpr::BinaryOperation(.., t, _)
             | HIRExpr::FunctionCall(.., t, _)
+            | HIRExpr::StructInstantiate(.., t, _)
             | HIRExpr::UnaryExpression(.., t, _)
             | HIRExpr::Deref(.., t, _)
             | HIRExpr::Ref(.., t, _)
@@ -241,6 +243,7 @@ impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
                 false
             }
             HIRExpr::FunctionCall(..) => false,
+            HIRExpr::StructInstantiate(..) => false,
             HIRExpr::Deref(..) => {
                 //you can point to a value that has been dereferenced, because to dereference a value
                 //means the value is a pointer or can be pointed

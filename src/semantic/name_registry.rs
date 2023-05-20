@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ast::parser::Spanned;
-use crate::interner::InternedString;
+use crate::interner::{InternedString, StringInterner};
 use crate::types::type_constructor_db::{TypeKind, TypeSign};
 use crate::types::type_errors::{TypeConstructionFailure, TypeErrorAtLocation, TypeErrors};
 use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
@@ -17,7 +17,7 @@ pub struct PartiallyResolvedFunctionSignature {
     pub return_type: HIRType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NameRegistry {
     names: HashMap<InternedString, TypeInstanceId>,
     //This could help still provide some type inference when just enough information is available
@@ -66,24 +66,14 @@ impl NameRegistry {
     pub fn insert(&mut self, variable_name: InternedString, var_type: TypeInstanceId) {
         self.names.insert(variable_name, var_type);
     }
+
+    pub fn print(&self, interner: &StringInterner, type_db: &TypeInstanceManager) {
+        println!("Name registry:");
+        for (k, v) in &self.names {
+            println!("{}: {}", k.to_string(interner), v.as_string(type_db));
+        }
+    }
 }
-
-/*
-fn register_builtins(type_db: &mut TypeInstanceManager, registry: &mut NameRegistry) {
-    let f64_f64 = type_db.construct_function(&[type_db.common_types.f64], type_db.common_types.f64);
-    let f32_f32 = type_db.construct_function(&[type_db.common_types.f32], type_db.common_types.f32);
-    let string_void =
-        type_db.construct_function(&[type_db.common_types.string], type_db.common_types.void);
-
-    let argless_void = type_db.construct_function(&[], type_db.common_types.void);
-
-    registry.insert("sqrt", f64_f64);
-    registry.insert("sqrt_f32", f32_f32);
-    registry.insert("pow_f32", f32_f32);
-    registry.insert("pow", f64_f64);
-    registry.insert("print", string_void);
-    registry.insert("panic", argless_void);
-}*/
 
 /*Builds a name registry and resolves the top level declarations*/
 pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
@@ -109,9 +99,9 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 is_varargs,
             } => {
                 //print signature
-                if function_name == InternedString(38) {
-                    println!("Function: {function_name:?}, args: {parameters:?}, return: {return_type:?}");
-                }
+                //if function_name == InternedString(38) {
+                //    println!("Function: {function_name:?}, args: {parameters:?}, return: {return_type:?}");
+                //}
                 let mut param_types = vec![];
                 let mut resolved_params = vec![];
 

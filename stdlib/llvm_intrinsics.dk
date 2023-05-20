@@ -26,6 +26,9 @@ def exit(code: i32):
 def malloc(size: i32) -> ptr<u8>:
     intrinsic
 
+def realloc(buf: ptr<u8>, size: i32) -> ptr<u8>:
+    intrinsic
+
 def free(buf: ptr<u8>):
     intrinsic
 
@@ -45,14 +48,10 @@ def printf(format: ptr<u8>, ...) -> i64:
     intrinsic
 
 def print_int(i: i32):
-    result_buf = malloc(12)
-    snprintf(result_buf, 12, "%d".buf, i)
-    puts(result_buf)
+    printf("%i\n".buf, i)
 
 def print_uint(u: u32):
-    result_buf = malloc(12)
-    snprintf(result_buf, 12, "%d".buf, u)
-    puts(result_buf)
+    printf("%i\n".buf, u)
 
 def panic(error: str):
     print(error)

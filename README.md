@@ -169,30 +169,10 @@ The `is` keyword is only able to check if a type has a trait by checking if has 
 that type. Casting to the type should be possible but syntax is yet to be defined. I like Jai's syntax for casting, where the cast seems to be an unary operator, like `cast(u8) expr`. Casting to a derived type is not allowed, as that would need to keep type information on the executable itself, and I don't want that for now.
 
 
-Pending type inference improvements:
+Pending features:
 
- - Autocast integer types to signed/unsigned, and size increases (i32 to i64) when appropriate
-
-Pending general features:
-
-Features needed so we can write the stblib in the language itself:
-
- - Numeric casts (needed for array accesses, signed/unsigned conversions, integer to float)
-    - Parser needs changes as well to support this
- - Pointers and ptr<T> type
-   - Deref: *
-   - Ref: &
- - Deref can only be applied to values of type ptr<T>
-   - LHS: the root node of the expression, if deref, will set the value at that ptr (will be compiled to a store)
-   - The rest, including RHS, will load the value
- - LValues vs RValues:
-   - LValues are all values that have a memory address:
-     - variables
-     - indices
-     - pointer deref expressions
-```
-
-
-```
  - low-level memory management functions
  - sizeof<T> function or operator (or T.size() or something)
+ - array methods
+ - string methods (based on libc, can be done in stdlib)
+ - import statements, prelude
