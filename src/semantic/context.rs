@@ -3,7 +3,6 @@ use std::fs;
 
 use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotCheckedSimplified};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
-use super::mir_printer::print_mir;
 use super::name_registry::NameRegistry;
 use super::struct_instantiations;
 use super::type_checker::typecheck;
@@ -351,7 +350,7 @@ def my_function() -> Void:
             "
 def my_function():
     x = 1.0
-    y = xx + 20"
+    y = xx + 20",
         );
 
         let analyzed = do_analysis(&parsed);

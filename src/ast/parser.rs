@@ -393,7 +393,6 @@ pub struct Parser<'tok> {
     tokens: &'tok TokenTable,
     pub errors: Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>,
     irrecoverable_error: bool,
-    interner: Option<&'tok StringInterner>,
 }
 
 struct ParsingState {
@@ -542,7 +541,6 @@ impl<'tok> Parser<'tok> {
                 operand_stack: vec![],
                 current_indent: 0,
             }],
-            interner: None,
             tokens,
             errors: vec![],
             irrecoverable_error: false,
@@ -849,7 +847,6 @@ impl<'tok> Parser<'tok> {
                 let parsed = self.parse_type_bound_name().unwrap().unwrap();
                 fields.push(parsed);
 
-
                 if !self.is_not_end() {
                     break;
                 }
@@ -963,7 +960,6 @@ impl<'tok> Parser<'tok> {
         self.next();
 
         if let Token::Operator(Operator::Greater) = self.cur().token {
-
             self.next();
             Some(ASTType::Generic(
                 type_name.token_spanned(begin),
@@ -1839,6 +1835,7 @@ pub struct ParseExpressionResult {
     resulting_expr: SpanExpr,
 }
 
+#[allow(dead_code)]
 pub fn parse_ast<'a>(
     tokens: &'a TokenTable,
     file_table: &[FileTableEntry],
@@ -1933,14 +1930,6 @@ mod tests {
             path: "test".to_string(),
         }];
         let mut parser = Parser::new(&table[0].token_table);
-
-        INTERNER.with(|x| {
-            //The geneva convention has no power here
-            let hack = unsafe {
-                std::mem::transmute::<&StringInterner, &StringInterner>(x)
-            };
-            parser.interner = Some(hack);
-        });
 
         let result = parser.parse_ast();
         print_errors(&parser, table, &table[0].token_table);
@@ -2840,14 +2829,14 @@ print(x)"
         );
     }
 
-
     #[test]
     fn parse_struct_generic() {
-        parse_and_print_back_to_original("
+        parse_and_print_back_to_original(
+            "
 struct SomeStruct<T>:
     field: T
     otherfield: u64
-");
+",
+        );
     }
-
 }

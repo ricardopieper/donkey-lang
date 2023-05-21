@@ -3,7 +3,6 @@ use crate::ast::parser::Spanned;
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::context::{FileTableEntry, FileTableIndex};
 
-
 use crate::semantic::mir::{MIRExpr, MIRExprLValue};
 use crate::semantic::mir_printer::MIRExprPrinter;
 use crate::{

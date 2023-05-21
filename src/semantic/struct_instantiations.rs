@@ -1,17 +1,9 @@
 use crate::{
-    semantic::hir::{HIR},
-    types::{
-        type_constructor_db::TypeKind,
-        type_instance_db::{TypeInstanceManager},
-    },
+    semantic::hir::HIR,
+    types::{type_constructor_db::TypeKind, type_instance_db::TypeInstanceManager},
 };
 
-
-
-use super::hir::{
-    FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, HIRExpr,
-    HIRRoot,
-};
+use super::hir::{FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, HIRExpr, HIRRoot};
 
 fn construct_struct_instantiations_in_expression<'source>(
     expr: HIRExpr<'source, ()>,
