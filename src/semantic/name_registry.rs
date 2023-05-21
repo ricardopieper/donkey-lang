@@ -59,11 +59,14 @@ impl NameRegistry {
         self.names.get(name)
     }
 
+    pub fn get_names(&self) -> impl Iterator<Item = &InternedString> {
+        self.names.keys()
+    }
+
     pub fn insert(&mut self, variable_name: InternedString, var_type: TypeInstanceId) {
         self.names.insert(variable_name, var_type);
     }
 
-    #[allow(dead_code)] //Useful for debugging when needed
     pub fn print(&self, interner: &StringInterner, type_db: &TypeInstanceManager) {
         println!("Name registry:");
         for (k, v) in &self.names {

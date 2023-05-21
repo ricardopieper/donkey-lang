@@ -11,12 +11,12 @@ use crate::ast::parser::{Expr, SpannedOperator};
 use crate::interner::{InternedString, StringInterner};
 use crate::types::type_errors::{
     ArrayExpressionsNotAllTheSameType, AssignContext, DerefOnNonPointerError,
-    FunctionCallArgumentCountMismatch, FunctionCallContext, RefOnNonLValueError, ReturnTypeContext,
-    TypeErrorAtLocation, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
+    FunctionCallArgumentCountMismatch, FunctionCallContext, RefOnNonLValueError,
+    ReturnTypeContext, TypeErrorAtLocation, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
     UnexpectedTypeInferenceMismatch,
 };
 use crate::types::type_errors::{
-    BinaryOperatorNotFound, FieldOrMethodNotFound, IfStatementNotBoolean,
+    BinaryOperatorNotFound, FieldOrMethodNotFound, IfStatementNotBoolean, InvalidCast,
     OutOfTypeBounds, UnexpectedTypeFound,
 };
 use crate::types::type_instance_db::{
@@ -397,6 +397,31 @@ impl<'compiler_context, 'source, 'interner>
                     operator: op.0,
                 }
                 .at_spanned(self.on_element, self.on_file, &op.1),
+            );
+            Err(CompilerError::TypeCheckError)
+        }
+    }
+
+    fn check_expr_cast(
+        &mut self,
+        expr: TypecheckPendingExpression<'source>,
+        cast_to: TypeInstanceId,
+        meta: HIRExprMetadata<'source>,
+    ) -> Result<TypecheckedExpression<'source>, CompilerError> {
+        let checked = self.typecheck(expr)?;
+        //is type of expr castable to cast_to?
+        let type_data = self.type_db.get_instance(checked.get_type());
+        if type_data.allowed_casts.contains(&cast_to) {
+            //@TODO check if the cast is valid
+            todo!("check if the cast is valid");
+            //Ok(MIRExpr::RValue(MIRExprRValue::Cast(checked.into(), cast_to, meta)))
+        } else {
+            self.errors.invalid_casts.push(
+                InvalidCast {
+                    expr: checked,
+                    cast_to,
+                }
+                .at_spanned(self.on_element, self.on_file, meta),
             );
             Err(CompilerError::TypeCheckError)
         }

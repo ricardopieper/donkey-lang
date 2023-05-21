@@ -275,7 +275,6 @@ fn print_ast_internal(
     }
 }
 
-#[allow(dead_code)]
 pub fn print_ast(ast: &[SpanAST], interner: &StringInterner) -> String {
     return ast
         .iter()
