@@ -1935,6 +1935,7 @@ mod tests {
         let mut parser = Parser::new(&table[0].token_table);
 
         INTERNER.with(|x| {
+            //The geneva convention has no power here
             let hack = unsafe {
                 std::mem::transmute::<&StringInterner, &StringInterner>(x)
             };
