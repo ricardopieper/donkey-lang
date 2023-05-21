@@ -2,6 +2,7 @@ use crate::ast::lexer::{Operator, Token};
 use crate::commons::float::FloatLiteral;
 use crate::interner::{InternedString, StringInterner};
 use crate::semantic::context::{FileTableEntry, FileTableIndex};
+use std::cell::RefCell;
 use std::ops::Deref;
 
 //This is a box wrapper type so that I can implement a "double deref"
@@ -391,9 +392,8 @@ fn clean_parens(expr: SpanExpr) -> SpanExpr {
 pub struct Parser<'tok> {
     parsing_state: Vec<ParsingState>,
     tokens: &'tok TokenTable,
-    pub errors: Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>,
+    pub errors: RefCell<Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>>,
     irrecoverable_error: bool,
-    interner: Option<&'tok StringInterner>,
 }
 
 struct ParsingState {
@@ -407,10 +407,11 @@ struct ParsingState {
 pub enum ParsingError {
     ExprError(String),
     InvalidSyntax(String),
-    ContextForError(String, Box<ParsingError>),
+    ContextForError(String),
     Fatal(String),
     //TypeBoundMissingTypeSpecifier,
     TypeBoundExpectedColonAfterFieldName,
+    UnexpectedEndOfFile,
 }
 
 impl ToString for ParsingError {
@@ -418,8 +419,8 @@ impl ToString for ParsingError {
         match self {
             ParsingError::ExprError(e) => format!("Expression error: {e}"),
             ParsingError::InvalidSyntax(e) => format!("Invalid syntax: {e}"),
-            ParsingError::ContextForError(context, e) => {
-                format!("{context}, error: {err}", err = e.to_string())
+            ParsingError::ContextForError(context) => {
+                format!("Context for previous error: {context}")
             }
             ParsingError::Fatal(e) => {
                 format!("Error: {e}")
@@ -427,88 +428,88 @@ impl ToString for ParsingError {
             ParsingError::TypeBoundExpectedColonAfterFieldName => {
                 "Error: Expected column after field name".to_string()
             }
+            ParsingError::UnexpectedEndOfFile => "Error: Unexpected end of file".to_string(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum ParsingErrorKind {
+    //When the compiler found the correct grammar rule, but the input is not legal. It can continue parsing the next elements to report more errors.
+    //However the parser will generate AST that is unusable by the next stages
+    GrammarRuleFail,
+    //When there is a syntax error so big that there is just no recovering from it, continuing parsing would only throw hundreds more errors
+    NonRecoverable,
 }
 
 pub enum ParsingEvent {
     //When the compiler is trying to parse X but found Y, must ignore and retry using another grammar rule
     TryAnotherGrammarRule,
-    //When the compiler found the correct grammar rule, but the input is not legal. It can continue parsing the next elements to report more errors.
-    //However the parser will generate AST that is unusable by the next stages
-    GrammarRuleFail(ParsingError, FileTableIndex, TokenSpanIndex),
-    //When there is a syntax error so big that there is just no recovering from it, continuing parsing would only throw hundreds more errors
-    NonRecoverable(ParsingError, FileTableIndex, TokenSpanIndex),
     //When parsing of a grammar rule succeeds
     Success(SpanAST),
 }
+
+type ParsingResult = Result<ParsingEvent, ParsingErrorKind>;
 
 macro_rules! parse_guard {
     ($parser:expr, $pattern:pat_param) => {
         parse_guard!($parser, $pattern, ParsingEvent::TryAnotherGrammarRule)
     };
-    ($parser:expr, $pattern:pat_param, $result:expr) => {
-        if let $pattern = $parser.cur().token {
-            $parser.next();
-            if (!$parser.can_call_cur_on_current_line()) {
-                return $result;
+    ($parser:expr, $pattern:pat_param, $result:expr) => {{
+        let cur = $parser.cur()?.token;
+        match cur {
+            $pattern => {
+                $parser.next();
+                if (!$parser.can_call_cur_on_current_line()?) {
+                    return Ok($result);
+                }
             }
-        } else {
-            return $result;
+            _ => return Ok($result),
         }
-    };
+    }};
 }
 
 macro_rules! expect_token {
     ($parser:expr, $token:tt::$pattern:tt) => {
-        if let $token::$pattern = $parser.cur().token {
+        if let $token::$pattern = $parser.cur()?.token {
             $parser.next();
         } else {
-            let token = $parser.cur().clone();
-            let span = &$parser.tokens.spans[token.span_index.0];
-            return ParsingEvent::NonRecoverable(
-                ParsingError::InvalidSyntax(format!(
-                    "Expected {}, got {}",
-                    ($token::$pattern).name(),
-                    $parser.cur().token.name()
-                )),
-                span.file,
-                token.span_index,
-            );
+            $parser.report_error(ParsingError::InvalidSyntax(format!(
+                "Expected {}, got {}",
+                ($token::$pattern).name(),
+                $parser.cur()?.token.name()
+            )));
+
+            return Err(ParsingErrorKind::NonRecoverable);
         }
     };
     ($parser:expr, $token:tt::$pattern:tt, $msg:expr) => {
-        if let $token::$pattern = $parser.cur().token {
+        if let $token::$pattern = $parser.cur()?.token {
             $parser.next();
         } else {
-            let token = $parser.cur().clone();
-            let span = &$parser.tokens.spans[token.span_index.0];
-            return ParsingEvent::NonRecoverable(
-                ParsingError::InvalidSyntax(format!($msg, $parser.cur().token.name())),
-                span.file,
-                token.span_index,
-            );
+            $parser.report_error(ParsingError::InvalidSyntax(format!(
+                $msg,
+                $parser.cur()?.token.name()
+            )));
+            return Err(ParsingErrorKind::NonRecoverable);
         }
     };
 }
 
 macro_rules! expect_identifier {
     ($parser:expr, $role:expr) => {{
-        let token = $parser.cur().clone();
-        let span = &$parser.tokens.spans[token.span_index.0];
+        let token = $parser.cur()?.clone();
         if let Token::Identifier(id) = token.token {
             $parser.next();
             id.token_spanned(token.span_index)
         } else {
-            return ParsingEvent::GrammarRuleFail(
-                ParsingError::InvalidSyntax(format!(
-                    "Expected {}, got {}",
-                    $role,
-                    $parser.cur().token.name()
-                )),
-                span.file,
-                token.span_index,
-            );
+            $parser.report_error(ParsingError::InvalidSyntax(format!(
+                "Expected {}, got {}",
+                $role,
+                $parser.cur()?.token.name()
+            )));
+
+            return Err(ParsingErrorKind::GrammarRuleFail);
         }
     }};
 }
@@ -542,16 +543,10 @@ impl<'tok> Parser<'tok> {
                 operand_stack: vec![],
                 current_indent: 0,
             }],
-            interner: None,
             tokens,
-            errors: vec![],
+            errors: RefCell::new(vec![]),
             irrecoverable_error: false,
         }
-    }
-
-    #[cfg(test)]
-    pub fn get_errors(&self) -> &[(ParsingError, FileTableIndex, TokenSpanIndex)] {
-        &self.errors
     }
 
     fn new_stack(&mut self) {
@@ -596,33 +591,42 @@ impl<'tok> Parser<'tok> {
         self.parsing_state.last_mut().unwrap().current_indent = parsing_state.current_indent;
     }
 
-    fn cur(&self) -> &TokenData {
+    fn cur(&self) -> Result<&TokenData, ParsingErrorKind> {
         self.cur_offset(0)
     }
 
-    fn prev_token(&self) -> Option<&TokenData> {
+    fn prev_token(&self) -> Result<Option<&TokenData>, ParsingErrorKind> {
         self.cur_offset_opt(-1)
     }
 
-    fn cur_offset(&self, offset: isize) -> &TokenData {
-        return self.cur_offset_opt(offset).unwrap();
+    fn cur_offset(&self, offset: isize) -> Result<&TokenData, ParsingErrorKind> {
+        return match self.cur_offset_opt(offset)? {
+            Some(token) => Ok(token),
+            None => {
+                self.report_error(ParsingError::UnexpectedEndOfFile);
+                Err(ParsingErrorKind::NonRecoverable)
+            }
+        };
     }
 
-    fn cur_offset_opt(&self, offset: isize) -> Option<&TokenData> {
+    fn cur_offset_opt(&self, offset: isize) -> Result<Option<&TokenData>, ParsingErrorKind> {
         let index = self.parsing_state.last().unwrap().index as isize + offset;
-        self.tokens.tokens.get(index as usize)
+        Ok(self.tokens.tokens.get(index as usize))
     }
 
     fn is_not_end(&self) -> bool {
         self.parsing_state.last().unwrap().index < self.tokens.tokens.len()
     }
 
-    fn can_call_cur_on_current_line(&self) -> bool {
-        self.is_not_end() && !self.cur_is_newline()
+    fn can_call_cur_on_current_line(&self) -> Result<bool, ParsingErrorKind> {
+        Ok(self.is_not_end() && !self.cur_is_newline()?)
     }
 
-    fn cur_is_newline(&self) -> bool {
-        matches!(self.cur().token, Token::NewLine)
+    fn cur_is_newline(&self) -> Result<bool, ParsingErrorKind> {
+        match self.cur()?.token {
+            Token::NewLine => Ok(true),
+            _ => Ok(false),
+        }
     }
 
     fn push_operand(&mut self, token: SpanExpr) {
@@ -657,7 +661,7 @@ impl<'tok> Parser<'tok> {
         return &mut self.parsing_state.last_mut().unwrap().operator_stack;
     }
 
-    pub fn parse_assign(&mut self) -> ParsingEvent {
+    pub fn parse_assign(&mut self) -> Result<ParsingEvent, ParsingErrorKind> {
         //assignments are x = y,
         //and the lhs is also an expression, involving index acessors and method calls in the left hand side.
 
@@ -669,17 +673,17 @@ impl<'tok> Parser<'tok> {
 
         let Ok(lvalue_expr) = lhs else {
             self.pop_stack();
-            return ParsingEvent::TryAnotherGrammarRule;
+            return Ok(ParsingEvent::TryAnotherGrammarRule);
         };
 
-        if !self.can_call_cur_on_current_line() {
+        if !self.can_call_cur_on_current_line()? {
             self.pop_stack();
-            return ParsingEvent::TryAnotherGrammarRule;
+            return Ok(ParsingEvent::TryAnotherGrammarRule);
         }
 
-        let Token::Assign = self.cur().token else {
+        let Token::Assign = self.cur()?.token else {
             self.pop_stack();
-            return ParsingEvent::TryAnotherGrammarRule;
+            return Ok(ParsingEvent::TryAnotherGrammarRule);
         };
 
         self.next();
@@ -687,59 +691,59 @@ impl<'tok> Parser<'tok> {
         let expr = self.parse_expr();
 
         match expr {
-            Ok(e) => ParsingEvent::Success(
+            Ok(e) => Ok(ParsingEvent::Success(
                 AST::Assign {
                     path: lvalue_expr.resulting_expr,
                     expression: e.resulting_expr,
                 }
                 .self_spanning(),
-            ),
-            Err(e) => self.grammar_fail(ParsingError::ContextForError(
-                "Expected expression after assign".into(),
-                Box::new(e),
+            )),
+            Err(e) => Err(self.propagate_error(
+                e,
+                ParsingError::ContextForError("Expected expression after assign".into()),
             )),
         }
     }
 
-    pub fn parse_declaration(&mut self) -> ParsingEvent {
-        let decl = self.parse_type_bound_name();
+    pub fn parse_declaration(&mut self) -> Result<ParsingEvent, ParsingErrorKind> {
+        let decl = self.parse_type_bound_name()?;
 
-        let Ok(Some(typed_var_decl)) = decl else { return ParsingEvent::TryAnotherGrammarRule; };
+        let Some(typed_var_decl) = decl else { return Ok(ParsingEvent::TryAnotherGrammarRule); };
         //no need to do .next here, parse_type_bound_name already does a .next()
 
-        let cur = self.cur();
+        let cur = self.cur()?;
         println!("cur: {:?}", cur.token);
         if let Token::Assign = cur.token {
             self.next();
             let expr = self.parse_expr();
             match expr {
-                Ok(expr) => ParsingEvent::Success(
+                Ok(expr) => Ok(ParsingEvent::Success(
                     AST::Declare {
                         var: typed_var_decl,
                         expression: expr.resulting_expr,
                     }
                     .self_spanning(),
-                ),
-                Err(e) => self.grammar_fail(ParsingError::ContextForError(
-                    "Expected expression after assign".to_string(),
-                    e.into(),
+                )),
+                Err(e) => Err(self.propagate_error(
+                    e,
+                    ParsingError::ContextForError("Expected expression after assign".to_string()),
                 )),
             }
         } else {
-            ParsingEvent::TryAnotherGrammarRule
+            Ok(ParsingEvent::TryAnotherGrammarRule)
         }
     }
 
-    pub fn parse_if_statement(&mut self) -> ParsingEvent {
-        let begin = self.cur().span_index;
+    pub fn parse_if_statement(&mut self) -> Result<ParsingEvent, ParsingErrorKind> {
+        let begin = self.cur()?.span_index;
         parse_guard!(self, Token::IfKeyword);
 
         let expr = match self.parse_expr() {
             Ok(result) => result.resulting_expr,
             Err(e) => {
-                return self.grammar_fail(ParsingError::ContextForError(
-                    "Expected expression for if statement".into(),
-                    e.into(),
+                return Err(self.propagate_error(
+                    e,
+                    ParsingError::ContextForError("Expected expression for if statement".into()),
                 ))
             }
         };
@@ -747,7 +751,7 @@ impl<'tok> Parser<'tok> {
         expect_colon_newline!(self);
 
         let mut if_statement = indented!(self, {
-            let ast = self.parse_ast();
+            let ast = self.parse_ast()?;
             AST::IfStatement {
                 true_branch: ASTIfStatement {
                     expression: expr,
@@ -763,19 +767,19 @@ impl<'tok> Parser<'tok> {
 
         //lets try getting the else statement:
         let cur_identation = self.get_expected_indent();
-        let identation_else = self.skip_whitespace_newline();
+        let identation_else = self.skip_whitespace_newline()?;
 
-        if !self.can_call_cur_on_current_line() || identation_else != cur_identation {
+        if !self.can_call_cur_on_current_line()? || identation_else != cur_identation {
             self.pop_stack();
-            return ParsingEvent::Success(if_statement);
+            return Ok(ParsingEvent::Success(if_statement));
         }
 
-        if let Token::ElseKeyword = self.cur().token {
+        if let Token::ElseKeyword = self.cur()?.token {
             self.next();
             expect_colon_newline!(self);
 
             if_statement = indented!(self, {
-                let ast = self.parse_ast();
+                let ast = self.parse_ast()?;
                 match if_statement.ast {
                     AST::IfStatement {
                         true_branch, elifs, ..
@@ -786,51 +790,49 @@ impl<'tok> Parser<'tok> {
                     }
                     .span_prefixed(begin),
                     _ => {
-                        return self.non_recoverable(ParsingError::Fatal(
+                        return Err(self.non_recoverable(ParsingError::Fatal(
                             "Unexpected AST during if parsing".to_string(),
-                        ));
+                        )));
                     }
                 }
             });
         } else {
             self.pop_stack();
         }
-        ParsingEvent::Success(if_statement)
+        Ok(ParsingEvent::Success(if_statement))
     }
 
-    pub fn parse_structdef(&mut self) -> ParsingEvent {
-        let begin = self.cur().span_index;
+    pub fn parse_structdef(&mut self) -> Result<ParsingEvent, ParsingErrorKind> {
+        let begin = self.cur()?.span_index;
         parse_guard!(self, Token::StructDef);
 
         let struct_name = expect_identifier!(self, "struct name");
 
         //see if there's a < after the struct name, if so, then it's a generic struct
         let mut type_parameters = vec![];
-        if let Token::Operator(Operator::Less) = self.cur().token {
+        if let Token::Operator(Operator::Less) = self.cur()?.token {
             self.next();
             loop {
                 let param = expect_identifier!(self, "generic parameter");
                 type_parameters.push(param);
-                if let Token::Comma = self.cur().token {
+                if let Token::Comma = self.cur()?.token {
                     self.next();
                 } else {
                     break;
                 }
             }
-            if let Token::Operator(Operator::Greater) = self.cur().token {
+            if let Token::Operator(Operator::Greater) = self.cur()?.token {
                 self.next();
             } else {
-                return self.grammar_fail(ParsingError::ContextForError(
+                return Err(self.grammar_fail(ParsingError::Fatal(
                     "Expected > after generic parameters".into(),
-                    ParsingError::Fatal("Expected > after generic parameters".into()).into(),
-                ));
+                )));
             }
 
             if type_parameters.is_empty() {
-                return self.grammar_fail(ParsingError::ContextForError(
+                return Err(self.grammar_fail(ParsingError::Fatal(
                     "Expected at least one generic parameter".into(),
-                    ParsingError::Fatal("Expected at least one generic parameter".into()).into(),
-                ));
+                )));
             }
         }
 
@@ -840,28 +842,27 @@ impl<'tok> Parser<'tok> {
             let mut fields = vec![];
 
             loop {
-                self.skip_whitespace_newline();
-                if !self.can_call_cur_on_current_line() {
+                self.skip_whitespace_newline()?;
+                if !self.can_call_cur_on_current_line()? {
                     break;
                 }
-                let Token::Identifier(_) = self.cur().token else { break; };
+                let Token::Identifier(_) = self.cur()?.token else { break; };
                 //@TODO improve error reporting here, remove unwraps
-                let parsed = self.parse_type_bound_name().unwrap().unwrap();
+                let parsed = self.parse_type_bound_name()?.unwrap();
                 fields.push(parsed);
-
 
                 if !self.is_not_end() {
                     break;
                 }
 
-                let Token::NewLine = self.cur().token else { break; };
+                let Token::NewLine = self.cur()?.token else { break; };
 
                 self.next();
-                if !self.can_call_cur_on_current_line() {
+                if !self.can_call_cur_on_current_line()? {
                     break;
                 }
                 //if a second newline is found, then the struct declaration is found and finished
-                if let Token::NewLine = self.cur().token {
+                if let Token::NewLine = self.cur()?.token {
                     break;
                 }
             }
@@ -874,37 +875,37 @@ impl<'tok> Parser<'tok> {
             .span_prefixed(begin)
         });
 
-        ParsingEvent::Success(struct_def)
+        Ok(ParsingEvent::Success(struct_def))
     }
 
-    pub fn parse_while_statement(&mut self) -> ParsingEvent {
-        let begin = self.cur().span_index;
+    pub fn parse_while_statement(&mut self) -> Result<ParsingEvent, ParsingErrorKind> {
+        let begin = self.cur()?.span_index;
         parse_guard!(self, Token::WhileKeyword);
 
         let expr = match self.parse_expr() {
             Ok(result) => result.resulting_expr,
             Err(e) => {
-                return self.grammar_fail(ParsingError::ContextForError(
-                    "Expected expression for while statement".into(),
-                    e.into(),
+                return Err(self.propagate_error(
+                    e,
+                    ParsingError::ContextForError("Expected expression for while statement".into()),
                 ))
             }
         };
 
         expect_colon_newline!(self);
 
-        ParsingEvent::Success(indented!(self, {
-            let ast = self.parse_ast();
+        Ok(ParsingEvent::Success(indented!(self, {
+            let ast = self.parse_ast()?;
             AST::WhileStatement {
                 expression: expr,
                 body: ast,
             }
             .span_prefixed(begin)
-        }))
+        })))
     }
 
-    pub fn parse_for_statement(&mut self) -> ParsingEvent {
-        let begin = self.cur().span_index;
+    pub fn parse_for_statement(&mut self) -> Result<ParsingEvent, ParsingErrorKind> {
+        let begin = self.cur()?.span_index;
         parse_guard!(self, Token::ForKeyword);
         let variable_name = expect_identifier!(self, "variable name in for loop");
         expect_token!(self, Token::InKeyword);
@@ -912,17 +913,19 @@ impl<'tok> Parser<'tok> {
         let expr = match self.parse_expr() {
             Ok(result) => result.resulting_expr,
             Err(e) => {
-                return self.grammar_fail(ParsingError::ContextForError(
-                    "Expected expression for iterable in for statement".into(),
-                    e.into(),
+                return Err(self.propagate_error(
+                    e,
+                    ParsingError::ContextForError(
+                        "Expected expression for iterable in for statement".into(),
+                    ),
                 ))
             }
         };
 
         expect_colon_newline!(self);
 
-        ParsingEvent::Success(indented!(self, {
-            let ast = self.parse_ast();
+        Ok(ParsingEvent::Success(indented!(self, {
+            let ast = self.parse_ast()?;
 
             AST::ForStatement {
                 item_name: variable_name,
@@ -930,45 +933,43 @@ impl<'tok> Parser<'tok> {
                 body: ast,
             }
             .span_prefixed(begin)
-        }))
+        })))
     }
 
-    pub fn parse_type_name(&mut self) -> Option<ASTType> {
-        let begin = self.cur().span_index;
-        let Token::Identifier(type_name) = self.cur().token else {
-            return None;
+    pub fn parse_type_name(&mut self) -> Result<Option<ASTType>, ParsingErrorKind> {
+        let begin = self.cur()?.span_index;
+        let Token::Identifier(type_name) = self.cur()?.token else {
+            return Ok(None);
         };
 
         let base_type = type_name.token_spanned(begin);
 
         self.next();
 
-        if !self.can_call_cur_on_current_line() {
-            return Some(ASTType::Simple(base_type));
+        if !self.can_call_cur_on_current_line()? {
+            return Ok(Some(ASTType::Simple(base_type)));
         }
 
-        let peek_next = self.cur();
+        let peek_next = self.cur()?;
 
         let Token::Operator(Operator::Less) = peek_next.token else {
-            return Some(ASTType::Simple(type_name.token_spanned(begin)));
+            return Ok(Some(ASTType::Simple(type_name.token_spanned(begin))));
         };
 
         self.next();
 
-        let generic_begin = self.cur().span_index;
-        let Token::Identifier(generic_name) = self.cur().token else {
-
+        let generic_begin = self.cur()?.span_index;
+        let Token::Identifier(generic_name) = self.cur()?.token else {
             panic!("For now we dont have proper error handling for mistakes in generic types, cur = {:?}", self.cur())
          };
         self.next();
 
-        if let Token::Operator(Operator::Greater) = self.cur().token {
-
+        if let Token::Operator(Operator::Greater) = self.cur()?.token {
             self.next();
-            Some(ASTType::Generic(
+            Ok(Some(ASTType::Generic(
                 type_name.token_spanned(begin),
                 vec![ASTType::Simple(generic_name.token_spanned(generic_begin))],
-            ))
+            )))
         } else {
             panic!("For now we don't suport more than 1 generic argument (i'm lazy).")
         }
@@ -976,21 +977,21 @@ impl<'tok> Parser<'tok> {
 
     //Tries to parse a bound name with its type, for instance var: i32
     //leaves cursor in the next token after the type
-    pub fn parse_type_bound_name(&mut self) -> Result<Option<TypeBoundName>, ParsingError> {
-        let begin = self.cur().span_index;
-        let Token::Identifier(name) = self.cur().token else { return Ok(None); };
+    pub fn parse_type_bound_name(&mut self) -> Result<Option<TypeBoundName>, ParsingErrorKind> {
+        let begin = self.cur()?.span_index;
+        let Token::Identifier(name) = self.cur()?.token else { return Ok(None); };
         self.next();
 
-        if !self.can_call_cur_on_current_line() {
+        if !self.can_call_cur_on_current_line()? {
             return Ok(None);
         }
 
-        let Token::Colon = self.cur().token else {
-            return Err(ParsingError::TypeBoundExpectedColonAfterFieldName);
+        let Token::Colon = self.cur()?.token else {
+            return Err(self.grammar_fail(ParsingError::TypeBoundExpectedColonAfterFieldName));
         };
         self.next();
 
-        let typename = self.parse_type_name();
+        let typename = self.parse_type_name()?;
 
         match typename {
             Some(x) => Ok(Some(TypeBoundName {
@@ -1001,8 +1002,8 @@ impl<'tok> Parser<'tok> {
         }
     }
 
-    pub fn parse_def_statement(&mut self) -> ParsingEvent {
-        let begin = self.cur().span_index;
+    pub fn parse_def_statement(&mut self) -> ParsingResult {
+        let begin = self.cur()?.span_index;
         parse_guard!(self, Token::DefKeyword);
         let function_name = expect_identifier!(self, "function name");
 
@@ -1010,40 +1011,47 @@ impl<'tok> Parser<'tok> {
 
         let mut params: Vec<TypeBoundName> = vec![];
 
-        while let Token::Identifier(_) = self.cur().token {
-            let param = self.parse_type_bound_name().unwrap().unwrap();
-            params.push(param);
-            if let Token::Comma = self.cur().token {
+        while let Token::Identifier(_) = self.cur()?.token {
+            let param = self.parse_type_bound_name()?;
+            match param {
+                Some(x) => params.push(x),
+                None => {
+                    return Err(self.non_recoverable(ParsingError::Fatal(
+                        "Expected parameter name and type in function declaration".to_string(),
+                    )))
+                }
+            }
+            if let Token::Comma = self.cur()?.token {
                 self.next();
             } else {
                 break;
             }
         }
         let mut is_varargs = false;
-        if let Token::Ellipsis = self.cur().token {
+        if let Token::Ellipsis = self.cur()?.token {
             is_varargs = true;
             self.next();
         }
 
-        if let Token::CloseParen = self.cur().token {
+        if let Token::CloseParen = self.cur()?.token {
             self.next();
         } else {
-            return self.non_recoverable(ParsingError::Fatal(
+            return Err(self.non_recoverable(ParsingError::Fatal(
                 "Expected close paren after parameters in function declaration".to_string(),
-            ));
+            )));
         }
 
         let mut return_type: Option<ASTType> = None;
 
-        if let Token::ArrowRight = self.cur().token {
+        if let Token::ArrowRight = self.cur()?.token {
             self.next();
 
-            return_type = self.parse_type_name();
+            return_type = self.parse_type_name()?;
 
             if return_type.is_none() {
-                return self.non_recoverable(ParsingError::Fatal(
+                return Err(self.non_recoverable(ParsingError::Fatal(
                     "Expected type name after arrow right on function declaration".into(),
-                ));
+                )));
             }
         }
 
@@ -1053,8 +1061,8 @@ impl<'tok> Parser<'tok> {
             "Expected colon paren after parameters and return type in function declaration, got {}"
         );
 
-        ParsingEvent::Success(indented!(self, {
-            let ast = self.parse_ast();
+        Ok(ParsingEvent::Success(indented!(self, {
+            let ast = self.parse_ast()?;
 
             AST::DeclareFunction {
                 function_name,
@@ -1064,86 +1072,80 @@ impl<'tok> Parser<'tok> {
                 is_varargs,
             }
             .span_prefixed(begin)
-        }))
+        })))
     }
 
-    pub fn parse_break(&mut self) -> ParsingEvent {
-        let tok = *self.cur();
+    pub fn parse_break(&mut self) -> ParsingResult {
+        let tok = *self.cur()?;
         if let Token::BreakKeyword = tok.token {
             self.next();
 
-            return ParsingEvent::Success(AST::Break(tok.span_index.get_span()).self_spanning());
+            return Ok(ParsingEvent::Success(
+                AST::Break(tok.span_index.get_span()).self_spanning(),
+            ));
         }
 
-        ParsingEvent::TryAnotherGrammarRule
+        Ok(ParsingEvent::TryAnotherGrammarRule)
     }
 
-    pub fn parse_return(&mut self) -> ParsingEvent {
-        let tok = *self.cur();
+    pub fn parse_return(&mut self) -> ParsingResult {
+        let tok = *self.cur()?;
         if let Token::ReturnKeyword = tok.token {
             self.next();
-            if self.can_call_cur_on_current_line() {
+            if self.can_call_cur_on_current_line()? {
                 let expr = match self.parse_expr() {
                     Ok(result) => result.resulting_expr,
                     Err(e) => {
-                        return self.grammar_fail(ParsingError::ContextForError(
-                            "Expected expression on return statement".into(),
-                            e.into(),
+                        return Err(self.propagate_error(
+                            e,
+                            ParsingError::ContextForError(
+                                "Expected expression on return statement".into(),
+                            ),
                         ))
                     }
                 };
 
-                return ParsingEvent::Success(
+                return Ok(ParsingEvent::Success(
                     AST::Return(tok.span_index.get_span(), Some(expr)).self_spanning(),
-                );
-            }
-            return ParsingEvent::Success(
-                AST::Return(tok.span_index.get_span(), None).span_prefixed(tok.span_index),
-            );
-        }
-        ParsingEvent::TryAnotherGrammarRule
-    }
-
-    pub fn parse_intrinsic(&mut self) -> ParsingEvent {
-        let tok = *self.cur();
-        if let Token::IntrinsicKeyword = tok.token {
-            self.next();
-            if !self.can_call_cur_on_current_line() {
-                return ParsingEvent::Success(
-                    AST::Intrinsic(tok.span_index.get_span()).self_spanning(),
-                );
-            } else {
-                return self.grammar_fail(ParsingError::InvalidSyntax(
-                    "Intrinsic must be the only content of the method if it's present".to_string(),
                 ));
             }
+            return Ok(ParsingEvent::Success(
+                AST::Return(tok.span_index.get_span(), None).span_prefixed(tok.span_index),
+            ));
         }
-        ParsingEvent::TryAnotherGrammarRule
+        Ok(ParsingEvent::TryAnotherGrammarRule)
     }
 
-    pub fn parse_standalone_expr(&mut self) -> ParsingEvent {
-        let parsed_expr = self.parse_expr();
-        match parsed_expr {
-            Ok(result) => {
-                return ParsingEvent::Success(
-                    AST::StandaloneExpr(result.resulting_expr).self_spanning(),
-                )
-            }
-            Err(e) => {
-                return self.grammar_fail(ParsingError::ContextForError(
-                    "Expected expression".into(),
-                    e.into(),
-                ))
+    pub fn parse_intrinsic(&mut self) -> ParsingResult {
+        let tok = *self.cur()?;
+        if let Token::IntrinsicKeyword = tok.token {
+            self.next();
+            if !self.can_call_cur_on_current_line()? {
+                return Ok(ParsingEvent::Success(
+                    AST::Intrinsic(tok.span_index.get_span()).self_spanning(),
+                ));
+            } else {
+                return Err(self.grammar_fail(ParsingError::InvalidSyntax(
+                    "Intrinsic must be the only content of the method if it's present".to_string(),
+                )));
             }
         }
+        Ok(ParsingEvent::TryAnotherGrammarRule)
+    }
+
+    pub fn parse_standalone_expr(&mut self) -> ParsingResult {
+        let parsed_expr = self.parse_expr()?;
+        Ok(ParsingEvent::Success(
+            AST::StandaloneExpr(parsed_expr.resulting_expr).self_spanning(),
+        ))
     }
 
     //returns the identation level until the first non-whitespace token
     //final state of this function is right at newline, before the identations
-    fn skip_whitespace_newline(&mut self) -> usize {
+    fn skip_whitespace_newline(&mut self) -> Result<usize, ParsingErrorKind> {
         let mut identation_level = 0;
         while self.is_not_end() {
-            match self.cur().token {
+            match self.cur()?.token {
                 Token::NewLine => {
                     identation_level = 0;
                 }
@@ -1154,68 +1156,72 @@ impl<'tok> Parser<'tok> {
             }
             self.next();
         }
-        identation_level
+        Ok(identation_level)
     }
 
     //this skips tokens until the next line
-    fn skip_to_next_line(&mut self) {
+    fn skip_to_next_line(&mut self) -> Result<(), ParsingErrorKind> {
         while self.is_not_end() {
-            match self.cur().token {
+            match self.cur()?.token {
                 Token::NewLine => {
                     self.next();
-                    return;
+                    return Ok(());
                 }
                 _ => self.next(),
             }
         }
+        Ok(())
     }
 
     //@TODO this is kinda hacky, I extracted this from the parse_ast method, but it's kinda ugly
     fn handle_parsing_result(
         &mut self,
         name: &str,
-        parsing_result: ParsingEvent,
+        parsing_result: Result<ParsingEvent, ParsingErrorKind>,
         results: &mut Vec<SpanAST>,
         parsed_successfully: &mut bool,
-    ) {
+    ) -> Result<(), ParsingErrorKind> {
         match parsing_result {
-            ParsingEvent::Success(parsed_result) => {
-                results.push(parsed_result);
-                *parsed_successfully = true;
-                let popped = self.pop_stack();
-                //correct indentation found: commit
-                self.set_cur(&popped);
+            Ok(parsing_result) => match parsing_result {
+                ParsingEvent::Success(parsed_result) => {
+                    results.push(parsed_result);
+                    *parsed_successfully = true;
+                    let popped = self.pop_stack();
+                    //correct indentation found: commit
+                    self.set_cur(&popped);
 
-                if self.is_not_end() && !self.cur_is_newline() {
-                    let cur = self.cur();
-                    let span = &self.tokens.spans[cur.span_index.0];
-                    let file = span.file;
-                    let error_msg = format!(
-                        "Newline or EOF expected after {}, got {:?}",
-                        name, cur.token
-                    );
-
-                    self.errors.push((
-                        ParsingError::InvalidSyntax(error_msg),
-                        file,
-                        cur.span_index,
-                    ));
+                    if self.can_call_cur_on_current_line()? {
+                        let cur = self.cur()?;
+                        let span = &self.tokens.spans[cur.span_index.0];
+                        let file = span.file;
+                        let error_msg = format!(
+                            "Newline or EOF expected after {}, got {:?}",
+                            name, cur.token
+                        );
+                        {
+                            self.errors.borrow_mut().push((
+                                ParsingError::InvalidSyntax(error_msg),
+                                file,
+                                cur.span_index,
+                            ));
+                        }
+                    }
                 }
-            }
-            ParsingEvent::TryAnotherGrammarRule => {
-                self.pop_stack();
-            }
-            ParsingEvent::GrammarRuleFail(error, file, token) => {
-                self.skip_to_next_line();
-                self.errors.push((error, file, token))
-            }
-            ParsingEvent::NonRecoverable(error, file, token) => {
-                self.errors.push((error, file, token))
-            }
+                ParsingEvent::TryAnotherGrammarRule => {
+                    self.pop_stack();
+                }
+            },
+            Err(kind) => match kind {
+                ParsingErrorKind::GrammarRuleFail => {
+                    self.skip_to_next_line()?;
+                }
+                ParsingErrorKind::NonRecoverable => {}
+            },
         }
+        Ok(())
     }
 
-    pub fn parse_ast(&mut self) -> Vec<SpanAST> {
+    pub fn parse_ast(&mut self) -> Result<Vec<SpanAST>, ParsingErrorKind> {
         let mut parsed_successfully: bool;
         let mut results: Vec<SpanAST> = vec![];
 
@@ -1231,7 +1237,7 @@ impl<'tok> Parser<'tok> {
                         parsing_result,
                         &mut results,
                         &mut parsed_successfully,
-                    );
+                    )?;
                 }
             };
         }
@@ -1243,7 +1249,7 @@ impl<'tok> Parser<'tok> {
             parsed_successfully = false;
             self.new_stack();
 
-            let last_identation = self.skip_whitespace_newline();
+            let last_identation = self.skip_whitespace_newline()?;
             let expected_indent = self.get_expected_indent();
 
             if last_identation == expected_indent {
@@ -1251,11 +1257,11 @@ impl<'tok> Parser<'tok> {
                 self.set_cur(&popped);
             } else {
                 self.pop_stack();
-                return results;
+                return Ok(results);
             }
 
             if !self.is_not_end() {
-                return results;
+                return Ok(results);
             }
 
             try_parse!("struct", parse_structdef);
@@ -1274,7 +1280,7 @@ impl<'tok> Parser<'tok> {
                 let error = self.non_recoverable(ParsingError::Fatal(
                     "Unrecognized expression/statement".to_string(),
                 ));
-                self.handle_parsing_result("", error, &mut results, &mut parsed_successfully);
+                self.handle_parsing_result("", Err(error), &mut results, &mut parsed_successfully)?;
             }
 
             let is_end = !self.is_not_end();
@@ -1282,29 +1288,32 @@ impl<'tok> Parser<'tok> {
                 break;
             };
 
-            if self.cur_is_newline() {
+            if self.cur_is_newline()? {
                 continue;
             };
             let error = self.non_recoverable(ParsingError::Fatal(
                 "Unrecognized expression/statement".to_string(),
             ));
-            self.handle_parsing_result("", error, &mut results, &mut parsed_successfully);
+            self.handle_parsing_result("", Err(error), &mut results, &mut parsed_successfully)?;
         }
 
-        results
+        Ok(results)
     }
 
-    fn index_access_helper(&mut self, indexable_expr: SpanExpr) -> Result<SpanExpr, ParsingError> {
-        if let Token::CloseParen = self.cur().token {
-            return Err(ParsingError::InvalidSyntax(
+    fn index_access_helper(
+        &mut self,
+        indexable_expr: SpanExpr,
+    ) -> Result<SpanExpr, ParsingErrorKind> {
+        if let Token::CloseParen = self.cur()?.token {
+            return Err(self.non_recoverable(ParsingError::InvalidSyntax(
                 "Invalid syntax: must inform index value".to_string(),
-            ));
+            )));
         }
 
         self.new_stack();
         let list_of_exprs = self.parse_comma_sep_list_expr();
 
-        let ending = self.cur().span_index;
+        let ending = self.cur()?.span_index;
 
         match list_of_exprs {
             //try parse stuff
@@ -1313,9 +1322,9 @@ impl<'tok> Parser<'tok> {
                 let popped = self.pop_stack();
                 let mut resulting_exprs = expressions.resulting_expr_list;
                 if resulting_exprs.len() != 1 {
-                    return Err(ParsingError::InvalidSyntax(
+                    return Err(self.non_recoverable(ParsingError::InvalidSyntax(
                         "Invalid syntax: must inform index value".to_string(),
-                    ));
+                    )));
                 }
 
                 let fcall = IndexAccess(
@@ -1333,19 +1342,22 @@ impl<'tok> Parser<'tok> {
         }
     }
 
-    fn function_call_helper(&mut self, expr_callable: SpanExpr) -> Result<SpanExpr, ParsingError> {
-        if let Token::CloseParen = self.cur().token {
+    fn function_call_helper(
+        &mut self,
+        expr_callable: SpanExpr,
+    ) -> Result<SpanExpr, ParsingErrorKind> {
+        if let Token::CloseParen = self.cur()?.token {
             return Ok(FunctionCall(
                 ExprBox::new(expr_callable),
                 vec![],
-                self.cur().span_index.get_span(),
+                self.cur()?.span_index.get_span(),
             )
             .self_spanning());
         }
 
         self.new_stack();
         let list_of_exprs = self.parse_comma_sep_list_expr();
-        let ending = self.cur().span_index;
+        let ending = self.cur()?.span_index;
 
         match list_of_exprs {
             //try parse stuff
@@ -1370,9 +1382,9 @@ impl<'tok> Parser<'tok> {
     }
 
     #[allow(clippy::too_many_lines)] //no patience to fix this, expr parsing is messy and I will not touch it
-    pub fn parse_expr(&mut self) -> Result<ParseExpressionResult, ParsingError> {
+    pub fn parse_expr(&mut self) -> Result<ParseExpressionResult, ParsingErrorKind> {
         loop {
-            if !self.can_call_cur_on_current_line() {
+            if !self.can_call_cur_on_current_line()? {
                 break;
             }
             let mut was_operand = false;
@@ -1380,9 +1392,9 @@ impl<'tok> Parser<'tok> {
             //if there is an open paren, we collect all the tokens for this open paren
             //and parse the sub-expression recursively
             {
-                let tok = self.cur();
+                let tok = self.cur()?;
 
-                let prev_token = self.prev_token().cloned().map(|x| x.token);
+                let prev_token = self.prev_token()?.cloned().map(|x| x.token);
                 match tok.token {
                     Token::OpenParen => {
                         //move to the first token, out of the OpenParen
@@ -1527,9 +1539,10 @@ impl<'tok> Parser<'tok> {
                             //this is parsing an array literal!
                             self.new_stack(); //new parsing stack/state
                             self.next(); //move to the first token, out of the open array
-                            if let Token::CloseArrayBracket = self.cur().token {
+                            if let Token::CloseArrayBracket = self.cur()?.token {
                                 self.push_operand(
-                                    Array(vec![], self.cur().span_index.get_span()).self_spanning(),
+                                    Array(vec![], self.cur()?.span_index.get_span())
+                                        .self_spanning(),
                                 );
                                 was_operand = true;
                             } else {
@@ -1544,7 +1557,7 @@ impl<'tok> Parser<'tok> {
                                         self.push_operand(
                                             Array(
                                                 resulting_exprs,
-                                                self.cur().span_index.get_span(),
+                                                self.cur()?.span_index.get_span(),
                                             )
                                             .self_spanning(),
                                         );
@@ -1567,7 +1580,7 @@ impl<'tok> Parser<'tok> {
                         //next token should be an identifier
                         self.next();
                         let popped = self.operand_stack_mut().pop();
-                        let cur_token = self.cur();
+                        let cur_token = self.cur()?;
                         if let Token::Identifier(name) = cur_token.token {
                             let cur_expr = popped.unwrap();
                             let member_access_expr = MemberAccess(
@@ -1577,9 +1590,9 @@ impl<'tok> Parser<'tok> {
                             self.push_operand(member_access_expr.self_spanning());
                             was_operand = true;
                         } else {
-                            return Err(ParsingError::ExprError(
+                            return Err(self.grammar_fail(ParsingError::ExprError(
                                 "Failed parsing member acessor".into(),
-                            ));
+                            )));
                         }
                     }
                     Token::LiteralInteger(i) => {
@@ -1633,7 +1646,7 @@ impl<'tok> Parser<'tok> {
             }
 
             self.next();
-            if self.can_call_cur_on_current_line() && Token::MemberAccessor == self.cur().token {
+            if self.can_call_cur_on_current_line()? && Token::MemberAccessor == self.cur()?.token {
                 continue;
             }
 
@@ -1641,11 +1654,11 @@ impl<'tok> Parser<'tok> {
             //same thing for an open bracket! could be an array!
             //try parse it first!
 
-            if self.can_call_cur_on_current_line() {
-                if let Token::OpenArrayBracket = self.cur().token {
+            if self.can_call_cur_on_current_line()? {
+                if let Token::OpenArrayBracket = self.cur()?.token {
                     continue;
                 }
-                if let Token::OpenParen = self.cur().token {
+                if let Token::OpenParen = self.cur()?.token {
                     continue;
                 }
             }
@@ -1755,24 +1768,24 @@ impl<'tok> Parser<'tok> {
         }
 
         if !self.operator_stack().is_empty() {
-            return Err(ParsingError::ExprError(format!(
+            return Err(self.non_recoverable(ParsingError::ExprError(format!(
                 "Unparsed operators: {:?}, operands = {:?}",
                 self.operator_stack(),
                 self.operand_stack()
-            )));
+            ))));
         }
 
         if self.operand_stack().len() > 1 {
-            return Err(ParsingError::ExprError(format!(
+            return Err(self.non_recoverable(ParsingError::ExprError(format!(
                 "Unparsed operands: {:?}",
                 self.operand_stack()
-            )));
+            ))));
         }
 
         if self.operand_stack().is_empty() {
-            return Err(ParsingError::ExprError(String::from(
+            return Err(self.non_recoverable(ParsingError::ExprError(String::from(
                 "Empty operand stack, didn't parse anything",
-            )));
+            ))));
         }
         //let remaining_tokens = Vec::from(token_queue);
         let resulting_expr = clean_parens(self.operand_stack_mut().pop().unwrap());
@@ -1780,8 +1793,23 @@ impl<'tok> Parser<'tok> {
         Ok(ParseExpressionResult { resulting_expr })
     }
 
+    fn get_cur_span_file_idx(&self) -> (FileTableIndex, TokenSpanIndex) {
+        match self.cur() {
+            Ok(cur_token) => {
+                let span = &self.tokens.spans[cur_token.span_index.0];
+                let file = span.file;
+                (file, cur_token.span_index)
+            }
+            Err(_) => {
+                let span = &self.tokens.spans.last().unwrap();
+                let file = span.file;
+                (file, TokenSpanIndex(self.tokens.spans.len() - 1))
+            }
+        }
+    }
+
     //expr, expr, ..., expr
-    fn parse_comma_sep_list_expr(&mut self) -> Result<ParseListExpressionResult, ParsingError> {
+    fn parse_comma_sep_list_expr(&mut self) -> Result<ParseListExpressionResult, ParsingErrorKind> {
         let mut expressions = vec![];
         loop {
             let parse_result = self.parse_expr();
@@ -1795,8 +1823,8 @@ impl<'tok> Parser<'tok> {
                 }
             }
 
-            if self.can_call_cur_on_current_line() {
-                if let Token::Comma = self.cur().token {
+            if self.can_call_cur_on_current_line()? {
+                if let Token::Comma = self.cur()?.token {
                     self.next();
                     continue;
                 }
@@ -1806,7 +1834,9 @@ impl<'tok> Parser<'tok> {
         }
 
         if expressions.is_empty() {
-            return Err(ParsingError::ExprError(String::from("While parsing list of expressions: no expression was found. Deal with edge cases before calling this expr.")));
+            return Err(
+                self.non_recoverable(ParsingError::ExprError(String::from("While parsing list of expressions: no expression was found. Deal with edge cases before calling this expr.")))
+            );
         }
 
         Ok(ParseListExpressionResult {
@@ -1814,19 +1844,30 @@ impl<'tok> Parser<'tok> {
         })
     }
 
-    fn non_recoverable(&mut self, parsing_error: ParsingError) -> ParsingEvent {
-        self.irrecoverable_error = true;
-        let cur = self.cur();
-        let span = &self.tokens.spans[cur.span_index.0];
-
-        ParsingEvent::NonRecoverable(parsing_error, span.file, cur.span_index)
+    fn report_error(&self, parsing_error: ParsingError) {
+        let (file, span) = self.get_cur_span_file_idx();
+        self.errors.borrow_mut().push((parsing_error, file, span));
     }
 
-    fn grammar_fail(&mut self, parsing_error: ParsingError) -> ParsingEvent {
-        let cur = self.cur();
-        let span = &self.tokens.spans[cur.span_index.0];
+    fn non_recoverable(&self, parsing_error: ParsingError) -> ParsingErrorKind {
+        self.report_error(parsing_error);
+        ParsingErrorKind::NonRecoverable
+    }
 
-        ParsingEvent::GrammarRuleFail(parsing_error, span.file, cur.span_index)
+    fn grammar_fail(&self, parsing_error: ParsingError) -> ParsingErrorKind {
+        self.report_error(parsing_error);
+        ParsingErrorKind::GrammarRuleFail
+    }
+
+    fn propagate_error(
+        &self,
+        e: ParsingErrorKind,
+        parsing_error: ParsingError,
+    ) -> ParsingErrorKind {
+        match e {
+            ParsingErrorKind::NonRecoverable => self.non_recoverable(parsing_error),
+            ParsingErrorKind::GrammarRuleFail => self.grammar_fail(parsing_error),
+        }
     }
 }
 
@@ -1839,6 +1880,7 @@ pub struct ParseExpressionResult {
     resulting_expr: SpanExpr,
 }
 
+#[cfg(test)]
 pub fn parse_ast<'a>(
     tokens: &'a TokenTable,
     file_table: &[FileTableEntry],
@@ -1848,19 +1890,29 @@ pub fn parse_ast<'a>(
 
     print_errors(&parser, file_table, tokens);
 
-    (result, parser)
+    (result.unwrap(), parser)
 }
 
 pub fn print_errors(parser: &Parser, file_table: &[FileTableEntry], tokens: &TokenTable) {
-    for (error, file, token) in parser.errors.iter() {
-        let err = error.to_string();
-        let file_name = &file_table[file.0].path;
-        let tok = tokens.tokens[token.0];
-        let span = tokens.spans[tok.span_index.0];
-        let line = span.start.line;
-        let column = span.start.column;
-        println!("{err}\nat {file_name}:{line}:{column}\n");
+    for (error, file, token) in parser.errors.borrow().iter() {
+        print_error(error, file_table, file, tokens, token);
     }
+}
+
+pub fn print_error(
+    error: &ParsingError,
+    file_table: &[FileTableEntry],
+    file: &FileTableIndex,
+    tokens: &TokenTable,
+    token: &TokenSpanIndex,
+) {
+    let err = error.to_string();
+    let file_name = &file_table[file.0].path;
+    let tok = tokens.tokens[token.0];
+    let span = tokens.spans[tok.span_index.0];
+    let line = span.start.line;
+    let column = span.start.column;
+    println!("{err}\nat {file_name}:{line}:{column}\n");
 }
 
 #[cfg(test)]
@@ -1934,20 +1986,12 @@ mod tests {
         }];
         let mut parser = Parser::new(&table[0].token_table);
 
-        INTERNER.with(|x| {
-            //The geneva convention has no power here
-            let hack = unsafe {
-                std::mem::transmute::<&StringInterner, &StringInterner>(x)
-            };
-            parser.interner = Some(hack);
-        });
-
         let result = parser.parse_ast();
         print_errors(&parser, table, &table[0].token_table);
-        if !parser.get_errors().is_empty() {
+        if !parser.errors.borrow().is_empty() {
             panic!("Parsing failed");
         }
-        result
+        result.unwrap()
     }
 
     #[test]
@@ -2840,14 +2884,14 @@ print(x)"
         );
     }
 
-
     #[test]
     fn parse_struct_generic() {
-        parse_and_print_back_to_original("
+        parse_and_print_back_to_original(
+            "
 struct SomeStruct<T>:
     field: T
     otherfield: u64
-");
+",
+        );
     }
-
 }
