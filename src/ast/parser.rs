@@ -393,6 +393,7 @@ pub struct Parser<'tok> {
     tokens: &'tok TokenTable,
     pub errors: Vec<(ParsingError, FileTableIndex, TokenSpanIndex)>,
     irrecoverable_error: bool,
+    interner: Option<&'tok StringInterner>,
 }
 
 struct ParsingState {
@@ -449,7 +450,7 @@ macro_rules! parse_guard {
     ($parser:expr, $pattern:pat_param, $result:expr) => {
         if let $pattern = $parser.cur().token {
             $parser.next();
-            if (!$parser.can_advance_on_line()) {
+            if (!$parser.can_call_cur_on_current_line()) {
                 return $result;
             }
         } else {
@@ -541,6 +542,7 @@ impl<'tok> Parser<'tok> {
                 operand_stack: vec![],
                 current_indent: 0,
             }],
+            interner: None,
             tokens,
             errors: vec![],
             irrecoverable_error: false,
@@ -615,7 +617,7 @@ impl<'tok> Parser<'tok> {
         self.parsing_state.last().unwrap().index < self.tokens.tokens.len()
     }
 
-    fn can_advance_on_line(&self) -> bool {
+    fn can_call_cur_on_current_line(&self) -> bool {
         self.is_not_end() && !self.cur_is_newline()
     }
 
@@ -670,7 +672,7 @@ impl<'tok> Parser<'tok> {
             return ParsingEvent::TryAnotherGrammarRule;
         };
 
-        if !self.can_advance_on_line() {
+        if !self.can_call_cur_on_current_line() {
             self.pop_stack();
             return ParsingEvent::TryAnotherGrammarRule;
         }
@@ -704,8 +706,9 @@ impl<'tok> Parser<'tok> {
 
         let Ok(Some(typed_var_decl)) = decl else { return ParsingEvent::TryAnotherGrammarRule; };
         //no need to do .next here, parse_type_bound_name already does a .next()
-        self.next();
+
         let cur = self.cur();
+        println!("cur: {:?}", cur.token);
         if let Token::Assign = cur.token {
             self.next();
             let expr = self.parse_expr();
@@ -762,7 +765,7 @@ impl<'tok> Parser<'tok> {
         let cur_identation = self.get_expected_indent();
         let identation_else = self.skip_whitespace_newline();
 
-        if !self.can_advance_on_line() || identation_else != cur_identation {
+        if !self.can_call_cur_on_current_line() || identation_else != cur_identation {
             self.pop_stack();
             return ParsingEvent::Success(if_statement);
         }
@@ -800,6 +803,37 @@ impl<'tok> Parser<'tok> {
         parse_guard!(self, Token::StructDef);
 
         let struct_name = expect_identifier!(self, "struct name");
+
+        //see if there's a < after the struct name, if so, then it's a generic struct
+        let mut type_parameters = vec![];
+        if let Token::Operator(Operator::Less) = self.cur().token {
+            self.next();
+            loop {
+                let param = expect_identifier!(self, "generic parameter");
+                type_parameters.push(param);
+                if let Token::Comma = self.cur().token {
+                    self.next();
+                } else {
+                    break;
+                }
+            }
+            if let Token::Operator(Operator::Greater) = self.cur().token {
+                self.next();
+            } else {
+                return self.grammar_fail(ParsingError::ContextForError(
+                    "Expected > after generic parameters".into(),
+                    ParsingError::Fatal("Expected > after generic parameters".into()).into(),
+                ));
+            }
+
+            if type_parameters.is_empty() {
+                return self.grammar_fail(ParsingError::ContextForError(
+                    "Expected at least one generic parameter".into(),
+                    ParsingError::Fatal("Expected at least one generic parameter".into()).into(),
+                ));
+            }
+        }
+
         expect_colon_newline!(self);
 
         let struct_def = indented!(self, {
@@ -807,25 +841,26 @@ impl<'tok> Parser<'tok> {
 
             loop {
                 self.skip_whitespace_newline();
-                if !self.can_advance_on_line() {
+                if !self.can_call_cur_on_current_line() {
                     break;
                 }
                 let Token::Identifier(_) = self.cur().token else { break; };
+                //@TODO improve error reporting here, remove unwraps
                 let parsed = self.parse_type_bound_name().unwrap().unwrap();
                 fields.push(parsed);
 
-                if !self.can_advance_on_line() {
+
+                if !self.is_not_end() {
                     break;
                 }
 
-                self.next();
                 let Token::NewLine = self.cur().token else { break; };
 
                 self.next();
-                if !self.can_advance_on_line() {
+                if !self.can_call_cur_on_current_line() {
                     break;
                 }
-                //if a second newline is found, then the struct declaration is found
+                //if a second newline is found, then the struct declaration is found and finished
                 if let Token::NewLine = self.cur().token {
                     break;
                 }
@@ -833,7 +868,7 @@ impl<'tok> Parser<'tok> {
 
             AST::StructDeclaration {
                 struct_name,
-                type_parameters: vec![],
+                type_parameters,
                 body: fields,
             }
             .span_prefixed(begin)
@@ -904,17 +939,20 @@ impl<'tok> Parser<'tok> {
             return None;
         };
 
-        if !self.can_advance_on_line() {
-            return Some(ASTType::Simple(type_name.token_spanned(begin)));
+        let base_type = type_name.token_spanned(begin);
+
+        self.next();
+
+        if !self.can_call_cur_on_current_line() {
+            return Some(ASTType::Simple(base_type));
         }
 
-        let peek_next = self.cur_offset(1);
+        let peek_next = self.cur();
 
         let Token::Operator(Operator::Less) = peek_next.token else {
             return Some(ASTType::Simple(type_name.token_spanned(begin)));
         };
 
-        self.next(); //commits the peek_next
         self.next();
 
         let generic_begin = self.cur().span_index;
@@ -925,6 +963,8 @@ impl<'tok> Parser<'tok> {
         self.next();
 
         if let Token::Operator(Operator::Greater) = self.cur().token {
+
+            self.next();
             Some(ASTType::Generic(
                 type_name.token_spanned(begin),
                 vec![ASTType::Simple(generic_name.token_spanned(generic_begin))],
@@ -941,7 +981,7 @@ impl<'tok> Parser<'tok> {
         let Token::Identifier(name) = self.cur().token else { return Ok(None); };
         self.next();
 
-        if !self.can_advance_on_line() {
+        if !self.can_call_cur_on_current_line() {
             return Ok(None);
         }
 
@@ -972,9 +1012,7 @@ impl<'tok> Parser<'tok> {
 
         while let Token::Identifier(_) = self.cur().token {
             let param = self.parse_type_bound_name().unwrap().unwrap();
-
             params.push(param);
-            self.next();
             if let Token::Comma = self.cur().token {
                 self.next();
             } else {
@@ -1007,7 +1045,6 @@ impl<'tok> Parser<'tok> {
                     "Expected type name after arrow right on function declaration".into(),
                 ));
             }
-            self.next();
         }
 
         expect_token!(
@@ -1045,7 +1082,7 @@ impl<'tok> Parser<'tok> {
         let tok = *self.cur();
         if let Token::ReturnKeyword = tok.token {
             self.next();
-            if self.can_advance_on_line() {
+            if self.can_call_cur_on_current_line() {
                 let expr = match self.parse_expr() {
                     Ok(result) => result.resulting_expr,
                     Err(e) => {
@@ -1071,7 +1108,7 @@ impl<'tok> Parser<'tok> {
         let tok = *self.cur();
         if let Token::IntrinsicKeyword = tok.token {
             self.next();
-            if !self.can_advance_on_line() {
+            if !self.can_call_cur_on_current_line() {
                 return ParsingEvent::Success(
                     AST::Intrinsic(tok.span_index.get_span()).self_spanning(),
                 );
@@ -1335,7 +1372,7 @@ impl<'tok> Parser<'tok> {
     #[allow(clippy::too_many_lines)] //no patience to fix this, expr parsing is messy and I will not touch it
     pub fn parse_expr(&mut self) -> Result<ParseExpressionResult, ParsingError> {
         loop {
-            if !self.can_advance_on_line() {
+            if !self.can_call_cur_on_current_line() {
                 break;
             }
             let mut was_operand = false;
@@ -1596,7 +1633,7 @@ impl<'tok> Parser<'tok> {
             }
 
             self.next();
-            if self.can_advance_on_line() && Token::MemberAccessor == self.cur().token {
+            if self.can_call_cur_on_current_line() && Token::MemberAccessor == self.cur().token {
                 continue;
             }
 
@@ -1604,7 +1641,7 @@ impl<'tok> Parser<'tok> {
             //same thing for an open bracket! could be an array!
             //try parse it first!
 
-            if self.can_advance_on_line() {
+            if self.can_call_cur_on_current_line() {
                 if let Token::OpenArrayBracket = self.cur().token {
                     continue;
                 }
@@ -1758,7 +1795,7 @@ impl<'tok> Parser<'tok> {
                 }
             }
 
-            if self.can_advance_on_line() {
+            if self.can_call_cur_on_current_line() {
                 if let Token::Comma = self.cur().token {
                     self.next();
                     continue;
@@ -1896,6 +1933,14 @@ mod tests {
             path: "test".to_string(),
         }];
         let mut parser = Parser::new(&table[0].token_table);
+
+        INTERNER.with(|x| {
+            let hack = unsafe {
+                std::mem::transmute::<&StringInterner, &StringInterner>(x)
+            };
+            parser.interner = Some(hack);
+        });
+
         let result = parser.parse_ast();
         print_errors(&parser, table, &table[0].token_table);
         if !parser.get_errors().is_empty() {
@@ -2203,6 +2248,7 @@ mod tests {
     fn parse_and_print_back_to_original(source: &str) {
         let unindented = unindent(source);
         let tokens = tokenize(&unindented).unwrap();
+        println!("tokens: {:?}", tokens.tokens);
         let result = test_parse(tokens);
         let printed = INTERNER.with(|i| print_ast(&result, i));
         pretty_assertions::assert_eq!(printed.trim(), unindented.trim());
@@ -2792,4 +2838,15 @@ print(x)"
             "* (array[(obj.getter().prop[0].some_ptr + obj.getter().prop[1])]) = 1"
         );
     }
+
+
+    #[test]
+    fn parse_struct_generic() {
+        parse_and_print_back_to_original("
+struct SomeStruct<T>:
+    field: T
+    otherfield: u64
+");
+    }
+
 }
