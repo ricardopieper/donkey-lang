@@ -101,7 +101,7 @@ pub enum Expr {
     NoneValue(AstSpan),
     Variable(StringSpan),
     //the last parameter here contains the closing parenthesis.
-    FunctionCall(ExprBox, Vec<SpanExpr>, AstSpan),
+    FunctionCall(ExprBox, Vec<ASTType>, Vec<SpanExpr>, AstSpan),
     //the last parameter here contains the array closing bracket
     IndexAccess(ExprBox, ExprBox, AstSpan),
     BinaryOperation(ExprBox, SpannedOperator, ExprBox),
@@ -124,7 +124,7 @@ impl Spanned for Expr {
             | NoneValue(span)
             | BooleanValue(_, span) => *span,
             StringValue(s) | Variable(s) => s.get_span(),
-            FunctionCall(f, _, end) => f.get_span().range(end),
+            FunctionCall(f, _, _, end) => f.get_span().range(end),
             IndexAccess(arr, _, end) => arr.get_span().range(end),
             BinaryOperation(start, _, end) => start.get_span().range(&end.expr.span),
             Parenthesized(e) => e.get_span(),
@@ -277,6 +277,7 @@ pub enum AST {
     DeclareFunction {
         function_name: StringSpan,
         parameters: Vec<TypeBoundName>,
+        type_parameters: Vec<StringSpan>,
         body: Vec<SpanAST>,
         return_type: Option<ASTType>,
         is_varargs: bool,
@@ -349,7 +350,13 @@ impl Spanned for AST {
                 function_name,
                 body,
                 ..
-            } => function_name.get_span().range(&body.last().unwrap().span),
+            } => {
+                let function_name_span = function_name.get_span();
+                match body.last() {
+                    Some(last) => function_name_span.range(&last.span),
+                    None => function_name_span.range(&function_name_span),
+                }
+            }
             AST::Break(span) => *span,
             AST::Intrinsic(span) => *span,
             AST::Return(span, expr) => match expr {
@@ -465,6 +472,7 @@ macro_rules! expect_token {
         } else {
             let token = $parser.cur().clone();
             let span = &$parser.tokens.spans[token.span_index.0];
+            $parser.irrecoverable_error = true;
             return ParsingEvent::NonRecoverable(
                 ParsingError::InvalidSyntax(format!(
                     "Expected {}, got {}",
@@ -482,6 +490,7 @@ macro_rules! expect_token {
         } else {
             let token = $parser.cur().clone();
             let span = &$parser.tokens.spans[token.span_index.0];
+            $parser.irrecoverable_error = true;
             return ParsingEvent::NonRecoverable(
                 ParsingError::InvalidSyntax(format!($msg, $parser.cur().token.name())),
                 span.file,
@@ -594,6 +603,21 @@ impl<'tok> Parser<'tok> {
         self.parsing_state.last_mut().unwrap().current_indent = parsing_state.current_indent;
     }
 
+    fn set_cur_for_expr(&mut self, parsing_state: &ParsingState) {
+        self.parsing_state.last_mut().unwrap().index = parsing_state.index;
+        self.parsing_state.last_mut().unwrap().current_indent = parsing_state.current_indent;
+        self.parsing_state
+            .last_mut()
+            .unwrap()
+            .operand_stack
+            .extend(parsing_state.operand_stack.iter().cloned());
+        self.parsing_state
+            .last_mut()
+            .unwrap()
+            .operator_stack
+            .extend(parsing_state.operator_stack.iter().cloned());
+    }
+
     fn cur(&self) -> &TokenData {
         self.cur_offset(0)
     }
@@ -655,7 +679,7 @@ impl<'tok> Parser<'tok> {
         return &mut self.parsing_state.last_mut().unwrap().operator_stack;
     }
 
-    pub fn parse_assign(&mut self) -> ParsingEvent {
+    pub fn parse_variable_assign(&mut self) -> ParsingEvent {
         //assignments are x = y,
         //and the lhs is also an expression, involving index acessors and method calls in the left hand side.
 
@@ -692,14 +716,14 @@ impl<'tok> Parser<'tok> {
                 }
                 .self_spanning(),
             ),
-            Err(e) => self.grammar_fail(ParsingError::ContextForError(
+            Err(e) => self.non_recoverable(ParsingError::ContextForError(
                 "Expected expression after assign".into(),
                 Box::new(e),
             )),
         }
     }
 
-    pub fn parse_declaration(&mut self) -> ParsingEvent {
+    pub fn parse_variable_declaration(&mut self) -> ParsingEvent {
         let decl = self.parse_type_bound_name();
 
         let Ok(Some(typed_var_decl)) = decl else { return ParsingEvent::TryAnotherGrammarRule; };
@@ -802,35 +826,10 @@ impl<'tok> Parser<'tok> {
 
         let struct_name = expect_identifier!(self, "struct name");
 
-        //see if there's a < after the struct name, if so, then it's a generic struct
-        let mut type_parameters = vec![];
-        if let Token::Operator(Operator::Less) = self.cur().token {
-            self.next();
-            loop {
-                let param = expect_identifier!(self, "generic parameter");
-                type_parameters.push(param);
-                if let Token::Comma = self.cur().token {
-                    self.next();
-                } else {
-                    break;
-                }
-            }
-            if let Token::Operator(Operator::Greater) = self.cur().token {
-                self.next();
-            } else {
-                return self.grammar_fail(ParsingError::ContextForError(
-                    "Expected > after generic parameters".into(),
-                    ParsingError::Fatal("Expected > after generic parameters".into()).into(),
-                ));
-            }
-
-            if type_parameters.is_empty() {
-                return self.grammar_fail(ParsingError::ContextForError(
-                    "Expected at least one generic parameter".into(),
-                    ParsingError::Fatal("Expected at least one generic parameter".into()).into(),
-                ));
-            }
-        }
+        let type_parameters = match self.parse_type_parameters() {
+            Ok(value) => value,
+            Err(err) => return self.non_recoverable(err),
+        };
 
         expect_colon_newline!(self);
 
@@ -872,6 +871,44 @@ impl<'tok> Parser<'tok> {
         });
 
         ParsingEvent::Success(struct_def)
+    }
+
+    fn parse_type_parameters(&mut self) -> Result<Vec<StringSpan>, ParsingError> {
+        let mut type_parameters = vec![];
+        if let Token::Operator(Operator::Less) = self.cur().token {
+            self.next();
+            loop {
+                let cur = self.cur();
+                if let Token::Identifier(param) = cur.token {
+                    type_parameters.push(param.token_spanned(cur.span_index));
+                } else {
+                    return Err(ParsingError::Fatal(
+                        "Expected identifier for generic parameter".into(),
+                    )
+                    .into());
+                }
+                self.next();
+                if let Token::Comma = self.cur().token {
+                    self.next();
+                } else {
+                    break;
+                }
+            }
+            if let Token::Operator(Operator::Greater) = self.cur().token {
+                self.next();
+            } else {
+                return Err(
+                    ParsingError::Fatal("Expected > after generic parameters".into()).into(),
+                );
+            }
+
+            if type_parameters.is_empty() {
+                return Err(
+                    ParsingError::Fatal("Expected at least one generic parameter".into()).into(),
+                );
+            }
+        }
+        Ok(type_parameters)
     }
 
     pub fn parse_while_statement(&mut self) -> ParsingEvent {
@@ -931,43 +968,45 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn parse_type_name(&mut self) -> Option<ASTType> {
+        //first we expect a type name
         let begin = self.cur().span_index;
         let Token::Identifier(type_name) = self.cur().token else {
             return None;
         };
 
         let base_type = type_name.token_spanned(begin);
-
+        //type name confirmed, check next
         self.next();
 
+        //we're finished, just return
         if !self.can_call_cur_on_current_line() {
             return Some(ASTType::Simple(base_type));
         }
 
-        let peek_next = self.cur();
+        let next = self.cur();
 
-        let Token::Operator(Operator::Less) = peek_next.token else {
-            return Some(ASTType::Simple(type_name.token_spanned(begin)));
-        };
-
-        self.next();
-
-        let generic_begin = self.cur().span_index;
-        let Token::Identifier(generic_name) = self.cur().token else {
-
-            panic!("For now we dont have proper error handling for mistakes in generic types, cur = {:?}", self.cur())
-         };
-        self.next();
-
-        if let Token::Operator(Operator::Greater) = self.cur().token {
-            self.next();
-            Some(ASTType::Generic(
-                type_name.token_spanned(begin),
-                vec![ASTType::Simple(generic_name.token_spanned(generic_begin))],
-            ))
-        } else {
-            panic!("For now we don't suport more than 1 generic argument (i'm lazy).")
-        }
+        match next.token {
+            //if the next token is <, means we have next generics
+            Token::Operator(Operator::Less) => {
+                self.next(); //go to what is likely the nested type name
+                let parsed = self.parse_type_name().unwrap();
+                let generic = Some(ASTType::Generic(
+                    type_name.token_spanned(begin),
+                    vec![parsed],
+                ));
+                //the parse_type_name leaves the state in the next token after the type name, which will have to be the >
+                if self.cur().token != Token::Operator(Operator::Greater) {
+                    panic!("After parsing nested generics, expected token to be < but it is = {:?}", self.cur())
+                }
+                self.next();
+                return generic;
+            }
+            _ => {
+                //if it's not < then we assume another syntax would start to be parsed,
+                return Some(ASTType::Simple(base_type));
+            }
+         }
+        
     }
 
     //Tries to parse a bound name with its type, for instance var: i32
@@ -997,10 +1036,15 @@ impl<'tok> Parser<'tok> {
         }
     }
 
-    pub fn parse_def_statement(&mut self) -> ParsingEvent {
+    pub fn parse_def_function_statement(&mut self) -> ParsingEvent {
         let begin = self.cur().span_index;
         parse_guard!(self, Token::DefKeyword);
         let function_name = expect_identifier!(self, "function name");
+
+        let type_parameters = match self.parse_type_parameters() {
+            Ok(value) => value,
+            Err(err) => return self.non_recoverable(err),
+        };
 
         expect_token!(self, Token::OpenParen);
 
@@ -1024,8 +1068,8 @@ impl<'tok> Parser<'tok> {
         if let Token::CloseParen = self.cur().token {
             self.next();
         } else {
-            return self.non_recoverable(ParsingError::Fatal(
-                "Expected close paren after parameters in function declaration".to_string(),
+            return self.non_recoverable(ParsingError::InvalidSyntax(
+                format!("Expected close paren after parameters in function declaration, got {:?}", self.cur().token),
             ));
         }
 
@@ -1055,6 +1099,7 @@ impl<'tok> Parser<'tok> {
             AST::DeclareFunction {
                 function_name,
                 parameters: params,
+                type_parameters,
                 body: ast,
                 return_type,
                 is_varargs,
@@ -1166,14 +1211,14 @@ impl<'tok> Parser<'tok> {
         }
     }
 
-    //@TODO this is kinda hacky, I extracted this from the parse_ast method, but it's kinda ugly
+    //Returns whether parsing can continue
     fn handle_parsing_result(
         &mut self,
         name: &str,
         parsing_result: ParsingEvent,
         results: &mut Vec<SpanAST>,
         parsed_successfully: &mut bool,
-    ) {
+    ) -> bool {
         match parsing_result {
             ParsingEvent::Success(parsed_result) => {
                 results.push(parsed_result);
@@ -1196,17 +1241,22 @@ impl<'tok> Parser<'tok> {
                         file,
                         cur.span_index,
                     ));
+                    return false;
                 }
+                true
             }
             ParsingEvent::TryAnotherGrammarRule => {
                 self.pop_stack();
+                true
             }
             ParsingEvent::GrammarRuleFail(error, file, token) => {
                 self.skip_to_next_line();
-                self.errors.push((error, file, token))
+                self.errors.push((error, file, token));
+                true
             }
             ParsingEvent::NonRecoverable(error, file, token) => {
-                self.errors.push((error, file, token))
+                self.errors.push((error, file, token));
+                false
             }
         }
     }
@@ -1222,12 +1272,14 @@ impl<'tok> Parser<'tok> {
                     self.new_stack();
 
                     let parsing_result = self.$parse_method();
-                    self.handle_parsing_result(
+                    if !self.handle_parsing_result(
                         $name,
                         parsing_result,
                         &mut results,
                         &mut parsed_successfully,
-                    );
+                    ) {
+                        break;
+                    }
                 }
             };
         }
@@ -1254,13 +1306,13 @@ impl<'tok> Parser<'tok> {
                 return results;
             }
 
-            try_parse!("struct", parse_structdef);
-            try_parse!("assignment", parse_assign);
-            try_parse!("declaration", parse_declaration);
+            try_parse!("struct definition", parse_structdef);
+            try_parse!("variable assignment", parse_variable_assign);
+            try_parse!("variable declaration", parse_variable_declaration);
             try_parse!("if block", parse_if_statement);
             try_parse!("while block", parse_while_statement);
             try_parse!("for block", parse_for_statement);
-            try_parse!("function definition", parse_def_statement);
+            try_parse!("function definition", parse_def_function_statement);
             try_parse!("break", parse_break);
             try_parse!("return", parse_return);
             try_parse!("intrinsic", parse_intrinsic);
@@ -1334,6 +1386,7 @@ impl<'tok> Parser<'tok> {
             return Ok(FunctionCall(
                 ExprBox::new(expr_callable),
                 vec![],
+                vec![],
                 self.cur().span_index.get_span(),
             )
             .self_spanning());
@@ -1352,6 +1405,7 @@ impl<'tok> Parser<'tok> {
 
                 let fcall = FunctionCall(
                     ExprBox::new(expr_callable),
+                    vec![],
                     resulting_exprs,
                     ending.get_span(),
                 )
@@ -1376,7 +1430,7 @@ impl<'tok> Parser<'tok> {
             //if there is an open paren, we collect all the tokens for this open paren
             //and parse the sub-expression recursively
             {
-                let tok = self.cur();
+                let tok = self.cur().clone();
 
                 let prev_token = self.prev_token().cloned().map(|x| x.token);
                 match tok.token {
@@ -1392,16 +1446,21 @@ impl<'tok> Parser<'tok> {
                         // - `some_map['mapKey']` and then `(` is also valid, will load the function from map and call it
                         // - `some_array[index]()` similarly
                         // - `function_call()` and then `(` would work if the function returns another function
+                        // - `function_call<T>()` also valid when function has generics
                         let mut could_be_fcall = true;
 
-                        if let Some(Token::Operator(_)) = prev_token {
-                            could_be_fcall = false;
-                        }
                         if prev_token.is_none() {
                             could_be_fcall = false;
                         }
                         if self.operand_stack().is_empty() {
                             could_be_fcall = false;
+                        }
+                        if let Some(Token::Operator(op)) = prev_token {
+                            if let Operator::Greater = op {
+                                could_be_fcall = true;
+                            } else {
+                                could_be_fcall = false;
+                            }
                         }
                         if could_be_fcall {
                             //when we parse a funcion, we need to parse its arguments as well.
@@ -1554,9 +1613,7 @@ impl<'tok> Parser<'tok> {
                         }
                     }
                     Token::Identifier(identifier_str) => {
-                        self.push_operand(
-                            Variable(identifier_str.token_spanned(tok.span_index)).self_spanning(),
-                        );
+                        self.parse_identifier(identifier_str, &tok);
                         was_operand = true;
                     }
                     Token::MemberAccessor => {
@@ -1614,6 +1671,23 @@ impl<'tok> Parser<'tok> {
                             BooleanValue(false, tok.span_index.get_span()).self_spanning(),
                         );
                         was_operand = true;
+                    }
+                    Token::Operator(Operator::Greater) => {
+                        //current is >, peek the next one to see if it's also > but don't move the cursor
+                        if let Token::Operator(Operator::Greater) = self.cur_offset(1).token {
+                            //it's a right shift
+                            self.push_operator(SpannedOperator(
+                                Operator::BitShiftRight,
+                                tok.span_index.get_span(),
+                            ));
+                            self.next(); //commits the right shift
+                        } else {
+                            self.push_operator(SpannedOperator(
+                                Operator::Greater,
+                                tok.span_index.get_span(),
+                            ));
+                        }
+
                     }
                     Token::Operator(o) => {
                         self.push_operator(SpannedOperator(o, tok.span_index.get_span()))
@@ -1776,6 +1850,82 @@ impl<'tok> Parser<'tok> {
         Ok(ParseExpressionResult { resulting_expr })
     }
 
+    fn parse_identifier(&mut self, identifier_str: InternedString, tok: &TokenData) {
+        //We are parsing an identifier. If we find <, we are parsing a generic function call, which *can* be followed by either () or (expr, expr, ..., expr).
+        self.new_stack();
+
+        self.next();
+        //simplest case: it's an identifier in the end of the line/file
+        if !self.can_call_cur_on_current_line() {
+            self.pop_stack();
+            self.push_operand(
+                Variable(identifier_str.token_spanned(tok.span_index)).self_spanning(),
+            );
+            return;
+        }
+        let mut type_parameters = vec![];
+        let cur = self.cur();
+        if let Token::Operator(Operator::Less) = cur.token {
+            //@TODO this parse_type_parameters only works for simple cases, like <T, U, V>, but not on more complex ones like List<List<T>> for instance
+            type_parameters = match self.parse_type_parameters() {
+                Ok(value) => value,
+                Err(_) => {
+                    self.pop_stack();
+                    self.push_operand(
+                        Variable(identifier_str.token_spanned(tok.span_index)).self_spanning(),
+                    );
+                    return;
+                }
+            };
+        }
+
+        if !self.can_call_cur_on_current_line()
+            && !type_parameters.is_empty()
+            && self.cur().token != Token::OpenParen
+        {
+            todo!("Make error reporting work here: expected ( for parameter list after generic types, type params: {type_parameters:?}");
+        }
+
+        if self.cur().token != Token::OpenParen && type_parameters.is_empty() {
+            self.pop_stack();
+            self.push_operand(
+                Variable(identifier_str.token_spanned(tok.span_index)).self_spanning(),
+            );
+            return;
+        }
+
+        self.next();
+
+        let params = if self.cur().token == Token::CloseParen {
+            vec![]
+        } else {
+            self.parse_comma_sep_list_expr()
+                .expect("Could not parse parameters for some reason")
+                .resulting_expr_list
+        };
+
+        if self.cur().token != Token::CloseParen {
+            todo!("Make error reporting work here: expected ) after parameter list");
+        }
+        let cur = self.cur();
+        self.push_operand(
+            Expr::FunctionCall(
+                ExprBox::new(
+                    Expr::Variable(identifier_str.token_spanned(tok.span_index)).self_spanning(),
+                ),
+                type_parameters
+                    .into_iter()
+                    .map(|x| ASTType::Simple(x))
+                    .collect(),
+                params,
+                cur.span_index.get_span(),
+            )
+            .self_spanning(),
+        );
+        let popped = self.pop_stack();
+        self.set_cur_for_expr(&popped);
+    }
+
     //expr, expr, ..., expr
     fn parse_comma_sep_list_expr(&mut self) -> Result<ParseListExpressionResult, ParsingError> {
         let mut expressions = vec![];
@@ -1802,7 +1952,8 @@ impl<'tok> Parser<'tok> {
         }
 
         if expressions.is_empty() {
-            return Err(ParsingError::ExprError(String::from("While parsing list of expressions: no expression was found. Deal with edge cases before calling this expr.")));
+            return Err(ParsingError::Fatal(
+                "While parsing list of expressions, no expression was found. This is an internal error of the compiler. The parser should check for closing parens or brackets before calling this function.".to_string()));
         }
 
         Ok(ParseListExpressionResult {
@@ -1891,7 +2042,7 @@ mod tests {
         INTERNER.with(|x| crate::ast::lexer::tokenize(FileTableIndex(0), str, x))
     }
 
-    use std::{assert_matches::assert_matches, ops::Deref};
+    use std::{assert_matches::assert_matches, ops::Deref, fmt::Binary};
 
     use crate::{
         ast::ast_printer::{print_ast, print_fully_parenthesized_ast},
@@ -1969,6 +2120,24 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn bitshift_right() {
+        let tokens = tokenize("x >> y").unwrap();
+        let result = parse(tokens);
+
+        assert!(match_deref! {
+            match &result.expr {
+                BinaryOperation(
+                    Deref @ Variable(Deref @ "x"),
+                    SpannedOperator(Operator::BitShiftRight, _),
+                    Deref @ Variable(Deref @ "y")
+                ) => true,
+                _ => panic!("Unexpected parsing output: {:#?}", result.expr)
+            }
+        });
+    }
+
     #[test]
     fn function_call_without_args() {
         let tokens = tokenize("some_identifier()").unwrap();
@@ -1976,7 +2145,7 @@ mod tests {
 
         assert!(match_deref! {
             match &result.expr {
-                FunctionCall(Deref @ Variable(Deref @ "some_identifier"), Deref @ [], _) => true,
+                FunctionCall(Deref @ Variable(Deref @ "some_identifier"),  Deref @ [],  Deref @ [], _) => true,
                 _ => panic!("Unexpected parsing output: {:#?}", result.expr)
             }
         });
@@ -1990,6 +2159,7 @@ mod tests {
             match &result.expr {
                 FunctionCall(
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [Deref @ IntegerValue(1, _)],
                     _
                 ) => true,
@@ -2006,6 +2176,7 @@ mod tests {
             match &result.expr {
                 FunctionCall(
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [Deref @ IntegerValue(1, _), Deref @ IntegerValue(2, _), Deref @ IntegerValue(3, _)],
                     _
                 ) => true,
@@ -2023,6 +2194,7 @@ mod tests {
             match &result.expr {
                 FunctionCall (
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [Deref @ BinaryOperation(
                         Deref @ IntegerValue(1, _),
                         SpannedOperator(Operator::Multiply, _),
@@ -2042,6 +2214,7 @@ mod tests {
             match &result.expr {
                 FunctionCall (
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [
                         Deref @ BinaryOperation(
                             Deref @ IntegerValue(1, _),
@@ -2069,9 +2242,11 @@ mod tests {
             match &result.expr {
                 FunctionCall (
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [
                         Deref @ FunctionCall(
                             Deref @ Variable(Deref @ "nested"),
+                            Deref @ [],
                             Deref @ [],
                             _
                         ),
@@ -2090,9 +2265,11 @@ mod tests {
             match &result.expr {
                 FunctionCall (
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [
                         Deref @ FunctionCall(
                             Deref @ Variable(Deref @ "nested"),
+                            Deref @ [],
                             Deref @ [
                                 Deref @ IntegerValue(1, _)
                             ],
@@ -2113,9 +2290,11 @@ mod tests {
             match &result.expr {
                 FunctionCall (
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [
                         Deref @ FunctionCall(
                             Deref @ Variable(Deref @ "nested"),
+                            Deref @ [],
                             Deref @ [
                                 Deref @ IntegerValue(1, _),
                                 Deref @ IntegerValue(2, _)
@@ -2137,9 +2316,11 @@ mod tests {
             match &result.expr {
                 FunctionCall (
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [
                         Deref @ FunctionCall(
                             Deref @ Variable(Deref @ "nested"),
+                            Deref @ [],
                             Deref @ [
                                 Deref @ BinaryOperation (
                                     Deref @ IntegerValue(1, _),
@@ -2172,9 +2353,11 @@ mod tests {
             match &result.expr {
                 FunctionCall (
                     Deref @ Variable (Deref @ "some_identifier"),
+                    Deref @ [],
                     Deref @ [
                         Deref @ FunctionCall(
                             Deref @ Variable(Deref @ "nested"),
+                            Deref @ [],
                             Deref @ [
                                 Deref @ IntegerValue(1, _),
                             ],
@@ -2186,6 +2369,11 @@ mod tests {
                  _ => false
             }
         });
+    }
+
+    #[test]
+    fn simple_less_than() {
+        parse_and_print_back_to_original("x < 1000000");
     }
 
     #[test]
@@ -2238,7 +2426,6 @@ mod tests {
     fn parse_and_print_back_to_original(source: &str) {
         let unindented = unindent(source);
         let tokens = tokenize(&unindented).unwrap();
-        println!("tokens: {:?}", tokens.tokens);
         let result = test_parse(tokens);
         let printed = INTERNER.with(|i| print_ast(&result, i));
         pretty_assertions::assert_eq!(printed.trim(), unindented.trim());
@@ -2318,6 +2505,17 @@ mod tests {
     #[test]
     fn tons_of_useless_parenthesis() {
         parse_and_compare("(((((((((1)))))))))", "1");
+    }
+
+    #[test]
+    fn parsing_bunch_of_gt_lt() {
+        parse_and_compare("<><> 2", "< > < > 2");
+    }
+
+
+    #[test]
+    fn bitshift_right_text() {
+        parse_and_compare("x >> y", "x >> y");
     }
 
     #[test]
@@ -2836,6 +3034,105 @@ print(x)"
 struct SomeStruct<T>:
     field: T
     otherfield: u64
+",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call() {
+        parse_and_print_back_to_original(
+            "List<T>()",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_multiple_generic_args() {
+        parse_and_print_back_to_original(
+            "List<T, U, V, X>()",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_param() {
+        parse_and_print_back_to_original(
+            "List<T>(x)",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_multiple_params() {
+        parse_and_print_back_to_original(
+            "List<T>(x, y, z)",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_multiple_params_and_generics() {
+        parse_and_print_back_to_original(
+            "List<T, U, V>(x, y, z)",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call() {
+        parse_and_print_back_to_original(
+            "make_fn<T, U, V>(x, y, z)()",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params() {
+        parse_and_print_back_to_original(
+            "make_fn<T, U, V>(x, y, z)(1, \"abc\")",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing() {
+        parse_and_print_back_to_original(
+            "make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary() {
+        parse_and_print_back_to_original(
+            "& make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]",
+        );
+    }
+
+    #[test]
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary_ref_minus() {
+        parse_and_print_back_to_original(
+            "- & make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]",
+        );
+    }
+
+
+    #[test]
+    fn binop_crazy_function_call() {
+        parse_and_print_back_to_original(
+            "make_fn<T, U, V>(x, y, z)(1, \"abc\")[0] * make_fn<X, Y, Z>(g, h, i)(2, \"def\")[1]",
+        );
+    }
+
+    #[test]
+    fn parse_function_generic() {
+        parse_and_print_back_to_original(
+            "
+        def list_new<T>() -> List<T>:
+            list = List<T>()
+            return list
+",
+        );
+    }
+
+    #[test]
+    fn parse_function_nested_generic() {
+        parse_and_print_back_to_original(
+            "
+    def count<T>(list: ptr<List<T>>) -> i32:
+        return 1
 ",
         );
     }

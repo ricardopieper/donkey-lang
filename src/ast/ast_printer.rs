@@ -1,6 +1,6 @@
 use crate::{ast::parser::ASTIfStatement, interner::StringInterner};
 
-use super::parser::{Expr, SpanAST, AST};
+use super::parser::{Expr, SpanAST, AST, StringSpan};
 
 pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -> String {
     match expr {
@@ -11,14 +11,25 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -
         Expr::BooleanValue(b, _) => if *b { "True" } else { "False" }.to_string(),
         Expr::NoneValue(_) => "None".to_string(),
         Expr::Variable(name) => interner.get_string(name.0),
-        Expr::FunctionCall(function_expr, params, _) => {
+        Expr::FunctionCall(function_expr, type_parameters, params, _) => {
             let call_expr_str = print_expr(function_expr, interner, parenthesized);
+            let generic_args = if !type_parameters.is_empty() {
+                let generic_args = type_parameters
+                    .iter()
+                    .map(|x| x.to_string(&interner))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("<{generic_args}>")
+            } else {
+                "".to_string()
+            };
+
             let args = params
                 .iter()
                 .map(|x| print_expr(&x.expr, interner, parenthesized))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{call_expr_str}({args})")
+            format!("{call_expr_str}{generic_args}({args})")
         }
         Expr::IndexAccess(indexed_expr, index_expr, _) => {
             let indexed_expr_str = print_expr(indexed_expr, interner, parenthesized);
@@ -186,11 +197,7 @@ fn print_ast_internal(
             let mut buf = "".to_string();
             let struct_name = interner.borrow(struct_name.0);
             if !type_parameters.is_empty() {
-                let generic_args = type_parameters
-                    .iter()
-                    .map(|x| interner.borrow(x.0))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let generic_args = join_comma_sep(type_parameters, interner);
                 buf.push_str(&format!("{indent}struct {struct_name}<{generic_args}>:"));
             } else {
                 buf.push_str(&format!("{indent}struct {struct_name}:"));
@@ -209,6 +216,7 @@ fn print_ast_internal(
             function_name,
             parameters,
             body,
+            type_parameters,
             return_type,
             is_varargs,
         } => {
@@ -232,11 +240,18 @@ fn print_ast_internal(
                 ""
             };
 
+            let generic_args = if !type_parameters.is_empty() {
+                let generic_args = join_comma_sep(type_parameters, interner);
+                format!("<{generic_args}>")
+            } else {
+                "".to_string()
+            };
+
             match return_type {
                 Some(x) => {
                     let return_type = x.to_string(interner);
                     buf.push_str(&format!(
-                        "{indent}def {function_name}({params}{comma_if_params}{varargs}) -> {return_type}:"
+                        "{indent}def {function_name}{generic_args}({params}{comma_if_params}{varargs}) -> {return_type}:"
                     ));
                 }
                 None => {
@@ -273,6 +288,14 @@ fn print_ast_internal(
                 .join("\n");
         }
     }
+}
+
+fn join_comma_sep(type_parameters: &[StringSpan], interner: &StringInterner) -> String {
+    type_parameters
+        .iter()
+        .map(|x| interner.borrow(x.0))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[allow(dead_code)]

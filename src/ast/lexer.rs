@@ -94,6 +94,8 @@ impl ToString for Operator {
             Operator::And => "and".into(),
             Operator::Or => "or".into(),
             Operator::Not => "not".into(),
+            Operator::BitShiftLeft => "<<".into(),
+            Operator::BitShiftRight => ">>".into(),
             _ => "operator_str doesn't implement this operator".into(),
         }
     }
@@ -214,7 +216,7 @@ impl PartialToken {
                 "/" => Token::Operator(Operator::Divide),
                 "^" => Token::Operator(Operator::Xor),
                 "<<" => Token::Operator(Operator::BitShiftLeft),
-                ">>" => Token::Operator(Operator::BitShiftRight),
+                //">>" => Token::Operator(Operator::BitShiftRight),
                 "==" => Token::Operator(Operator::Equals),
                 "->" => Token::ArrowRight,
                 "=" => Token::Assign,
@@ -527,7 +529,7 @@ impl<'interner> Tokenizer<'interner> {
         let mut token_table = TokenTable::new();
 
         let operators = &[
-            "+", "->", "-", "*", "%", "/", "<<", ">>", "<=", ">=", ">", "<", "!=", "==", "=", "^",
+            "+", "->", "-", "*", "%", "/", "<<", "<=", ">=", ">", "<", "!=", "==", "=", "^",
             "(", ")", "&", "...",
         ];
         while self.can_go() {
@@ -774,7 +776,11 @@ mod tests {
                 Token::Operator(Operator::Divide),
                 Token::Operator(Operator::Multiply),
                 Token::Operator(Operator::BitShiftLeft),
-                Token::Operator(Operator::BitShiftRight),
+                //>> is not a bitshift right because when we are parsing nested generics,
+                //the operator >> is used to close the generic, but we need to see 2 > tokens individually.
+                //For bitshift operators in actual expressions, we can peek the next one, see if is > too, and push a single BitShiftRight to the stack
+                Token::Operator(Operator::Greater),
+                Token::Operator(Operator::Greater),
                 Token::Operator(Operator::NotEquals),
                 Token::Operator(Operator::Equals),
                 Token::Operator(Operator::Minus),
