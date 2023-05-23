@@ -354,7 +354,7 @@ fn expr_to_hir<'source>(
         Expr::BooleanValue(b, _) => HIRExpr::Literal(LiteralHIRExpr::Boolean(*b), (), expr),
         Expr::NoneValue(_) => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
         Expr::Variable(name) => HIRExpr::Variable(name.0, (), expr),
-        Expr::FunctionCall(fun_expr, args, _) => match fun_expr.as_ref() {
+        Expr::FunctionCall(fun_expr, _, args, _) => match fun_expr.as_ref() {
             var @ Expr::Variable(_) => HIRExpr::FunctionCall(
                 expr_to_hir(var, interner, false).into(),
                 args.iter()
@@ -705,6 +705,7 @@ pub fn ast_globals_to_hir<'source>(
             function_name,
             parameters,
             body,
+            type_parameters,
             return_type,
             is_varargs,
         } => {
