@@ -6,16 +6,20 @@ use crate::ast::lexer::Operator;
 use crate::ast::parser::ASTIfStatement;
 use crate::ast::parser::SpanAST;
 use crate::ast::parser::SpannedOperator;
+use crate::ast::parser::StringSpan;
 use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 use crate::interner::PrintableInternedString;
 use crate::interner::StringInterner;
-use crate::types::type_constructor_db::GenericParameter;
-use crate::types::type_constructor_db::TypeUsage;
+use crate::types::type_constructor_db::TypeConstructParams;
+use crate::types::type_constructor_db::TypeParameter;
+use crate::types::type_constructor_db::Variadic;
 use crate::types::type_instance_db::TypeInstanceId;
 use crate::types::type_instance_db::TypeInstanceManager;
+
+use super::type_inference::TypeInferenceResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LiteralHIRExpr {
@@ -42,34 +46,45 @@ pub type HIRExprMetadata<'source> = &'source Expr;
  * Instead of having just one HIR representation, we have many different representations that are appropriate for each step.
  * For instance, in the type checker, we receive a fully type-inferred HIR instead of receiving one that potentially has
  * types not yet inferred. With generics, we ensure that this is not the case. In fact I had actual problems during development
- * with unexpected uninferred types, and this eliminated them using the Rust type system.
+ * with unexpected uninferred types, and this eliminated them using these types.
  *
  * HIR is for the function *bodies*, while `HIRRoot` is for function declarations, struct declarations, etc.
  */
 
-//The HIR right after AST transformation, no types. HIRExpr is () because the type certainly is unknown.
-pub type UninferredHIR<'source> = HIR<'source, HIRType, HIRExpr<'source, ()>>;
 
-//The HIR after expanding variable assignments into declarations the first time they're assigned. In this case
-//we create them as PendingInference. We also wrap given type declarations in a HIRTypeDef::Provided.
-pub type FirstAssignmentsDeclaredHIR<'source> = HIR<'source, HIRTypeDef, HIRExpr<'source, ()>>;
-
-//The HIR with types inferred already, ready for typechecking and MIR lowering
-pub type InferredTypeHIR<'source> = HIR<'source, TypeInstanceId, HIRExpr<'source, TypeInstanceId>>;
-
+//The HIR right after AST transformation, no types. TTypeData is () because the type certainly is unknown.
+//TUserSpecifiedTypeData is HIRType becase that's what the user types when they need to specify a type.
+pub type UninferredHIR<'source> = HIR<'source, HIRType, ()>;
 //HIR roots right after AST transformation
 pub type StartingHIRRoot<'source> = HIRRoot<'source, HIRType, UninferredHIR<'source>, HIRType>;
 
-//HIR roots after inferring and registering globals, bodies have not changed
-pub type GlobalsInferredMIRRoot<'source> =
-    HIRRoot<'source, TypeInstanceId, UninferredHIR<'source>, TypeUsage>;
 
-//HIR roots now with body changed, first assignments became declarations
+//HIR roots after inferring and registering globals, bodies have not changed (i.e. remain uninferred)
+pub type GlobalsInferredMIRRoot<'source> =
+    HIRRoot<'source, TypeInferenceResult, UninferredHIR<'source>, HIRType>;
+
+
+//The HIR after expanding variable assignments into declarations the first time they're assigned. In this case
+//we create them as PendingInference. We also wrap given type declarations by the user in a HIRTypeDef::Provided.
+//TUserSpecifiedTypeData is HIRTypeDef instead of just HIRType because when we transform a first assignment into a declaration,
+//the user didn't specify a type, and HIRTypeDef has a PendingInference variant. Maybe an Optional would be enough....
+pub type FirstAssignmentsDeclaredHIR<'source> = HIR<'source, HIRTypeDef, ()>;
+//HIR roots now with body changed, first assignments became declarations.
+//TGlobalTypes is TypeInferenceResult because I didn't want to create an entire new compiler step just to 
 pub type FirstAssignmentsDeclaredHIRRoot<'source> =
-    HIRRoot<'source, TypeInstanceId, FirstAssignmentsDeclaredHIR<'source>, TypeUsage>;
-//HIR roots with bodies fully inferred
+    HIRRoot<'source, TypeInferenceResult, FirstAssignmentsDeclaredHIR<'source>, HIRType>;
+
+
+
+//The HIR with types inferred
+pub type InferredTypeHIR<'source> = HIR<'source, TypeInferenceResult, TypeInferenceResult>;
+//HIR roots with bodies inferred
 pub type InferredTypeHIRRoot<'source> =
-    HIRRoot<'source, TypeInstanceId, InferredTypeHIR<'source>, TypeUsage>;
+    HIRRoot<'source, TypeInferenceResult, InferredTypeHIR<'source>, TypeInferenceResult>;
+
+pub type MonomorphizedHIR<'source> = HIR<'source, TypeInstanceId, TypeInstanceId>;
+pub type MonomorphizedHIRRoot<'source> =
+    HIRRoot<'source, TypeInstanceId, MonomorphizedHIR<'source>, TypeInstanceId>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRTypeDef {
@@ -77,83 +92,90 @@ pub enum HIRTypeDef {
     Provided(HIRType),
 }
 
+//This is for types that the user can give, like in function parameters, struct field types, or typed variable declarations.
+//This type can be generic and thus not immediatelly inferrable. Thus the user given type must survive until monomorphization.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NotChecked;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Checked;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NotCheckedSimplified;
+pub struct HIRUserTypeInfo<T> {
+    pub user_given_type: Option<HIRType>,
+    pub resolved_type: T
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HIRExpr<'source, TExprType, TTypechecked = NotChecked> {
-    Literal(LiteralHIRExpr, TExprType, HIRExprMetadata<'source>),
-    Variable(InternedString, TExprType, HIRExprMetadata<'source>),
+pub struct FunctionCall<'source, TTypeData> {
+    pub function: HIRExpr<'source, TTypeData>,
+    pub args: Vec<HIRExpr<'source, TTypeData>>,
+    pub type_args: Vec<HIRUserTypeInfo<TTypeData>>,
+    pub return_type: TTypeData,
+    pub meta_expr: HIRExprMetadata<'source>,
+    pub meta_ast: Option<HIRAstMetadata<'source>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HIRExpr<'source, TTypeData> {
+    Literal(LiteralHIRExpr, TTypeData, HIRExprMetadata<'source>),
+    Variable(InternedString, TTypeData, HIRExprMetadata<'source>),
     #[allow(dead_code)]
     Cast(
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
-        TExprType,
+        Box<HIRExpr<'source, TTypeData>>,
+        TTypeData,
         HIRExprMetadata<'source>,
     ),
     BinaryOperation(
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
+        Box<HIRExpr<'source, TTypeData>>,
         SpannedOperator,
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
-        TExprType,
+        Box<HIRExpr<'source, TTypeData>>,
+        TTypeData,
         HIRExprMetadata<'source>,
     ),
     //obj_expr, method_name, args:type, return type, metadata
     MethodCall(
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
+        Box<HIRExpr<'source, TTypeData>>,
         InternedString,
-        Vec<HIRExpr<'source, TExprType, TTypechecked>>,
-        TExprType,
+        Vec<HIRExpr<'source, TTypeData>>,
+        TTypeData,
         HIRExprMetadata<'source>,
     ),
-    //func_expr, args:type, return type, metadata
-    FunctionCall(
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
-        Vec<HIRExpr<'source, TExprType, TTypechecked>>,
-        TExprType,
-        HIRExprMetadata<'source>,
-    ),
-    StructInstantiate(TypeInstanceId, HIRExprMetadata<'source>),
+    //func_expr, args:type, return type, type_args, metadata
+    FunctionCall(Box<FunctionCall<'source, TTypeData>>),                  
+    //struct name, type args, $(args:type,)*, return type, metadata
+    //Only TExpr is actually needed in later stages, type args won't need to be inferred individually.
+    StructInstantiate(InternedString, Vec<HIRType>, TTypeData, HIRExprMetadata<'source>),
     Deref(
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
-        TExprType,
+        Box<HIRExpr<'source, TTypeData>>,
+        TTypeData,
         HIRExprMetadata<'source>,
     ),
     Ref(
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
-        TExprType,
+        Box<HIRExpr<'source, TTypeData>>,
+        TTypeData,
         HIRExprMetadata<'source>,
     ),
     UnaryExpression(
         SpannedOperator,
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
-        TExprType,
+        Box<HIRExpr<'source, TTypeData>>,
+        TTypeData,
         HIRExprMetadata<'source>,
     ),
     //obj, field, result_type, metadata
     MemberAccess(
-        Box<HIRExpr<'source, TExprType, TTypechecked>>,
+        Box<HIRExpr<'source, TTypeData>>,
         InternedString,
-        TExprType,
+        TTypeData,
         HIRExprMetadata<'source>,
     ),
     Array(
-        Vec<HIRExpr<'source, TExprType, TTypechecked>>,
-        TExprType,
+        Vec<HIRExpr<'source, TTypeData>>,
+        TTypeData,
         HIRExprMetadata<'source>,
-    ),
-    #[allow(dead_code)]
-    TypecheckTag(TTypechecked),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRType {
     Simple(InternedString),
     Generic(InternedString, Vec<HIRType>),
-    //Function(Vec<HIRType>, Box<HIRType>),
+    Function(Vec<TypeParameter>, Vec<HIRType>, Box<HIRType>, Variadic),
 }
 
 //we need to be able to represent complex stuff,
@@ -204,17 +226,17 @@ impl<'source, 'interner> Display for HIRTypeDisplayer<'source, 'interner> {
                 f.write_str(&comma_sep)?;
                 f.write_char('>')
             }
+            HIRType::Function(_, _, _, _) => f.write_str("Some Function, must implement display for HIRType::Function")
         }
     }
 }
 
-impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
-    pub fn get_type(&self) -> TypeInstanceId {
-        *match self {
+impl<'source, T: Clone> HIRExpr<'source, T> {
+    pub fn get_type(&self) -> T {
+        match self {
             HIRExpr::Literal(.., t, _)
             | HIRExpr::Cast(.., t, _)
             | HIRExpr::BinaryOperation(.., t, _)
-            | HIRExpr::FunctionCall(.., t, _)
             | HIRExpr::StructInstantiate(.., t, _)
             | HIRExpr::UnaryExpression(.., t, _)
             | HIRExpr::Deref(.., t, _)
@@ -222,8 +244,8 @@ impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
             | HIRExpr::MemberAccess(.., t, _)
             | HIRExpr::Array(.., t, _)
             | HIRExpr::MethodCall(.., t, _)
-            | HIRExpr::Variable(.., t, _) => t,
-            HIRExpr::TypecheckTag(_) => unreachable!(),
+            | HIRExpr::Variable(.., t, _) => t.clone(),
+            HIRExpr::FunctionCall(fcall) => fcall.return_type.clone()
         }
     }
 
@@ -255,16 +277,15 @@ impl<'source, T> HIRExpr<'source, TypeInstanceId, T> {
                 //the only way to create a reference to a member is if the object is an lvalue too
                 obj.is_lvalue(_type_db)
             }
-            HIRExpr::Array(..) => false,
-            HIRExpr::TypecheckTag(_) => false,
+            HIRExpr::Array(..) => false
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HIRTypedBoundName<TExprType> {
+pub struct HIRTypedBoundName<TTypeData> {
     pub name: InternedString,
-    pub typename: TExprType,
+    pub type_data: TTypeData,
 }
 
 /*
@@ -274,6 +295,7 @@ The HIR expression is similar to the AST, but can have type information on every
 pub enum HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType> {
     DeclareFunction {
         function_name: InternedString,
+        type_parameters: Vec<TypeParameter>,
         parameters: Vec<HIRTypedBoundName<TGlobalTypes>>,
         body: Vec<TBodyType>,
         return_type: TGlobalTypes,
@@ -283,61 +305,57 @@ pub enum HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType> {
     },
     StructDeclaration {
         struct_name: InternedString,
-        type_parameters: Vec<GenericParameter>,
+        type_parameters: Vec<TypeParameter>,
         fields: Vec<HIRTypedBoundName<TStructFieldsType>>,
         meta: HIRAstMetadata<'source>,
     },
 }
 
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HIR<'source, TVariableDeclType, TExprType> {
+pub enum HIR<'source, TUserSpecifiedTypeData, TInferredTypeData> {
     Assign {
-        path: TExprType,
-        expression: TExprType,
+        path: HIRExpr<'source, TInferredTypeData>,
+        expression: HIRExpr<'source, TInferredTypeData>,
         meta_ast: HIRAstMetadata<'source>,
         meta_expr: HIRExprMetadata<'source>,
     },
     Declare {
         var: InternedString,
-        typedef: TVariableDeclType,
-        expression: TExprType,
+        typedef: TUserSpecifiedTypeData,
+        expression: HIRExpr<'source, TInferredTypeData>,
         meta_ast: HIRAstMetadata<'source>,
         meta_expr: HIRExprMetadata<'source>,
     },
-    FunctionCall {
-        function: TExprType,
-        args: Vec<TExprType>,
-        meta_ast: HIRAstMetadata<'source>,
-        meta_expr: HIRExprMetadata<'source>,
-    },
+    FunctionCall(FunctionCall<'source, TInferredTypeData>),
     //condition, true branch, false branch
     //this transforms elifs into else: \n\t if ..
     If(
-        TExprType,
-        Vec<HIR<'source, TVariableDeclType, TExprType>>,
-        Vec<HIR<'source, TVariableDeclType, TExprType>>,
+        HIRExpr<'source, TInferredTypeData>,
+        Vec<HIR<'source, TUserSpecifiedTypeData, TInferredTypeData>>,
+        Vec<HIR<'source, TUserSpecifiedTypeData, TInferredTypeData>>,
         HIRAstMetadata<'source>,
     ),
     //condition, body
     While(
-        TExprType,
-        Vec<HIR<'source, TVariableDeclType, TExprType>>,
+        HIRExpr<'source, TInferredTypeData>,
+        Vec<HIR<'source, TUserSpecifiedTypeData, TInferredTypeData>>,
         HIRAstMetadata<'source>,
     ),
-    Return(TExprType, HIRAstMetadata<'source>),
+    Return(HIRExpr<'source, TInferredTypeData>, HIRAstMetadata<'source>),
     EmptyReturn(HIRAstMetadata<'source>),
 }
 
-struct IfTreeNode<'source, TDeclType, TExprType> {
-    condition: TExprType,
-    true_body: Vec<HIR<'source, TDeclType, TExprType>>,
+struct IfTreeNode<'source> {
+    condition: HIRExpr<'source, ()>,
+    true_body: Vec<HIR<'source, HIRType, ()>>,
     body_meta: &'source AST,
 }
 
 fn convert_expr_to_hir<'source>(
     expr: &'source Expr,
     interner: &StringInterner,
-) -> HIRExpr<'source, (), NotChecked> {
+) -> HIRExpr<'source, ()> {
     expr_to_hir(expr, interner, false)
 }
 
@@ -345,7 +363,7 @@ fn expr_to_hir<'source>(
     expr: &'source Expr,
     interner: &StringInterner,
     _is_in_assignment_lhs: bool,
-) -> HIRExpr<'source, (), NotChecked> {
+) -> HIRExpr<'source, ()> {
     match expr {
         Expr::IntegerValue(i, _) => HIRExpr::Literal(LiteralHIRExpr::Integer(*i), (), expr),
         Expr::FloatValue(f, _) => HIRExpr::Literal(LiteralHIRExpr::Float(*f), (), expr),
@@ -354,15 +372,20 @@ fn expr_to_hir<'source>(
         Expr::BooleanValue(b, _) => HIRExpr::Literal(LiteralHIRExpr::Boolean(*b), (), expr),
         Expr::NoneValue(_) => HIRExpr::Literal(LiteralHIRExpr::None, (), expr),
         Expr::Variable(name) => HIRExpr::Variable(name.0, (), expr),
-        Expr::FunctionCall(fun_expr, _, args, _) => match fun_expr.as_ref() {
-            var @ Expr::Variable(_) => HIRExpr::FunctionCall(
-                expr_to_hir(var, interner, false).into(),
-                args.iter()
-                    .map(|x| expr_to_hir(&x.expr, interner, false))
-                    .collect(),
-                (),
-                fun_expr,
-            ),
+        Expr::FunctionCall(fun_expr, type_args, args, _) => match fun_expr.as_ref() {
+            var @ Expr::Variable(_) => {
+                let fcall = FunctionCall {
+                    function: expr_to_hir(var, interner, false).into(),
+                    type_args: type_args.iter().map(|x| HIRUserTypeInfo { user_given_type: Some(x.into()), resolved_type: () }).collect(),
+                    args: args.iter()
+                        .map(|x| expr_to_hir(&x.expr, interner, false))
+                        .collect(),
+                    return_type: (),
+                    meta_expr: &fun_expr,
+                    meta_ast: None
+                };
+                HIRExpr::FunctionCall(fcall.into())
+            }
             Expr::MemberAccess(obj, var_name) => HIRExpr::MethodCall(
                 expr_to_hir(obj, interner, false).into(),
                 var_name.0,
@@ -478,17 +501,14 @@ fn ast_to_hir<'source>(
                 panic!("Can only lower function call standalone expr: {expr:#?}");
             };
 
-            let result_expr = convert_expr_to_hir(expr, interner);
-            let HIRExpr::FunctionCall(function, args, ..) = result_expr else {
+            let result_expr: HIRExpr<'source, ()> = convert_expr_to_hir(expr, interner);
+            let HIRExpr::FunctionCall(mut fcall) = result_expr else {
                 panic!("Lowering of function call returned invalid result: {result_expr:?}");
             };
+    
+            fcall.meta_ast = Some(ast);
 
-            accum.push(HIR::FunctionCall {
-                function: *function,
-                args: args.to_vec(),
-                meta_ast: ast,
-                meta_expr: expr,
-            });
+            accum.push(HIR::FunctionCall(*fcall));
         }
         AST::IfStatement {
             true_branch,
@@ -508,6 +528,7 @@ fn ast_to_hir<'source>(
 fn ast_decl_function_to_hir<'source>(
     body: &'source [SpanAST],
     function_name: InternedString,
+    type_parameters: &'source [StringSpan],
     parameters: &'source [TypeBoundName],
     return_type: &Option<ASTType>,
     is_varargs: bool,
@@ -519,6 +540,7 @@ fn ast_decl_function_to_hir<'source>(
         if let AST::Intrinsic(_) = &body[0].ast {
             accum.push(HIRRoot::DeclareFunction {
                 function_name,
+                type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
                 parameters: create_type_bound_names(parameters),
                 body: vec![],
                 is_intrinsic: true,
@@ -541,6 +563,7 @@ fn ast_decl_function_to_hir<'source>(
     let decl_hir: StartingHIRRoot = HIRRoot::DeclareFunction {
         function_name,
         parameters: create_type_bound_names(parameters),
+        type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
         body: function_body,
         is_intrinsic: false,
         is_varargs,
@@ -562,7 +585,7 @@ fn create_type_bound_names(parameters: &[TypeBoundName]) -> Vec<HIRTypedBoundNam
 fn create_type_bound_name(param: &TypeBoundName) -> HIRTypedBoundName<HIRType> {
     HIRTypedBoundName {
         name: param.name.0,
-        typename: (&param.name_type).into(),
+        type_data: (&param.name_type).into(),
     }
 }
 
@@ -712,6 +735,7 @@ pub fn ast_globals_to_hir<'source>(
             ast_decl_function_to_hir(
                 body,
                 function_name.0,
+                type_parameters,
                 parameters,
                 return_type,
                 *is_varargs,
@@ -736,7 +760,7 @@ pub fn ast_globals_to_hir<'source>(
                 fields,
                 type_parameters: type_parameters
                     .iter()
-                    .map(|x| GenericParameter(x.0))
+                    .map(|x| TypeParameter(x.0))
                     .collect(),
                 meta: ast,
             });

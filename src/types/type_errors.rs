@@ -1,6 +1,7 @@
 use crate::ast::lexer::TokenSpanIndex;
 use crate::ast::parser::Spanned;
 use crate::interner::{InternedString, StringInterner};
+use crate::semantic::compiler_errors::CompilerError;
 use crate::semantic::context::{FileTableEntry, FileTableIndex};
 
 use crate::semantic::mir::{MIRExpr, MIRExprLValue};
@@ -8,7 +9,7 @@ use crate::semantic::mir_printer::MIRExprPrinter;
 use crate::{
     ast::lexer::Operator,
     semantic::{
-        hir::{Checked, HIRExprMetadata, HIRType, HIRTypeDisplayer},
+        hir::{HIRExprMetadata, HIRType, HIRTypeDisplayer},
         hir_type_resolution::RootElementType,
         type_checker::FunctionName,
     },
@@ -17,60 +18,78 @@ use std::fmt::Display;
 
 use super::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
 
-pub struct TypeErrorData<T>
+pub trait ErrorReporter {
+    fn report<T: CompilerErrorData>(&self, error: T, span: &impl Spanned, compiler_code_location: &'static str) -> CompilerErrorContext<T>;
+}
+
+#[macro_export]
+macro_rules! report {
+    ($self:ident, $span:expr, $error:expr) => {
+        $self.report($error, $span, loc!())
+    };
+}
+
+pub struct CompilerErrorContext<T>
 where
-    T: TypeError,
+    T: CompilerErrorData,
 {
     pub error: T,
     pub on_element: RootElementType,
     pub file: FileTableIndex,
     pub location: TokenSpanIndex,
+    pub compiler_code_location: &'static str,
 }
 
-pub trait TypeError {}
+pub trait CompilerErrorData {}
 
-pub trait TypeErrorAtLocation<T: TypeError> {
+pub trait ContextualizedCompilerError<T: CompilerErrorData> {
     fn at(
         self,
         on_element: RootElementType,
         file: FileTableIndex,
         location: TokenSpanIndex,
-    ) -> TypeErrorData<T>;
-    fn at_spanned<S: Spanned>(
+        compiler_code_location:  &'static str,
+    ) -> CompilerErrorContext<T>;
+
+    fn at_spanned(
         self,
         on_element: RootElementType,
         file: FileTableIndex,
-        span: &S,
-    ) -> TypeErrorData<T>;
+        span: &impl Spanned,
+        compiler_code_location:  &'static str,
+    ) -> CompilerErrorContext<T>;
 }
 
-impl<T: Sized + TypeError> TypeErrorAtLocation<T> for T {
+impl<T: Sized + CompilerErrorData> ContextualizedCompilerError<T> for T {
     fn at(
         self,
         on_element: RootElementType,
         file: FileTableIndex,
         location: TokenSpanIndex,
-    ) -> TypeErrorData<T> {
-        TypeErrorData {
+        compiler_code_location:  &'static str,
+    ) -> CompilerErrorContext<T> {
+        CompilerErrorContext {
             error: self,
             on_element,
             file,
             location,
+            compiler_code_location
         }
     }
 
-    fn at_spanned<S: Spanned>(
+    fn at_spanned(
         self,
         on_element: RootElementType,
         file: FileTableIndex,
-        span: &S,
-    ) -> TypeErrorData<T> {
+        span: &impl Spanned,
+        compiler_code_location: &'static str, 
+    ) -> CompilerErrorContext<T> {
         let span = span.get_span();
-        self.at(on_element, file, span.start)
+        self.at(on_element, file, span.start, compiler_code_location)
     }
 }
 
-pub trait TypeErrorDisplay {
+pub trait CompilerErrorDisplay {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -84,13 +103,13 @@ pub struct TypeMismatch<TContext> {
     pub expected: TypeInstanceId,
     pub actual: TypeInstanceId,
 }
-impl<T> TypeError for TypeMismatch<T> {}
+impl<T> CompilerErrorData for TypeMismatch<T> {}
 
 pub struct AssignContext<'source> {
-    pub assign_lvalue_expr: MIRExprLValue<'source, Checked>,
+    pub assign_lvalue_expr: MIRExprLValue<'source>,
 }
 
-impl<'source> TypeErrorDisplay for TypeErrorData<TypeMismatch<AssignContext<'source>>> {
+impl<'source> CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<AssignContext<'source>>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -109,7 +128,7 @@ impl<'source> TypeErrorDisplay for TypeErrorData<TypeMismatch<AssignContext<'sou
 
 pub struct ReturnTypeContext();
 
-impl TypeErrorDisplay for TypeErrorData<TypeMismatch<ReturnTypeContext>> {
+impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<ReturnTypeContext>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -131,7 +150,7 @@ pub struct FunctionCallContext {
     pub argument_position: usize,
 }
 
-impl TypeErrorDisplay for TypeErrorData<TypeMismatch<FunctionCallContext>> {
+impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<FunctionCallContext>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -173,9 +192,9 @@ pub struct FunctionCallArgumentCountMismatch {
     pub expected_count: usize,
     pub passed_count: usize,
 }
-impl TypeError for FunctionCallArgumentCountMismatch {}
+impl CompilerErrorData for FunctionCallArgumentCountMismatch {}
 
-impl TypeErrorDisplay for TypeErrorData<FunctionCallArgumentCountMismatch> {
+impl CompilerErrorDisplay for CompilerErrorContext<FunctionCallArgumentCountMismatch> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -207,32 +226,39 @@ impl TypeErrorDisplay for TypeErrorData<FunctionCallArgumentCountMismatch> {
 }
 
 pub struct CallToNonCallableType {
-    pub actual_type: TypeInstanceId,
+    pub actual_type: Option<TypeInstanceId>,
 }
-impl TypeError for CallToNonCallableType {}
+impl CompilerErrorData for CallToNonCallableType {}
 
-impl TypeErrorDisplay for TypeErrorData<CallToNonCallableType> {
+impl CompilerErrorDisplay for CompilerErrorContext<CallToNonCallableType> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
         interner: &StringInterner,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        write!(
-            f,
-            "{on_element}, call to non-callable type {non_callable_type_name}",
-            on_element = self.on_element.diag_name(interner),
-            non_callable_type_name = self.error.actual_type.as_string(type_db),
-        )
+        match self.error.actual_type {
+            Some(type_id) => write!(
+                f,
+                "{on_element}, call to non-callable type {non_callable_type_name}",
+                on_element = self.on_element.diag_name(interner),
+                non_callable_type_name = type_id.as_string(type_db)
+            ),
+            None => write!(
+                f,
+                "{on_element}, call to non-callable type",
+                on_element = self.on_element.diag_name(interner),
+            ),
+        }
     }
 }
 
 pub struct TypeNotFound {
     pub type_name: HIRType,
 }
-impl TypeError for TypeNotFound {}
+impl CompilerErrorData for TypeNotFound {}
 
-impl TypeErrorDisplay for TypeErrorData<TypeNotFound> {
+impl CompilerErrorDisplay for CompilerErrorContext<TypeNotFound> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -251,9 +277,9 @@ impl TypeErrorDisplay for TypeErrorData<TypeNotFound> {
 pub struct TypePromotionFailure {
     pub target_type: TypeInstanceId,
 }
-impl TypeError for TypePromotionFailure {}
+impl CompilerErrorData for TypePromotionFailure {}
 
-impl TypeErrorDisplay for TypeErrorData<TypePromotionFailure> {
+impl CompilerErrorDisplay for CompilerErrorContext<TypePromotionFailure> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -272,9 +298,9 @@ impl TypeErrorDisplay for TypeErrorData<TypePromotionFailure> {
 pub struct UnexpectedTypeFound {
     pub type_def: TypeInstanceId,
 }
-impl TypeError for UnexpectedTypeFound {}
+impl CompilerErrorData for UnexpectedTypeFound {}
 
-impl TypeErrorDisplay for TypeErrorData<UnexpectedTypeFound> {
+impl CompilerErrorDisplay for CompilerErrorContext<UnexpectedTypeFound> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -294,9 +320,9 @@ pub struct OutOfTypeBounds<'source> {
     pub typ: TypeInstanceId,
     pub expr: HIRExprMetadata<'source>,
 }
-impl TypeError for OutOfTypeBounds<'_> {}
+impl CompilerErrorData for OutOfTypeBounds<'_> {}
 
-impl<'source> TypeErrorDisplay for TypeErrorData<OutOfTypeBounds<'source>> {
+impl<'source> CompilerErrorDisplay for CompilerErrorContext<OutOfTypeBounds<'source>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -314,12 +340,12 @@ impl<'source> TypeErrorDisplay for TypeErrorData<OutOfTypeBounds<'source>> {
 }
 
 pub struct InvalidCast<'source> {
-    pub expr: MIRExpr<'source, Checked>,
+    pub expr: MIRExpr<'source>,
     pub cast_to: TypeInstanceId,
 }
-impl TypeError for InvalidCast<'_> {}
+impl CompilerErrorData for InvalidCast<'_> {}
 
-impl<'source> TypeErrorDisplay for TypeErrorData<InvalidCast<'source>> {
+impl<'source> CompilerErrorDisplay for CompilerErrorContext<InvalidCast<'source>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -342,9 +368,9 @@ pub struct BinaryOperatorNotFound {
     pub rhs: TypeInstanceId,
     pub operator: Operator,
 }
-impl TypeError for BinaryOperatorNotFound {}
+impl CompilerErrorData for BinaryOperatorNotFound {}
 
-impl TypeErrorDisplay for TypeErrorData<BinaryOperatorNotFound> {
+impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFound> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -366,9 +392,9 @@ pub struct UnaryOperatorNotFound {
     pub rhs: TypeInstanceId,
     pub operator: Operator,
 }
-impl TypeError for UnaryOperatorNotFound {}
+impl CompilerErrorData for UnaryOperatorNotFound {}
 
-impl TypeErrorDisplay for TypeErrorData<UnaryOperatorNotFound> {
+impl CompilerErrorDisplay for CompilerErrorContext<UnaryOperatorNotFound> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -389,9 +415,9 @@ pub struct FieldOrMethodNotFound {
     pub object_type: TypeInstanceId,
     pub field_or_method: InternedString,
 }
-impl TypeError for FieldOrMethodNotFound {}
+impl CompilerErrorData for FieldOrMethodNotFound {}
 
-impl TypeErrorDisplay for TypeErrorData<FieldOrMethodNotFound> {
+impl CompilerErrorDisplay for CompilerErrorContext<FieldOrMethodNotFound> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -409,9 +435,9 @@ impl TypeErrorDisplay for TypeErrorData<FieldOrMethodNotFound> {
 }
 
 pub struct InsufficientTypeInformationForArray {}
-impl TypeError for InsufficientTypeInformationForArray {}
+impl CompilerErrorData for InsufficientTypeInformationForArray {}
 
-impl TypeErrorDisplay for TypeErrorData<InsufficientTypeInformationForArray> {
+impl CompilerErrorDisplay for CompilerErrorContext<InsufficientTypeInformationForArray> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -429,9 +455,9 @@ impl TypeErrorDisplay for TypeErrorData<InsufficientTypeInformationForArray> {
 pub struct ArrayExpressionsNotAllTheSameType {
     pub expected_type: TypeInstanceId,
 }
-impl TypeError for ArrayExpressionsNotAllTheSameType {}
+impl CompilerErrorData for ArrayExpressionsNotAllTheSameType {}
 
-impl TypeErrorDisplay for TypeErrorData<ArrayExpressionsNotAllTheSameType> {
+impl CompilerErrorDisplay for CompilerErrorContext<ArrayExpressionsNotAllTheSameType> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -450,9 +476,9 @@ impl TypeErrorDisplay for TypeErrorData<ArrayExpressionsNotAllTheSameType> {
 pub struct IfStatementNotBoolean {
     pub actual_type: TypeInstanceId,
 }
-impl TypeError for IfStatementNotBoolean {}
+impl CompilerErrorData for IfStatementNotBoolean {}
 
-impl TypeErrorDisplay for TypeErrorData<IfStatementNotBoolean> {
+impl CompilerErrorDisplay for CompilerErrorContext<IfStatementNotBoolean> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -471,9 +497,9 @@ impl TypeErrorDisplay for TypeErrorData<IfStatementNotBoolean> {
 pub struct TypeInferenceFailure {
     pub variable: String,
 }
-impl TypeError for TypeInferenceFailure {}
+impl CompilerErrorData for TypeInferenceFailure {}
 
-impl TypeErrorDisplay for TypeErrorData<TypeInferenceFailure> {
+impl CompilerErrorDisplay for CompilerErrorContext<TypeInferenceFailure> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -492,11 +518,11 @@ impl TypeErrorDisplay for TypeErrorData<TypeInferenceFailure> {
 pub struct UnexpectedTypeInferenceMismatch<'source> {
     pub inferred: TypeInstanceId,
     pub checked: TypeInstanceId,
-    pub expr: MIRExpr<'source, Checked>,
+    pub expr: MIRExpr<'source>,
 }
-impl TypeError for UnexpectedTypeInferenceMismatch<'_> {}
+impl CompilerErrorData for UnexpectedTypeInferenceMismatch<'_> {}
 
-impl<'source> TypeErrorDisplay for TypeErrorData<UnexpectedTypeInferenceMismatch<'source>> {
+impl<'source> CompilerErrorDisplay for CompilerErrorContext<UnexpectedTypeInferenceMismatch<'source>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -517,9 +543,9 @@ impl<'source> TypeErrorDisplay for TypeErrorData<UnexpectedTypeInferenceMismatch
 pub struct InternalError {
     pub error: String,
 }
-impl TypeError for InternalError {}
+impl CompilerErrorData for InternalError {}
 
-impl TypeErrorDisplay for TypeErrorData<InternalError> {
+impl CompilerErrorDisplay for CompilerErrorContext<InternalError> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -538,9 +564,9 @@ impl TypeErrorDisplay for TypeErrorData<InternalError> {
 pub struct TypeConstructionFailure {
     pub error: TypeConstructionError,
 }
-impl TypeError for TypeConstructionFailure {}
+impl CompilerErrorData for TypeConstructionFailure {}
 
-impl TypeErrorDisplay for TypeErrorData<TypeConstructionFailure> {
+impl CompilerErrorDisplay for CompilerErrorContext<TypeConstructionFailure> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -556,6 +582,10 @@ impl TypeErrorDisplay for TypeErrorData<TypeConstructionFailure> {
                     format!("Type not found: {}", interner.borrow(name)),
                 TypeConstructionError::IncorrectNumberOfArgs { expected, received } =>
                     format!("Incorrect number of args: expected {expected}, received {received}"),
+                TypeConstructionError::InsufficientInformation =>
+                    "Insufficient information to construct type".into(),
+                TypeConstructionError::InvalidTypeConstructionArguments =>
+                    "Invalid type construction arguments".into(),
             }
         )
     }
@@ -564,9 +594,9 @@ impl TypeErrorDisplay for TypeErrorData<TypeConstructionFailure> {
 pub struct VariableNotFound {
     pub variable_name: InternedString,
 }
-impl TypeError for VariableNotFound {}
+impl CompilerErrorData for VariableNotFound {}
 
-impl TypeErrorDisplay for TypeErrorData<VariableNotFound> {
+impl CompilerErrorDisplay for CompilerErrorContext<VariableNotFound> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -583,9 +613,9 @@ impl TypeErrorDisplay for TypeErrorData<VariableNotFound> {
 }
 
 pub struct AssignToNonLValueError {}
-impl TypeError for AssignToNonLValueError {}
+impl CompilerErrorData for AssignToNonLValueError {}
 
-impl TypeErrorDisplay for TypeErrorData<AssignToNonLValueError> {
+impl CompilerErrorDisplay for CompilerErrorContext<AssignToNonLValueError> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -603,9 +633,9 @@ impl TypeErrorDisplay for TypeErrorData<AssignToNonLValueError> {
 pub struct DerefOnNonPointerError {
     pub attempted_type: TypeInstanceId,
 }
-impl TypeError for DerefOnNonPointerError {}
+impl CompilerErrorData for DerefOnNonPointerError {}
 
-impl TypeErrorDisplay for TypeErrorData<DerefOnNonPointerError> {
+impl CompilerErrorDisplay for CompilerErrorContext<DerefOnNonPointerError> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager<'_>,
@@ -622,9 +652,9 @@ impl TypeErrorDisplay for TypeErrorData<DerefOnNonPointerError> {
 }
 
 pub struct VarargsNotSupported {}
-impl TypeError for VarargsNotSupported {}
+impl CompilerErrorData for VarargsNotSupported {}
 
-impl TypeErrorDisplay for TypeErrorData<VarargsNotSupported> {
+impl CompilerErrorDisplay for CompilerErrorContext<VarargsNotSupported> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -640,9 +670,9 @@ impl TypeErrorDisplay for TypeErrorData<VarargsNotSupported> {
 }
 
 pub struct RefOnNonLValueError {}
-impl TypeError for RefOnNonLValueError {}
+impl CompilerErrorData for RefOnNonLValueError {}
 
-impl TypeErrorDisplay for TypeErrorData<RefOnNonLValueError> {
+impl CompilerErrorDisplay for CompilerErrorContext<RefOnNonLValueError> {
     fn fmt_err(
         &self,
         _type_db: &TypeInstanceManager<'_>,
@@ -657,12 +687,63 @@ impl TypeErrorDisplay for TypeErrorData<RefOnNonLValueError> {
     }
 }
 
+#[derive(Debug)]
+pub struct ReportToken(
+    //this is private because we don't want outside code to construct this struct directly
+    std::marker::PhantomData<()>
+);
+
+impl ReportToken {
+    pub fn as_type_inference_error<T>(self) ->  Result<T, crate::types::type_errors::CompilerError> {
+        Err(crate::types::type_errors::CompilerError::TypeInferenceError(self))
+    }
+    pub fn as_type_check_error<T>(self) -> Result<T, crate::types::type_errors::CompilerError> {
+        Err(crate::types::type_errors::CompilerError::TypeCheckError(self))
+    }
+}
+
+pub struct CompilerErrorList<T: CompilerErrorData> {
+    pub errors: Vec<CompilerErrorContext<T>>,
+}
+
+impl<T: CompilerErrorData> CompilerErrorList<T> {
+    pub fn new() -> CompilerErrorList<T> {
+        CompilerErrorList { errors: vec![] }
+    }
+
+    pub fn len(&self) -> usize {
+        self.errors.len()
+    }
+
+    pub fn push(&mut self, error: CompilerErrorContext<T>) -> ReportToken {
+        self.errors.push(error);
+        ReportToken(std::marker::PhantomData)
+    }
+
+    pub fn push_inference_error<R>(&mut self, error: CompilerErrorContext<T>) -> Result<R, CompilerError> {
+        self.errors.push(error);
+        Err(CompilerError::TypeInferenceError(ReportToken(std::marker::PhantomData)))
+    }
+
+    pub fn push_typecheck_error<R>(&mut self, error: CompilerErrorContext<T>) -> Result<R, CompilerError> {
+        self.errors.push(error);
+        Err(CompilerError::TypeCheckError(ReportToken(std::marker::PhantomData)))
+    }
+}
+
+impl<T, Idx> std::ops::Index<Idx> for CompilerErrorList<T> where T: CompilerErrorData, Idx: std::slice::SliceIndex<[CompilerErrorContext<T>]> {
+    type Output = Idx::Output;
+
+    fn index(&self, index: Idx) -> &Self::Output {
+        return &self.errors[index];
+    }
+}
 macro_rules! make_type_errors {
     ($($field:ident = $typename:ty), *) => {
 
         pub struct TypeErrors<'source>{
             $(
-                pub $field: Vec<TypeErrorData<$typename>>,
+                pub $field: CompilerErrorList<$typename>,
             )*
         }
 
@@ -670,7 +751,7 @@ macro_rules! make_type_errors {
             pub fn new() -> TypeErrors<'source> {
                 TypeErrors {
                     $(
-                        $field: vec![],
+                        $field: CompilerErrorList::new(),
                     )*
                 }
             }
@@ -688,7 +769,7 @@ macro_rules! make_type_errors {
                     return Ok(());
                 }
                 $(
-                    for err in self.errors.$field.iter() {
+                    for err in self.errors.$field.errors.iter() {
                         let file = &self.file_table[err.file.0];
                         let file_name = &file.path;
                         let tok = file.token_table.tokens[err.location.0];
@@ -698,6 +779,7 @@ macro_rules! make_type_errors {
                         write!(f, "{file_name}:{line}:{column}: ")?;
                         err.fmt_err(self.type_db, self.interner, f)?;
                         write!(f, "\n")?;
+                        write!(f, "Error generated at {}\n", err.compiler_code_location)?;
                     }
                 )*
 

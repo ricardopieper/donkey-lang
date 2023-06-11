@@ -6,7 +6,7 @@ pub mod hir_printer;
 pub mod hir_type_resolution;
 pub mod mir;
 pub mod mir_printer;
-pub mod name_registry;
+pub mod top_level_decls;
 pub mod struct_instantiations;
 pub mod type_checker;
 pub mod type_inference;

@@ -26,30 +26,90 @@ pub enum TypeSign {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GenericParameter(pub InternedString);
+pub struct TypeParameter(pub InternedString);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeConstructorFunctionDeclaration {
     pub name: InternedString,
     //pub type_args: Vec<GenericParameter>,
-    pub args: Vec<TypeUsage>,
-    pub return_type: TypeUsage,
+    pub args: Vec<TypeConstructParams>,
+    pub return_type: TypeConstructParams,
     pub is_variadic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeConstructorFieldDeclaration {
     pub name: InternedString,
-    pub field_type: TypeUsage,
+    pub field_type: TypeConstructParams,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Variadic(pub bool);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionSignature<TExpr> {
+    pub generics: Vec<TypeParameter>,
+    pub params: Vec<TExpr>,
+    pub return_type: Box<TExpr>, //boxed so that we can use it in a recursive type
+    pub variadic: Variadic,
 }
 
 //A type usage informs how the user used a type in a given context, Parameter types may not be known in case of generics.
 //This type may be copied a bunch of times but usually it should be cheap, since it's all references...
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeUsage {
+pub enum TypeConstructParams {
     Given(TypeConstructorId),
-    Generic(GenericParameter),
-    Parameterized(TypeConstructorId, Vec<TypeUsage>), //on generics, the base root type has to be known
+    Generic(TypeParameter),
+    //generics, params, return
+    //@TODO I think this FunctionSignature doesn't really belong here....
+    FunctionSignature(FunctionSignature<TypeConstructParams>),
+    //on generics when the base root type is not known. This is basically the HIRType.
+    //The base shouldn't really be a FunctionSignature, never...
+    Parameterized(Box<TypeConstructParams>, Vec<TypeConstructParams>), 
+}
+
+impl TypeConstructParams {
+    pub fn to_string(&self, type_db: &TypeConstructorDatabase) -> String {
+        let interner = &type_db.interner;
+        match self {
+            TypeConstructParams::Given(id) => type_db.find(*id).name.to_string(interner),
+            TypeConstructParams::Generic(generic) => format!("generic {}", generic.0.to_string(interner)),
+            TypeConstructParams::Parameterized(id, args) => {
+                let mut s = id.to_string(type_db);// type_db.find(*id).name.to_string(interner);
+                s.push('<');
+                for arg in args {
+                    s.push_str(&arg.to_string(type_db));
+                    s.push(',');
+                }
+                s.push('>');
+                s
+            }
+            TypeConstructParams::FunctionSignature(FunctionSignature{generics, params, return_type, ..}) => {
+                let mut s = String::new();
+                s.push_str("fn");
+                if !generics.is_empty() {
+                    s.push('<');
+                    for param in generics {
+                        s.push_str("generic ");
+                        s.push_str(&param.0.to_string(interner));
+                        s.push_str(", ");
+                    }
+                    s.push('>')
+                }
+               
+                s.push_str("(");
+                for param in params {
+                    s.push_str(&param.to_string(type_db));
+                    s.push_str(", ");
+                }
+                s.push_str("): ");
+                
+                s.push_str(&return_type.to_string(type_db));
+               
+                s
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,13 +119,13 @@ pub struct TypeConstructor {
     pub sign: TypeSign,
     pub name: InternedString,
     //Type args are just Generic parameters, in the future we can add type bounds, in which we would add a Type enum here as well
-    pub type_args: Vec<GenericParameter>,
+    pub type_args: Vec<TypeParameter>,
     //these fields inform type capabilities, i.e. operators it can deal with, fields and functions it has if its a struct, types it can be casted to, etc
-    pub allowed_casts: Vec<TypeUsage>,
+    pub allowed_casts: Vec<TypeConstructParams>,
     //operator, rhs_type, result_type, for now cannot be generic
-    pub rhs_binary_ops: Vec<(Operator, TypeUsage, TypeUsage)>,
+    pub rhs_binary_ops: Vec<(Operator, TypeConstructParams, TypeConstructParams)>,
     //operator, result_type, for now cannot be generic
-    pub unary_ops: Vec<(Operator, TypeUsage)>,
+    pub unary_ops: Vec<(Operator, TypeConstructParams)>,
     //fields (name, type)
     pub fields: Vec<TypeConstructorFieldDeclaration>,
     //method (name, args, return type)
@@ -133,8 +193,8 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         &mut self,
         type_id: TypeConstructorId,
         operator: Operator,
-        rhs_type: TypeUsage,
-        result_type: TypeUsage,
+        rhs_type: TypeConstructParams,
+        result_type: TypeConstructParams,
     ) {
         let record = self.types.get_mut(type_id.0).unwrap();
         record
@@ -146,7 +206,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         &mut self,
         kind: TypeKind,
         name: InternedString,
-        type_args: Vec<GenericParameter>,
+        type_args: Vec<TypeParameter>,
         _rep_size: Option<Bytes>,
     ) -> TypeConstructorId {
         let next_id = TypeConstructorId(self.types.len());
@@ -170,7 +230,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         &mut self,
         type_id: TypeConstructorId,
         operator: Operator,
-        result_type: TypeUsage,
+        result_type: TypeConstructParams,
     ) {
         let record = self.types.get_mut(type_id.0).unwrap();
         record.unary_ops.push((operator, result_type));
@@ -205,74 +265,74 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.add_binary_operator(
             type_id,
             Operator::Plus,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(type_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(type_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::Multiply,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(type_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(type_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::Minus,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(type_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(type_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::Divide,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(type_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(type_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::Mod,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(type_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(type_id),
         );
 
         let bool_id = self.find_by_name(self.interner.get("bool")).unwrap().id;
         self.add_binary_operator(
             type_id,
             Operator::Equals,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(bool_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::NotEquals,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(bool_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::Less,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(bool_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::LessEquals,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(bool_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::Greater,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(bool_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::GreaterEquals,
-            TypeUsage::Given(type_id),
-            TypeUsage::Given(bool_id),
+            TypeConstructParams::Given(type_id),
+            TypeConstructParams::Given(bool_id),
         );
 
-        self.add_unary_operator(type_id, Operator::Plus, TypeUsage::Given(type_id));
-        self.add_unary_operator(type_id, Operator::Minus, TypeUsage::Given(type_id));
+        self.add_unary_operator(type_id, Operator::Plus, TypeConstructParams::Given(type_id));
+        self.add_unary_operator(type_id, Operator::Minus, TypeConstructParams::Given(type_id));
 
         type_id
     }
@@ -295,7 +355,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         let record = self.types.get_mut(type_id.0).unwrap();
         record.fields.push(TypeConstructorFieldDeclaration {
             name,
-            field_type: TypeUsage::Given(field_type),
+            field_type: TypeConstructParams::Given(field_type),
         });
     }
 
@@ -303,7 +363,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         &mut self,
         type_id: TypeConstructorId,
         name: InternedString,
-        type_usage: TypeUsage,
+        type_usage: TypeConstructParams,
     ) {
         let record = self.types.get_mut(type_id.0).unwrap();
         record.fields.push(TypeConstructorFieldDeclaration {
@@ -378,7 +438,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
                 size: Bytes::size_of::<usize>(),
             },
             istr("ptr"),
-            vec![GenericParameter(istr("TPtr"))],
+            vec![TypeParameter(istr("TPtr"))],
             Some(Bytes::size_of::<usize>()),
         );
         self.common_types.ptr = ptr_type;
@@ -387,7 +447,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         let arr_type = self.add_generic(
             TypeKind::Struct,
             istr("array"),
-            vec![GenericParameter(istr("TItem"))],
+            vec![TypeParameter(istr("TItem"))],
             Some(Bytes::size_of::<usize>() + Bytes::size_of::<u32>()),
         );
 
@@ -403,10 +463,10 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             arr_type,
             TypeConstructorFunctionDeclaration {
                 name: istr("__index_ptr__"),
-                args: vec![TypeUsage::Given(u32_type)],
-                return_type: TypeUsage::Parameterized(
-                    ptr_type,
-                    vec![TypeUsage::Generic(GenericParameter(istr("TItem")))],
+                args: vec![TypeConstructParams::Given(u32_type)],
+                return_type: TypeConstructParams::Parameterized(
+                    TypeConstructParams::Given(ptr_type).into(),
+                    vec![TypeConstructParams::Generic(TypeParameter(istr("TItem")))],
                 ),
                 is_variadic: false,
             },

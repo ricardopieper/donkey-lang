@@ -4,7 +4,7 @@ use crate::interner::{InternedString, StringInterner};
 use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
 use super::type_constructor_db::{
-    TypeConstructor, TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeUsage,
+    TypeConstructor, TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeConstructParams, FunctionSignature,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -12,6 +12,8 @@ pub enum TypeConstructionError {
     TypeNotFound { name: InternedString },
     //GenericArgumentNotFound { name: String },
     IncorrectNumberOfArgs { expected: usize, received: usize },
+    InsufficientInformation,
+    InvalidTypeConstructionArguments,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -46,6 +48,7 @@ impl Default for TypeInstanceId {
     }
 }
 
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeInstanceStructMethod {
     pub name: InternedString,
@@ -68,7 +71,7 @@ pub struct TypeInstance {
     pub is_variadic: bool,
     //only valid if this is a function
     pub function_args: Vec<TypeInstanceId>,
-    //only valid if this is a function
+    //only valid if this is a function, and if it's a function this is always Some(...)
     pub function_return_type: Option<TypeInstanceId>,
     pub is_method_of: Option<TypeInstanceId>,
     //these fields inform type capabilities, i.e. operators it can deal with, fields and functions it has if its a struct, types it can be casted to, etc
@@ -82,7 +85,7 @@ pub struct TypeInstance {
     //method (name, args, return type)
     pub methods: Vec<TypeInstanceStructMethod>,
     //The arguments used in the type constructor
-    pub type_args: Vec<TypeInstanceId>,
+    pub type_args: Vec<TypeInstanceId>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -228,7 +231,7 @@ impl<'interner> TypeInstanceManager<'interner> {
 
     pub fn construct_usage(
         &mut self,
-        usage: &TypeUsage,
+        usage: &TypeConstructParams,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
@@ -248,23 +251,52 @@ impl<'interner> TypeInstanceManager<'interner> {
     */
     pub fn construct_usage_generic(
         &mut self,
-        usage: &TypeUsage,
+        usage: &TypeConstructParams,
         type_args: &HashMap<InternedString, TypeInstanceId>,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         match usage {
-            TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
-            TypeUsage::Generic(param) => type_args
+            TypeConstructParams::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
+            TypeConstructParams::Generic(param) => type_args
                 .get(&param.0)
                 .ok_or(TypeConstructionError::TypeNotFound { name: param.0 })
                 .map(|op| *op),
-            TypeUsage::Parameterized(constructor_id, params) => {
-                let mut constructed = vec![];
+            TypeConstructParams::Parameterized(base, params) => {
+                match **base {
+                    TypeConstructParams::Given(constructor_id) => {
+                        let mut constructed = vec![];
 
-                for item in params.iter() {
-                    let type_id = self.construct_usage_generic(item, type_args)?;
-                    constructed.push(type_id);
+                        for item in params.iter() {
+                            let type_id = self.construct_usage_generic(item, type_args)?;
+                            constructed.push(type_id);
+                        }
+                        self.construct_type(constructor_id, &constructed)
+                    }
+                    TypeConstructParams::Generic(_) => {
+                        //@TODO maybe in some cases there *is* enough information, we have a map of type args after all.
+                        //But the more likely case is that monomorphization will run and then types will be able to be constructed
+                        //(i.e. the base  will become Given instead of Generic)
+                        //so we just need to return a flag saying we can't construct it yet
+                        Err(TypeConstructionError::InsufficientInformation)
+                    }
+                    TypeConstructParams::FunctionSignature(_) =>Err(TypeConstructionError::InvalidTypeConstructionArguments),
+                    TypeConstructParams::Parameterized(_, _) => Err(TypeConstructionError::InvalidTypeConstructionArguments)
                 }
-                self.construct_type(*constructor_id, &constructed)
+            }
+            TypeConstructParams::FunctionSignature(FunctionSignature { generics, params, return_type, variadic }) => {
+                //if at this point the function has type arguments, it means it hasn't been 
+                //monomorphized yet, so we can't construct it
+                if !generics.is_empty() {
+                    return Err(TypeConstructionError::InsufficientInformation);
+                }
+                
+                let params_constructed = params
+                    .iter()
+                    .map(|x| self.construct_usage_generic(x, type_args))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let return_type_constructed = self.construct_usage_generic(return_type, type_args)?;
+
+                Ok(self.construct_function(&params_constructed, return_type_constructed, variadic.0))
             }
         }
     }
@@ -467,12 +499,13 @@ impl<'interner> TypeInstanceManager<'interner> {
                 .sum()
         }
     }
+    
 
     fn init_builtin(&mut self) {
         macro_rules! make_type {
             ($type:tt) => {
                 self.common_types.$type = self
-                    .construct_usage(&TypeUsage::Given(self.constructors.common_types.$type))
+                    .construct_usage(&TypeConstructParams::Given(self.constructors.common_types.$type))
                     .unwrap();
             };
         }

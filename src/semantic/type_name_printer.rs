@@ -2,7 +2,7 @@ use crate::{
     interner::StringInterner,
     semantic::hir::HIRType,
     types::{
-        type_constructor_db::TypeUsage,
+        type_constructor_db::TypeConstructParams,
         type_instance_db::{TypeInstanceId, TypeInstanceManager},
     },
 };
@@ -16,17 +16,13 @@ impl TypeNamePrinter for TypeInstanceId {
     }
 }
 
-impl TypeNamePrinter for TypeUsage {
+impl TypeNamePrinter for TypeConstructParams {
     fn print_name(&self, type_db: &TypeInstanceManager, interner: &StringInterner) -> String {
         match self {
-            TypeUsage::Given(id) => type_db.constructors.get_name(*id),
-            TypeUsage::Generic(parameter) => parameter.0.to_string(interner),
-            TypeUsage::Parameterized(constructor, parameters) => {
-                let root = type_db
-                    .constructors
-                    .find(*constructor)
-                    .name
-                    .to_string(interner);
+            TypeConstructParams::Given(id) => type_db.constructors.get_name(*id),
+            TypeConstructParams::Generic(parameter) => parameter.0.to_string(interner),
+            TypeConstructParams::Parameterized(constructor, parameters) => {
+                let base_name = constructor.print_name(type_db, interner);
 
                 let params = parameters
                     .iter()
@@ -34,7 +30,41 @@ impl TypeNamePrinter for TypeUsage {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                format!("{root}<{params}>")
+                format!("{base_name}<{params}>")
+            }
+            TypeConstructParams::FunctionSignature(call) => {
+                let params = call
+                    .params
+                    .iter()
+                    .map(|x| x.print_name(type_db, interner))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let generic = call
+                    .generics
+                    .iter()
+                    .map(|x| x.0.to_string(interner))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let variadic_str = if call.variadic.0 { "..." } else { "" };
+                let variadic_str = if params.is_empty() {
+                    variadic_str.to_string()
+                } else {
+                    format!(", {}", variadic_str)
+                };
+
+                let type_args_str = if generic.is_empty() {
+                    String::new()
+                } else {
+                    format!("<{generic}>")
+                };
+
+                let return_type = call
+                    .return_type
+                    .print_name(type_db, interner);
+
+                format!("fn {type_args_str}({params}{variadic_str}) -> {return_type}")
             }
         }
     }
@@ -69,6 +99,20 @@ impl TypeNamePrinter for HIRType {
                     slice_types_str(g, type_db, interner)
                 )
             }
+            HIRType::Function(type_args, params, return_type, variadic) => {
+                let type_args_str = type_args.iter().map(|x| x.0.to_string(interner)).collect::<Vec<_>>().join(", ");
+                let params_str = slice_types_str(params, type_db, interner);
+                let return_type_str = return_type.print_name(type_db, interner);
+                let variadic_str = if variadic.0 { "..." } else { "" };
+                let type_args_str = if type_args_str.is_empty() {
+                    String::new()
+                } else {
+                    format!("<{type_args_str}>")
+                };
+                format!(
+                    "UNRESOLVED fn <{type_args_str}>({params_str} {variadic_str}) -> {return_type_str}"
+                )
+            }  
         }
     }
 }

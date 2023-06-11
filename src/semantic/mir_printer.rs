@@ -18,7 +18,7 @@ impl<'interner, 'type_db> MIRExprPrinter<'interner, 'type_db> {
         Self { interner, type_db }
     }
 
-    pub fn print<T>(&self, expr: &MIRExpr<T>) -> String {
+    pub fn print(&self, expr: &MIRExpr) -> String {
         match expr {
             MIRExpr::LValue(expr) => self.print_lvalue(expr),
 
@@ -71,11 +71,10 @@ impl<'interner, 'type_db> MIRExprPrinter<'interner, 'type_db> {
             MIRExpr::RValue(MIRExprRValue::Ref(expr, ..)) => {
                 format!("&{}", self.print_lvalue(expr))
             }
-            MIRExpr::TypecheckTag(_) => panic!("TypecheckTag should not be in MIR"),
         }
     }
 
-    pub fn print_lvalue<T>(&self, expr: &MIRExprLValue<T>) -> String {
+    pub fn print_lvalue(&self, expr: &MIRExprLValue) -> String {
         match expr {
             MIRExprLValue::Variable(s, ..) => s.to_string(self.interner),
             MIRExprLValue::MemberAccess(obj, elem, ..) => {
@@ -100,8 +99,8 @@ impl<'interner, 'type_db> MIRExprPrinter<'interner, 'type_db> {
 
 use crate::interner::StringInterner;
 
-fn print_mir_block<T>(
-    block: &MIRBlock<T>,
+fn print_mir_block(
+    block: &MIRBlock,
     interner: &StringInterner,
     type_db: &TypeInstanceManager,
 ) -> String {
@@ -184,8 +183,8 @@ fn print_mir_scope(
     buffer
 }
 
-fn print_mir_str<T>(
-    node: &MIRTopLevelNode<T>,
+fn print_mir_str(
+    node: &MIRTopLevelNode,
     type_db: &TypeInstanceManager,
     interner: &StringInterner,
 ) -> String {
@@ -256,8 +255,8 @@ fn print_mir_str<T>(
     }
 }
 
-pub fn print_mir<T>(
-    mir: &[MIRTopLevelNode<T>],
+pub fn print_mir(
+    mir: &[MIRTopLevelNode],
     type_db: &TypeInstanceManager,
     interner: &StringInterner,
 ) -> String {
@@ -269,8 +268,8 @@ pub fn print_mir<T>(
 }
 
 #[allow(dead_code)]
-pub fn print_mir_node<T>(
-    mir: &MIRTopLevelNode<T>,
+pub fn print_mir_node(
+    mir: &MIRTopLevelNode,
     type_db: &TypeInstanceManager,
     interner: &StringInterner,
 ) -> String {

@@ -3,22 +3,22 @@ use std::collections::VecDeque;
 use super::compiler_errors::CompilerError;
 use super::context::FileTableIndex;
 use super::hir::{
-    Checked, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
-    InferredTypeHIRRoot, LiteralHIRExpr, NotCheckedSimplified, HIR,
+    HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, MonomorphizedHIR,
+    LiteralHIRExpr, HIR, MonomorphizedHIRRoot, FunctionCall,
 };
 use super::hir_type_resolution::RootElementType;
 use crate::ast::parser::SpannedOperator;
 use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 
-use crate::types::type_errors::{DerefOnNonPointerError, TypeErrorAtLocation, TypeErrors};
+use crate::types::type_errors::{DerefOnNonPointerError, ContextualizedCompilerError, TypeErrors};
 use crate::{
     ast::parser::{Expr, AST},
     types::type_instance_db::TypeInstanceId,
 };
 
-pub type TypecheckPendingExpression<'source> = MIRExpr<'source, NotCheckedSimplified>;
-pub type TypecheckedExpression<'source> = MIRExpr<'source, Checked>;
+pub type TypecheckPendingExpression<'source> = MIRExpr<'source>;
+pub type TypecheckedExpression<'source> = MIRExpr<'source>;
 
 pub type MIRExprMetadata<'source> = &'source Expr;
 pub type MIRAstMetadata<'source> = &'source AST;
@@ -33,22 +33,22 @@ pub enum LiteralMIRExpr {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRExprLValue<'source, TTypechecked> {
+pub enum MIRExprLValue<'source> {
     Variable(InternedString, TypeInstanceId, MIRExprMetadata<'source>),
     MemberAccess(
-        Box<MIRExpr<'source, TTypechecked>>,
+        Box<MIRExpr<'source>>,
         InternedString,
         TypeInstanceId,
         MIRExprMetadata<'source>,
     ),
     Deref(
-        Box<MIRExpr<'source, TTypechecked>>,
+        Box<MIRExpr<'source>>,
         //This type is the dereferenced type, i.e. if the original is ptr<u8>, this is u8
         TypeInstanceId,
         MIRExprMetadata<'source>,
     ),
 }
-impl<T> MIRExprLValue<'_, T> {
+impl MIRExprLValue<'_> {
     pub fn get_type(&self) -> TypeInstanceId {
         match self {
             MIRExprLValue::Variable(_, type_id, _) => *type_id,
@@ -63,58 +63,56 @@ impl<T> MIRExprLValue<'_, T> {
 //Maybe we can just nuke it.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRExprRValue<'source, TTypechecked> {
+pub enum MIRExprRValue<'source> {
     Literal(LiteralMIRExpr, TypeInstanceId, MIRExprMetadata<'source>),
     BinaryOperation(
-        Box<MIRExpr<'source, TTypechecked>>,
+        Box<MIRExpr<'source>>,
         SpannedOperator,
-        Box<MIRExpr<'source, TTypechecked>>,
+        Box<MIRExpr<'source>>,
         TypeInstanceId,
         MIRExprMetadata<'source>,
     ),
     //obj_expr, method_name, args:type, return type, metadata
     MethodCall(
-        Box<MIRExpr<'source, TTypechecked>>,
+        Box<MIRExpr<'source>>,
         InternedString,
-        Vec<MIRExpr<'source, TTypechecked>>,
+        Vec<MIRExpr<'source>>,
         TypeInstanceId,
         MIRExprMetadata<'source>,
     ),
     FunctionCall(
-        Box<MIRExprLValue<'source, TTypechecked>>,
-        Vec<MIRExpr<'source, TTypechecked>>,
+        Box<MIRExprLValue<'source>>,
+        Vec<MIRExpr<'source>>,
         TypeInstanceId,
         MIRExprMetadata<'source>,
     ),
     StructInstantiate(TypeInstanceId, MIRExprMetadata<'source>),
     Ref(
         //you can only ref an lvalue
-        Box<MIRExprLValue<'source, TTypechecked>>,
+        Box<MIRExprLValue<'source>>,
         TypeInstanceId,
         MIRExprMetadata<'source>,
     ),
     UnaryExpression(
         SpannedOperator,
-        Box<MIRExpr<'source, TTypechecked>>,
+        Box<MIRExpr<'source>>,
         TypeInstanceId,
         MIRExprMetadata<'source>,
     ),
     Array(
-        Vec<MIRExpr<'source, TTypechecked>>,
+        Vec<MIRExpr<'source>>,
         TypeInstanceId,
         MIRExprMetadata<'source>,
     ),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRExpr<'source, TTypechecked> {
-    RValue(MIRExprRValue<'source, TTypechecked>),
-    LValue(MIRExprLValue<'source, TTypechecked>),
-    #[allow(dead_code)]
-    TypecheckTag(TTypechecked),
+pub enum MIRExpr<'source> {
+    RValue(MIRExprRValue<'source>),
+    LValue(MIRExprLValue<'source>),
 }
 
-impl<'source, T> MIRExpr<'source, T> {
+impl MIRExpr<'_> {
     pub fn get_type(&self) -> TypeInstanceId {
         match self {
             MIRExpr::RValue(rvalue_expr) => match rvalue_expr {
@@ -128,7 +126,6 @@ impl<'source, T> MIRExpr<'source, T> {
                 MIRExprRValue::StructInstantiate(type_id, _) => *type_id,
             },
             MIRExpr::LValue(lvalue) => lvalue.get_type(),
-            MIRExpr::TypecheckTag(_) => panic!("Cannot get type of a typecheck tag"),
         }
     }
 }
@@ -149,7 +146,7 @@ A MIRTopLevelNode is a top-level declaration. They are not executable per se (do
 but represent the main parts of the program.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRTopLevelNode<'source, TTypecheckStateExpr> {
+pub enum MIRTopLevelNode<'source> {
     IntrinsicFunction {
         function_name: InternedString,
         parameters: Vec<MIRTypedBoundName>,
@@ -159,7 +156,7 @@ pub enum MIRTopLevelNode<'source, TTypecheckStateExpr> {
     DeclareFunction {
         function_name: InternedString,
         parameters: Vec<MIRTypedBoundName>,
-        body: Vec<MIRBlock<'source, TTypecheckStateExpr>>,
+        body: Vec<MIRBlock<'source>>,
         scopes: Vec<MIRScope>,
         return_type: TypeInstanceId,
     },
@@ -175,17 +172,17 @@ A MIRFunctionNode represents nodes inside a block. They can be executed within t
 a scope and a block.
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRBlockNode<'source, TTypecheckState> {
+pub enum MIRBlockNode<'source> {
     Assign {
-        path: MIRExprLValue<'source, TTypecheckState>,
-        expression: MIRExpr<'source, TTypecheckState>,
+        path: MIRExprLValue<'source>,
+        expression: MIRExpr<'source>,
         meta_ast: &'source AST,
         meta_expr: &'source Expr,
     },
     FunctionCall {
         //@TODO maybe it should be an lvalue expr...
         function: InternedString,
-        args: Vec<MIRExpr<'source, TTypecheckState>>,
+        args: Vec<MIRExpr<'source>>,
         meta_ast: &'source AST,
         meta_expr: &'source Expr,
         return_type: TypeInstanceId,
@@ -219,16 +216,16 @@ pub struct MIRScope {
 
 /*MIRBlockFinal specifies how a block ends: in a goto, branch, or a return. */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MIRBlockFinal<'source, TTypecheckState> {
+pub enum MIRBlockFinal<'source> {
     //expression, true, else, meta
     If(
-        MIRExpr<'source, TTypecheckState>,
+        MIRExpr<'source>,
         BlockId,
         BlockId,
         MIRAstMetadata<'source>,
     ),
     GotoBlock(BlockId),
-    Return(MIRExpr<'source, TTypecheckState>, MIRAstMetadata<'source>),
+    Return(MIRExpr<'source>, MIRAstMetadata<'source>),
     EmptyReturn(MIRAstMetadata<'source>),
 }
 
@@ -240,23 +237,23 @@ pub enum MIRBlockFinal<'source, TTypecheckState> {
 
 */
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MIRBlock<'source, TTypecheckState> {
+pub struct MIRBlock<'source> {
     pub index: usize,
     pub scope: ScopeId,
-    pub finish: MIRBlockFinal<'source, TTypecheckState>,
-    pub nodes: Vec<MIRBlockNode<'source, TTypecheckState>>,
+    pub finish: MIRBlockFinal<'source>,
+    pub nodes: Vec<MIRBlockNode<'source>>,
 }
 
-pub type TypecheckedMIRBlock<'source> = MIRBlock<'source, Checked>;
+pub type TypecheckedMIRBlock<'source> = MIRBlock<'source>;
 
 //returns the simplified expression, and whether the expression was simplified at all. Can be called until no simplification is possible.
 //In theory this could do constant folding, but we're just removing &* and *&
-fn simplify_expression<T>(
-    expr: HIRExpr<'_, TypeInstanceId, T>,
-) -> (HIRExpr<'_, TypeInstanceId, NotCheckedSimplified>, bool) {
+fn simplify_expression(
+    expr: HIRExpr<'_, TypeInstanceId>,
+) -> (HIRExpr<'_, TypeInstanceId>, bool) {
     match expr {
         HIRExpr::Literal(literal, ty, meta) => (HIRExpr::Literal(literal, ty, meta), false),
-        HIRExpr::StructInstantiate(expr, meta) => (HIRExpr::StructInstantiate(expr, meta), false),
+        HIRExpr::StructInstantiate(expr, type_args, ty, meta) => (HIRExpr::StructInstantiate(expr, type_args, ty, meta), false),
         HIRExpr::Variable(var_name, ty, meta) => (HIRExpr::Variable(var_name, ty, meta), false),
         //@TODO casting a literal to a type can be optimized here, just change the inferred type instead of generating an actual cast
         HIRExpr::Cast(expr, ty, meta) => {
@@ -283,14 +280,16 @@ fn simplify_expression<T>(
                 simplified,
             )
         }
-        HIRExpr::FunctionCall(function, args, ty, meta) => {
-            let (function, simplified_function) = simplify_expression(*function);
+        HIRExpr::FunctionCall(call) => {
+            let FunctionCall { function, args, type_args, return_type, meta_expr, meta_ast } = *call;
+            let (function, simplified_function) = simplify_expression(function);
             let (args, simplified_args): (Vec<_>, Vec<_>) =
                 args.into_iter().map(|arg| simplify_expression(arg)).unzip();
             let simplified =
                 simplified_function || simplified_args.iter().any(|simplified| *simplified);
             (
-                HIRExpr::FunctionCall(function.into(), args, ty, meta),
+                //HIRExpr::FunctionCall(function.into(), ty_args, args, ty, meta),
+                HIRExpr::FunctionCall(FunctionCall { function, args, type_args, return_type, meta_expr, meta_ast }.into()),
                 simplified,
             )
         }
@@ -339,16 +338,15 @@ fn simplify_expression<T>(
             let simplified = simplified_items.iter().any(|simplified| *simplified);
             (HIRExpr::Array(items, ty, meta), simplified)
         }
-        HIRExpr::TypecheckTag(_) => panic!("TypecheckTag should have been removed by now"),
     }
 }
 
-fn hir_expr_to_mir<'a, T>(
+fn hir_expr_to_mir<'a>(
     file: FileTableIndex,
     element: RootElementType,
-    expr: HIRExpr<'a, TypeInstanceId, T>,
+    expr: HIRExpr<'a, TypeInstanceId>,
     errors: &mut TypeErrors<'a>,
-) -> Result<MIRExpr<'a, NotCheckedSimplified>, CompilerError> {
+) -> Result<MIRExpr<'a>, CompilerError> {
     let (mut current_expr, mut simplified) = simplify_expression(expr);
     loop {
         if !simplified {
@@ -362,16 +360,14 @@ macro_rules! expect_lvalue {
     ($element:expr, $file:expr, $expr:expr, $errors:expr, $meta:expr) => {
         match $expr {
             MIRExpr::RValue(_) => {
-                $errors.invalid_derefed_type.push(
+                return $errors.invalid_derefed_type.push(
                     DerefOnNonPointerError {
                         attempted_type: $expr.get_type(),
                     }
-                    .at_spanned($element, $file, $meta),
-                );
-                return Err(CompilerError::TypeCheckError);
+                    .at_spanned($element, $file, $meta, loc!()),
+                ).as_type_check_error();
             }
-            MIRExpr::LValue(lvalue) => lvalue,
-            MIRExpr::TypecheckTag(_) => unreachable!(),
+            MIRExpr::LValue(lvalue) => lvalue
         }
     };
 }
@@ -379,9 +375,9 @@ macro_rules! expect_lvalue {
 fn convert_expr_to_mir<'a>(
     file: FileTableIndex,
     element: RootElementType,
-    expr: HIRExpr<'a, TypeInstanceId, NotCheckedSimplified>,
+    expr: HIRExpr<'a, TypeInstanceId>,
     errors: &mut TypeErrors<'a>,
-) -> Result<MIRExpr<'a, NotCheckedSimplified>, CompilerError> {
+) -> Result<MIRExpr<'a>, CompilerError> {
     match expr {
         HIRExpr::Literal(literal, ty, meta) => {
             let mir_literal: LiteralMIRExpr = match literal {
@@ -428,20 +424,21 @@ fn convert_expr_to_mir<'a>(
                 meta,
             )))
         }
-        HIRExpr::FunctionCall(function_expr, args, ty, meta) => {
-            let function_expr = hir_expr_to_mir(file, element, *function_expr, errors)?;
+        HIRExpr::FunctionCall(fcall) => {
+            let FunctionCall { function, args, type_args, return_type, meta_expr, meta_ast } = *fcall;
+            let function_expr = hir_expr_to_mir(file, element, function, errors)?;
             let args: Result<Vec<_>, _> = args
                 .into_iter()
                 .map(|arg| hir_expr_to_mir(file, element, arg, errors))
                 .collect();
 
-            let function_lvalue = expect_lvalue!(element, file, function_expr, errors, meta);
+            let function_lvalue = expect_lvalue!(element, file, function_expr, errors, meta_expr);
 
             Ok(MIRExpr::RValue(MIRExprRValue::FunctionCall(
                 function_lvalue.into(),
                 args?,
-                ty,
-                meta,
+                return_type,
+                meta_expr,
             )))
         }
         HIRExpr::Deref(expr, ty, meta) => {
@@ -484,17 +481,16 @@ fn convert_expr_to_mir<'a>(
                 .collect();
             Ok(MIRExpr::RValue(MIRExprRValue::Array(items?, ty, meta)))
         }
-        HIRExpr::StructInstantiate(ty, meta) => {
+        HIRExpr::StructInstantiate(_name, _typeargs, ty, meta) => {
             Ok(MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, meta)))
         }
-        HIRExpr::TypecheckTag(_) => panic!("TypecheckTag should have been removed by now"),
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CodegenJobType<'source> {
-    List(Vec<InferredTypeHIR<'source>>),
-    Group(Vec<InferredTypeHIR<'source>>),
+    List(Vec<MonomorphizedHIR<'source>>),
+    Group(Vec<MonomorphizedHIR<'source>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -518,7 +514,7 @@ pub struct MIRFunctionEmitter<'source, 'errors> {
     errors: &'errors mut TypeErrors<'source>,
     root_ast: HIRAstMetadata<'source>,
     queue: VecDeque<CodegenJob<'source>>,
-    blocks: Vec<MIRBlock<'source, NotCheckedSimplified>>,
+    blocks: Vec<MIRBlock<'source>>,
     scopes: Vec<MIRScope>,
     empty_return_block: Option<BlockId>,
 }
@@ -544,14 +540,14 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
 
     pub fn run(
         &mut self,
-        body: Vec<InferredTypeHIR<'source>>,
+        body: Vec<MonomorphizedHIR<'source>>,
         parameters: Vec<HIRTypedBoundName<TypeInstanceId>>,
     ) -> Result<(), CompilerError> {
         //the function has a starting scope, create it
         let starting_scope = self.create_scope(ScopeId(0));
         //add all parameters to the scope 0
         for param in parameters.iter() {
-            self.scope_add_variable(starting_scope, param.name, param.typename);
+            self.scope_add_variable(starting_scope, param.name, param.type_data);
             //   self.scopes[0].boundnames.push(MIRTypedBoundName { name: param.name, type_instance: param.typename });
         }
 
@@ -610,11 +606,11 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
         });
     }
 
-    fn emit(&mut self, block: BlockId, node: MIRBlockNode<'source, NotCheckedSimplified>) {
+    fn emit(&mut self, block: BlockId, node: MIRBlockNode<'source>) {
         self.blocks[block.0].nodes.push(node);
     }
 
-    fn finish_with(&mut self, block: BlockId, node: MIRBlockFinal<'source, NotCheckedSimplified>) {
+    fn finish_with(&mut self, block: BlockId, node: MIRBlockFinal<'source>) {
         self.blocks[block.0].finish = node;
     }
 
@@ -633,14 +629,14 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                 //  - if it's a variable declaration, we need to create a new scope, and the next groups must use it instead, even if they are in the same indentation level.
                 //  - if it's a if/while, we need to create a new scope for their inner contents
 
-                let mut groups: Vec<Vec<InferredTypeHIR<'source>>> = vec![];
-                let mut current_group: Vec<InferredTypeHIR<'source>> = vec![];
+                let mut groups: Vec<Vec<MonomorphizedHIR<'source>>> = vec![];
+                let mut current_group: Vec<MonomorphizedHIR<'source>> = vec![];
 
                 for item in items {
                     match item {
-                        item @ (InferredTypeHIR::If(..)
-                        | InferredTypeHIR::While(..)
-                        | InferredTypeHIR::Declare { .. }) => {
+                        item @ (MonomorphizedHIR::If(..)
+                        | MonomorphizedHIR::While(..)
+                        | MonomorphizedHIR::Declare { .. }) => {
                             current_group.push(item);
                             groups.push(current_group);
                             current_group = vec![];
@@ -721,6 +717,7 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                                             self.function_name,
                                             self.file,
                                             meta_expr,
+                                            loc!()
                                         ),
                                     );
                                 }
@@ -742,15 +739,16 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                                     );
                                     //will return with the default finish
                                 }
-                                MIRExpr::TypecheckTag(_) => unreachable!(),
                             }
                         }
-                        HIR::FunctionCall {
+                        HIR::FunctionCall(FunctionCall {
                             function,
+                            type_args,
                             args,
                             meta_ast,
                             meta_expr,
-                        } => match &function {
+                            return_type
+                        }) => match &function {
                             HIRExpr::Variable(var, function_type, ..) => {
                                 let pending_args: Result<Vec<_>, _> = args
                                     .into_iter()
@@ -769,9 +767,9 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                                     MIRBlockNode::FunctionCall {
                                         function: *var,
                                         args: pending_args?,
-                                        meta_ast,
+                                        meta_ast: meta_ast.unwrap(),
                                         meta_expr,
-                                        return_type: *function_type,
+                                        return_type,
                                     },
                                 );
                                 //will return with the default finish
@@ -945,14 +943,15 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
 
 pub fn hir_to_mir<'source>(
     file: FileTableIndex,
-    hir_nodes: Vec<InferredTypeHIRRoot<'source>>,
+    hir_nodes: Vec<MonomorphizedHIRRoot<'source>>,
     errors: &mut TypeErrors<'source>,
-) -> Result<Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>, CompilerError> {
+) -> Result<Vec<MIRTopLevelNode<'source>>, CompilerError> {
     let mut top_levels = vec![];
     for hir in hir_nodes {
         match hir {
             HIRRoot::DeclareFunction {
                 function_name,
+                type_parameters,
                 parameters,
                 body,
                 return_type,
@@ -964,7 +963,7 @@ pub fn hir_to_mir<'source>(
                     .iter()
                     .map(|x| MIRTypedBoundName {
                         name: x.name,
-                        type_instance: x.typename,
+                        type_instance: x.type_data,
                     })
                     .collect::<Vec<_>>();
 

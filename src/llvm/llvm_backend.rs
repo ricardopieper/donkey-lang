@@ -26,7 +26,7 @@ use crate::semantic::mir::{
 
 use crate::types::type_instance_db::{StructMember, TypeInstanceId};
 use crate::{
-    semantic::{hir::Checked, mir::MIRTopLevelNode},
+    semantic::{mir::MIRTopLevelNode},
     types::type_instance_db::TypeInstanceManager,
 };
 
@@ -212,7 +212,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
     pub fn generate_for_top_lvl<'source>(
         &mut self,
-        node: &'source MIRTopLevelNode<'source, Checked>,
+        node: &'source MIRTopLevelNode<'source>,
     ) {
         match node {
             MIRTopLevelNode::DeclareFunction {
@@ -399,18 +399,17 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         &mut self,
         current_scope: ScopeId,
         symbol_table: &FunctionSymbolTable<'ctx>,
-        expression: &MIRExpr<Checked>,
+        expression: &MIRExpr<'_>,
     ) -> LlvmExpression<'ctx> {
         match expression {
             MIRExpr::RValue(rvalue) => self.compile_rvalue(rvalue, current_scope, symbol_table),
             MIRExpr::LValue(lvalue) => self.compile_lvalue(lvalue, symbol_table, current_scope),
-            MIRExpr::TypecheckTag(_) => panic!(),
         }
     }
 
     fn compile_rvalue(
         &mut self,
-        rvalue: &MIRExprRValue<Checked>,
+        rvalue: &MIRExprRValue<'_>,
         current_scope: ScopeId,
         symbol_table: &FunctionSymbolTable<'ctx>,
     ) -> LlvmExpression<'ctx> {
@@ -517,7 +516,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
     fn compile_lvalue(
         &mut self,
-        lvalue: &MIRExprLValue<Checked>,
+        lvalue: &MIRExprLValue<'_>,
         symbol_table: &FunctionSymbolTable<'ctx>,
         current_scope: ScopeId,
     ) -> LlvmExpression<'ctx> {
@@ -586,8 +585,8 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
     fn build_binary_expr(
         &mut self,
-        lhs: &MIRExpr<Checked>,
-        rhs: &MIRExpr<Checked>,
+        lhs: &MIRExpr<'_>,
+        rhs: &MIRExpr<'_>,
         current_scope: ScopeId,
         symbol_table: &FunctionSymbolTable<'ctx>,
         op: &crate::ast::parser::SpannedOperator,
@@ -1059,7 +1058,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 type FunctionSymbolTable<'llvm_ctx> = HashMap<(InternedString, ScopeId), PointerValue<'llvm_ctx>>;
 
 fn build_function_symbol_table<'mir, 'function_layout, 'ctx>(
-    body: &'mir [MIRBlock<Checked>],
+    body: &'mir [MIRBlock<'_>],
     scopes: &'mir [MIRScope],
     function_layout: &'function_layout FunctionLayout,
     llvm_variables: HashMap<InternedString, PointerValue<'ctx>>,
@@ -1096,7 +1095,7 @@ fn optimize_module(target_machine: &TargetMachine, module: &Module) {
 
 pub fn generate_llvm(
     type_db: &TypeInstanceManager,
-    mir_top_level_nodes: &[MIRTopLevelNode<Checked>],
+    mir_top_level_nodes: &[MIRTopLevelNode<'_>],
     interner: &StringInterner,
 ) -> Result<(), Box<dyn Error>> {
     let context = Context::create();

@@ -1,9 +1,9 @@
 use core::panic;
 use std::fs;
 
-use super::hir::{ast_globals_to_hir, Checked, InferredTypeHIRRoot, NotCheckedSimplified};
+use super::hir::{ast_globals_to_hir, InferredTypeHIRRoot};
 use super::mir::{hir_to_mir, MIRTopLevelNode};
-use super::name_registry::NameRegistry;
+use super::top_level_decls::NameRegistry;
 use super::struct_instantiations;
 use super::type_checker::typecheck;
 
@@ -11,7 +11,7 @@ use crate::ast::lexer::{TokenSpanIndex, TokenTable};
 use crate::ast::parser::{print_errors, AstSpan, Parser};
 use crate::ast::{lexer, parser};
 use crate::interner::StringInterner;
-use crate::semantic::{first_assignments, name_registry, type_inference};
+use crate::semantic::{first_assignments, top_level_decls, type_inference};
 use crate::types::type_errors::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::type_errors::TypeErrors};
@@ -100,8 +100,8 @@ impl Source {
 }
 
 pub struct Analyzer<'source, 'interner> {
-    pub mir: Vec<MIRTopLevelNode<'source, Checked>>,
-    pub unchecked_mir: Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>,
+    pub mir: Vec<MIRTopLevelNode<'source>>,
+    pub unchecked_mir: Vec<MIRTopLevelNode<'source>>,
     pub type_db: TypeInstanceManager<'interner>,
     pub globals: NameRegistry,
     pub type_errors: TypeErrors<'source>,
@@ -146,7 +146,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
         for file in source.file_table.iter() {
             let ast_hir = ast_globals_to_hir(&file.ast, &source.interner);
             let inferred_globals_hir =
-                match name_registry::build_name_registry_and_resolve_signatures(
+                match top_level_decls::build_name_registry_and_resolve_signatures(
                     &mut self.type_db,
                     &mut self.globals,
                     &mut self.type_errors,
@@ -185,7 +185,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
             ) {
                 Ok(final_hir) => {
                     self.hir.push(final_hir.clone());
-
+                    /*
                     let mir = hir_to_mir(file.index, final_hir, &mut self.type_errors);
 
                     if let Ok(mir) = mir {
@@ -205,6 +205,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
                             self.unchecked_mir.extend(mir);
                         }
                     }
+                     */
                 }
                 Err(e) => {
                     println!(
@@ -226,7 +227,7 @@ impl<'interner, 'source: 'interner> Analyzer<'source, 'interner> {
 pub mod test_utils {
     use crate::{
         interner::StringInterner,
-        semantic::{hir::NotCheckedSimplified, mir::MIRTopLevelNode},
+        semantic::{mir::MIRTopLevelNode},
         types::type_instance_db::TypeInstanceManager,
     };
 
@@ -243,7 +244,7 @@ pub mod test_utils {
     pub(crate) use tls_interner;
 
     pub struct AnalysisWithoutTypecheckResult<'source, 'interner> {
-        pub mir: Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>,
+        pub mir: Vec<MIRTopLevelNode<'source>>,
         pub type_db: TypeInstanceManager<'interner>,
         pub interner: &'interner StringInterner,
     }
@@ -1052,6 +1053,7 @@ def my_function():
             analyzed.type_errors.call_non_callable[0]
                 .error
                 .actual_type
+                .unwrap()
                 .as_string(&analyzed.type_db),
             "array<i32>"
         );

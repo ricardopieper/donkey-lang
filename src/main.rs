@@ -7,15 +7,20 @@
 #![feature(thread_local)]
 #![feature(negative_impls)]
 #![feature(type_alias_impl_trait)]
+#![feature(never_type)]
+
 
 #[macro_use]
 mod interner;
 mod ast;
 mod commons;
 mod compiler;
+#[macro_use]
+mod debug;
 //mod donkey_vm;
 //mod lambda_vm;
 mod llvm;
+#[macro_use]
 mod semantic;
 mod types;
 

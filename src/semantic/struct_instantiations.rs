@@ -3,7 +3,7 @@ use crate::{
     types::{type_constructor_db::TypeKind, type_instance_db::TypeInstanceManager},
 };
 
-use super::hir::{FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, HIRExpr, HIRRoot};
+use super::hir::{FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, HIRExpr, HIRRoot, HIRType, FunctionCall};
 
 fn construct_struct_instantiations_in_expression<'source>(
     expr: HIRExpr<'source, ()>,
@@ -11,24 +11,24 @@ fn construct_struct_instantiations_in_expression<'source>(
 ) -> HIRExpr<'source, ()> {
     match expr {
         //check the function, if it's a name, check if the name is a struct and transform it into a struct instantiation.
-        HIRExpr::FunctionCall(function, args, meta_ast, meta_expr) => {
-            match *function {
+        HIRExpr::FunctionCall(call) => {
+           
+            match &call.function {
                 HIRExpr::Variable(var_name, .., meta) => {
-                    let type_data = type_db.constructors.find_by_name(var_name);
+                    let type_data = type_db.constructors.find_by_name(*var_name);
                     if let Some(type_data) = type_data && type_data.kind == TypeKind::Struct {
                         //construct the type
-                        let type_instance = type_db.construct_type(type_data.id, &[]).expect("Failed to construct type instance");
+                        let type_args = call.type_args
+                            .into_iter()
+                            .map(|x|x.user_given_type.unwrap()).collect();
                         HIRExpr::StructInstantiate(
-                            type_instance,
+                            *var_name,
+                            type_args,
+                            (),
                             meta
                         )
                     } else {
-                        HIRExpr::FunctionCall(
-                            function,
-                            args,
-                            meta_ast,
-                            meta_expr,
-                        )
+                        HIRExpr::FunctionCall(call)
                     }
                 }
                 _ => todo!("Function call to non-variable expression"),
@@ -42,6 +42,7 @@ fn construct_struct_instantiations_in_body<'source>(
     body: Vec<FirstAssignmentsDeclaredHIR<'source>>,
     type_db: &mut TypeInstanceManager,
 ) -> Vec<FirstAssignmentsDeclaredHIR<'source>> {
+    //@TODO if the type is a generic, then it's a struct instantiation
     let mut new_mir: Vec<FirstAssignmentsDeclaredHIR<'source>> = vec![];
     for node in body {
         let mir_node = match node {
@@ -80,23 +81,27 @@ fn construct_struct_instantiations_in_body<'source>(
                 let body = construct_struct_instantiations_in_body(body, type_db);
                 HIR::While(expr, body, meta)
             }
-            HIR::FunctionCall {
+            HIR::FunctionCall(FunctionCall{
                 function,
+                type_args,
                 args,
                 meta_ast,
                 meta_expr,
-            } => {
+                return_type
+            }) => {
                 let function = construct_struct_instantiations_in_expression(function, type_db);
                 let args = args
                     .into_iter()
                     .map(|arg| construct_struct_instantiations_in_expression(arg, type_db))
                     .collect();
-                HIR::FunctionCall {
+                HIR::FunctionCall(FunctionCall{
                     function,
+                    type_args,
                     args,
                     meta_ast,
                     meta_expr,
-                }
+                    return_type
+                })
             }
             HIR::Return(expr, meta_ast) => {
                 let expr = construct_struct_instantiations_in_expression(expr, type_db);
@@ -127,6 +132,7 @@ pub fn construct_struct_instantiations<'a>(
         let result = match node {
             HIRRoot::DeclareFunction {
                 function_name,
+                type_parameters,
                 parameters,
                 body,
                 return_type,
@@ -137,6 +143,7 @@ pub fn construct_struct_instantiations<'a>(
                 let new_body = construct_struct_instantiations_in_function(type_db, body);
                 HIRRoot::DeclareFunction {
                     function_name,
+                    type_parameters,
                     parameters,
                     body: new_body,
                     return_type,

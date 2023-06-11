@@ -1,6 +1,6 @@
 use crate::interner::StringInterner;
 
-use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR};
+use crate::semantic::hir::{HIRExpr, LiteralHIRExpr, HIR, FunctionCall};
 
 use crate::types::type_instance_db::TypeInstanceManager;
 
@@ -20,17 +20,17 @@ impl<'interner, 'type_db> HIRExprPrinter<'interner, 'type_db> {
         HIRExprPrinter { interner, type_db }
     }
 
-    pub fn print<T, T1>(&self, expr: &HIRExpr<T, T1>) -> String {
+    pub fn print<T>(&self, expr: &HIRExpr<T>) -> String {
         match expr {
             HIRExpr::Variable(s, ..) => s.to_string(self.interner),
             HIRExpr::Literal(literal, ..) => self.print_literal_expr(literal),
-            HIRExpr::FunctionCall(f, args, ..) => {
-                let args_str = args
+            HIRExpr::FunctionCall(fcall) => {
+                let args_str = fcall.args
                     .iter()
                     .map(|x| self.print(x))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}({})", self.print(f), args_str)
+                format!("{}({}) MISSING TYPE ARGS", self.print(&fcall.function), args_str)
             }
             HIRExpr::MethodCall(obj, name, args, ..) => {
                 let args_str = args
@@ -66,12 +66,11 @@ impl<'interner, 'type_db> HIRExprPrinter<'interner, 'type_db> {
                 format!("{}.{}", self.print(obj), elem.to_string(self.interner))
             }
             HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".into(),
-            HIRExpr::TypecheckTag(_) => unreachable!(),
             HIRExpr::Deref(expr, ..) => format!("*{}", self.print(expr)),
             HIRExpr::Ref(expr, ..) => format!("&{}", self.print(expr)),
-            HIRExpr::StructInstantiate(ty, _) => {
-                let struct_name = ty.as_string(self.type_db);
-                format!("{}()", struct_name)
+            HIRExpr::StructInstantiate(name, args, ty, _) => {
+                let struct_name = name.to_string(self.interner);
+                format!("{}() MISSING ARGS", struct_name)
             }
         }
     }
@@ -110,7 +109,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
 
     fn print_hir_body_str(
         &self,
-        node: &HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
+        node: &HIR<impl TypeNamePrinter, impl TypeNamePrinter>,
         indent: &str,
     ) -> String {
         match node {
@@ -146,7 +145,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
                 format!("{indent}return\n")
             }
 
-            HIR::FunctionCall { function, args, .. } => {
+            HIR::FunctionCall(FunctionCall{ function, args, .. })=> {
                 let args_str = args
                     .iter()
                     .map(|x| self.expr_printer.print(x))
@@ -196,7 +195,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
         &self,
         node: &HIRRoot<
             impl TypeNamePrinter,
-            HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
+            HIR<impl TypeNamePrinter, impl TypeNamePrinter>,
             impl TypeNamePrinter,
         >,
         indent: &str,
@@ -216,7 +215,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
                             "{}{}: {}",
                             indent,
                             param.name.to_string(self.interner),
-                            param.typename.print_name(self.type_db, self.interner)
+                            param.type_data.print_name(self.type_db, self.interner)
                         )
                     })
                     .collect::<Vec<_>>()
@@ -251,7 +250,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
                         "{}  {}: {}",
                         indent,
                         field.name.to_string(self.interner),
-                        field.typename.print_name(self.type_db, self.interner)
+                        field.type_data.print_name(self.type_db, self.interner)
                     ));
                 }
 
@@ -265,7 +264,7 @@ impl<'type_db, 'interner> HIRPrinter<'type_db, 'interner> {
         &self,
         hir: &[HIRRoot<
             impl TypeNamePrinter,
-            HIR<impl TypeNamePrinter, HIRExpr<impl TypeNamePrinter>>,
+            HIR<impl TypeNamePrinter, impl TypeNamePrinter>,
             impl TypeNamePrinter,
         >],
     ) -> String {
