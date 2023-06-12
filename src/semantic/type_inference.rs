@@ -655,17 +655,20 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source, '_> {
        
         
         match function_type {
-            
             TypeInferenceResult::Monomorphic(function_type) => {
                 let type_data = self.ctx.type_db.get_instance(function_type);
+
+                if !type_data.is_function {
+                    return self.ctx.errors.call_non_callable.push_inference_error(report!(self, meta, CallToNonCallableType { actual_type: Some(function_type) }))
+                }
+
                 let function_args = type_data.function_args.iter().map(|x| TypeInferenceResult::Monomorphic(*x)).collect::<Vec<_>>();
                
                 let fun_params = self.infer_expr_array(fun_params, Some(&function_args))?;
 
-
                 //end the previous borrow and start a new one
                 let type_data = self.ctx.type_db.get_instance(function_type);
-
+ 
                 let result = 
                     FunctionCall { 
                         function: HIRExpr::Variable(var, TypeInferenceResult::Monomorphic(function_type), fcall_meta).into(),

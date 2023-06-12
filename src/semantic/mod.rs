@@ -11,3 +11,4 @@ pub mod struct_instantiations;
 pub mod type_checker;
 pub mod type_inference;
 pub mod type_name_printer;
+pub mod monomorph;

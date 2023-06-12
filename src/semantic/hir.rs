@@ -773,6 +773,9 @@ pub fn ast_globals_to_hir<'source>(
 #[cfg(test)]
 mod tests {
 
+    #[cfg(test)]
+    use pretty_assertions::assert_eq;
+    
     thread_local! {
         static INTERNER: StringInterner = StringInterner::new();
     }

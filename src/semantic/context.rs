@@ -1041,13 +1041,9 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{result}");
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.call_non_callable.len(), 1);
-        println!(
-            "{:?}",
-            analyzed.type_errors.call_non_callable[0].error.actual_type
-        );
+       
 
         assert_eq!(
             analyzed.type_errors.call_non_callable[0]

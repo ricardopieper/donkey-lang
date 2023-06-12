@@ -30,7 +30,21 @@ impl<'interner, 'type_db> HIRExprPrinter<'interner, 'type_db> {
                     .map(|x| self.print(x))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}({}) MISSING TYPE ARGS", self.print(&fcall.function), args_str)
+
+                let type_args = if fcall.type_args.len() > 0 {
+                    format!(
+                        "<{}>",
+                        fcall.type_args
+                            .iter()
+                            .map(|x| x.user_given_type.as_ref().unwrap().print_name(self.type_db, self.interner))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "".into()
+                };
+                
+                format!("{}{}({})", self.print(&fcall.function), type_args, args_str)
             }
             HIRExpr::MethodCall(obj, name, args, ..) => {
                 let args_str = args
@@ -68,9 +82,23 @@ impl<'interner, 'type_db> HIRExprPrinter<'interner, 'type_db> {
             HIRExpr::Cast(_, _, _) => "cast not implemented in HIR printer".into(),
             HIRExpr::Deref(expr, ..) => format!("*{}", self.print(expr)),
             HIRExpr::Ref(expr, ..) => format!("&{}", self.print(expr)),
-            HIRExpr::StructInstantiate(name, args, ty, _) => {
+            HIRExpr::StructInstantiate(name, args, _, _) => {
+                //@TODO Factor this
+                let type_args = if args.len() > 0 {
+                    format!(
+                        "<{}>",
+                        args
+                            .iter()
+                            .map(|x| x.print_name(self.type_db, self.interner))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "".into()
+                };
+                
                 let struct_name = name.to_string(self.interner);
-                format!("{}() MISSING ARGS", struct_name)
+                format!("{}{type_args}()", struct_name)
             }
         }
     }
