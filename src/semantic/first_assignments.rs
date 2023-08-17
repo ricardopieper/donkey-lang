@@ -1,15 +1,17 @@
 use crate::{
     interner::InternedString,
     semantic::hir::{HIRTypedBoundName, HIR},
-    types::{type_constructor_db::TypeConstructParams, type_instance_db::TypeInstanceId},
 };
 
 use std::collections::HashSet;
 
-use super::{hir::{
-    FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, FunctionCall,
-    GlobalsInferredMIRRoot, HIRExpr, HIRRoot, HIRTypeDef, UninferredHIR,
-}, type_inference::TypeInferenceResult};
+use super::{
+    hir::{
+        FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, FunctionCall,
+        GlobalsInferredMIRRoot, HIRExpr, HIRRoot, HIRTypeDef, MethodCall, UninferredHIR,
+    },
+    type_inference::TypeInferenceResult,
+};
 
 fn make_first_assignments_in_body<'source>(
     body: Vec<UninferredHIR<'source>>,
@@ -24,6 +26,7 @@ fn make_first_assignments_in_body<'source>(
                 expression,
                 meta_ast,
                 meta_expr,
+                ..
             } => {
                 declarations_found.insert(var);
                 HIR::Declare {
@@ -32,6 +35,7 @@ fn make_first_assignments_in_body<'source>(
                     expression,
                     meta_ast,
                     meta_expr,
+                    synthetic: false,
                 }
             }
             HIR::Assign {
@@ -56,6 +60,7 @@ fn make_first_assignments_in_body<'source>(
                             expression,
                             meta_ast,
                             meta_expr,
+                            synthetic: true,
                         }
                     }
                 } else {
@@ -103,6 +108,19 @@ fn make_first_assignments_in_body<'source>(
             }),
             HIR::Return(expr, meta_ast) => HIR::Return(expr, meta_ast),
             HIR::EmptyReturn(meta_ast) => HIR::EmptyReturn(meta_ast),
+            HIR::MethodCall(MethodCall {
+                object,
+                method_name,
+                args,
+                return_type: (),
+                meta_expr,
+            }) => HIR::MethodCall(MethodCall {
+                object,
+                method_name,
+                args,
+                return_type: (),
+                meta_expr,
+            }),
         };
         new_mir.push(mir_node);
     }
@@ -149,6 +167,7 @@ pub fn transform_first_assignment_into_declaration(
                 meta,
                 is_intrinsic,
                 is_varargs,
+                is_external
             } => {
                 let new_body = make_assignments_into_declarations_in_function(&parameters, body);
                 HIRRoot::DeclareFunction {
@@ -160,6 +179,7 @@ pub fn transform_first_assignment_into_declaration(
                     meta,
                     is_intrinsic,
                     is_varargs,
+                    is_external
                 }
             }
             HIRRoot::StructDeclaration {

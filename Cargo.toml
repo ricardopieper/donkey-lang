@@ -11,7 +11,7 @@ rustc_version_runtime = "0.2.1"
 rustyline = "9.1.2"
 tracy-client = "0.13.2"
 memmap = "0.7.0"
-inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm14-0", "internal-getters"] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm14-0"] }
 llvm-sys = "140.0.3"
 paste = "1.0.9"
 match_deref = "0.1.1"
@@ -20,3 +20,6 @@ rand = { version = "0.8.4", features = ["small_rng"] }
 [dev-dependencies]
 pretty_assertions = "1.3.0"
 
+
+[profile.dev]
+opt-level = 0
