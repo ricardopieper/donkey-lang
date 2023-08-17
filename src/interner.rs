@@ -3,10 +3,12 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+
+
 #[derive(Hash, Eq, PartialEq, Clone, Copy)]
 pub struct InternedString{ 
     pub index: usize, 
-    pub str_interned: &'static str
+    #[cfg(test)] pub str_interned: &'static str
 }
 
 static GLOBAL_INTERNER: OnceLock<StringInterner> = OnceLock::new();
@@ -45,7 +47,7 @@ impl StringInterner {
         let unsafe_str_key = unsafe { std::mem::transmute::<&str, &'static str>(last) };
         let interned = InternedString {
             index,
-            str_interned: unsafe_str_key,
+            #[cfg(test)] str_interned: unsafe_str_key,
         };
         state.table.insert(unsafe_str_key, interned);
         interned
