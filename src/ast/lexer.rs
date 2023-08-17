@@ -1,7 +1,5 @@
 use crate::{
-    commons::float::FloatLiteral,
-    interner::{InternedString, StringInterner},
-    semantic::context::FileTableIndex,
+    commons::float::FloatLiteral, interner::InternedString, semantic::context::FileTableIndex,
 };
 
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
@@ -123,6 +121,8 @@ pub enum Token {
     InKeyword,
     WhileKeyword,
     IntrinsicKeyword,
+    ExternalKeyword,
+    AsKeyword,
     BreakKeyword,
     ElifKeyword,
     ElseKeyword,
@@ -157,6 +157,7 @@ impl Token {
             Token::IfKeyword => "if keyword",
             Token::ForKeyword => "for keyword",
             Token::IntrinsicKeyword => "intrinsic keyword",
+            Token::ExternalKeyword => "external keyword",
             Token::ReturnKeyword => "return keyword",
             Token::InKeyword => "in keyword",
             Token::WhileKeyword => "while keyword",
@@ -171,6 +172,7 @@ impl Token {
             Token::MemberAccessor => "member access (dot)",
             Token::ArrowRight => "arrow right (->)",
             Token::Indentation => "indentation",
+            Token::AsKeyword => "as keyword (cast)",
         }
     }
 }
@@ -183,13 +185,14 @@ pub enum PartialToken {
 }
 
 impl PartialToken {
-    fn to_token(&self, interner: &StringInterner) -> Token {
+    fn to_token(&self) -> Token {
         match self {
             Self::UndefinedOrWhitespace => {
                 panic!("Unexpected undefined token. This is a tokenizer bug.")
             }
             Self::Identifier(s) => match s.as_ref() {
                 "None" => Token::None,
+                "as" => Token::AsKeyword,
                 "not" => Token::Operator(Operator::Not),
                 "True" => Token::True,
                 "False" => Token::False,
@@ -201,12 +204,13 @@ impl PartialToken {
                 "for" => Token::ForKeyword,
                 "def" => Token::DefKeyword,
                 "intrinsic" => Token::IntrinsicKeyword,
+                "external" => Token::ExternalKeyword,
                 "return" => Token::ReturnKeyword,
                 "in" => Token::InKeyword,
                 "while" => Token::WhileKeyword,
                 "break" => Token::BreakKeyword,
                 "struct" => Token::StructDef,
-                _ => Token::Identifier(interner.get(s)),
+                _ => Token::Identifier(InternedString::new(s)),
             },
             Self::Operator(s) => match s.as_ref() {
                 "+" => Token::Operator(Operator::Plus),
@@ -245,25 +249,20 @@ pub struct LineIndex {
     line: u32,
 }
 
-pub struct Tokenizer<'interner> {
+pub struct Tokenizer {
     index: usize,
     file: FileTableIndex,
     source: String,
     chars: Vec<char>,
     cur_partial_token: PartialToken,
     eater_buf: String,
-    interner: &'interner StringInterner,
     line_indices: Vec<LineIndex>,
     start_token: SourceLocation,
     end_token: SourceLocation,
 }
 
-impl<'interner> Tokenizer<'interner> {
-    pub fn new(
-        file: FileTableIndex,
-        source: String,
-        interner: &'interner StringInterner,
-    ) -> Tokenizer<'interner> {
+impl Tokenizer {
+    pub fn new(file: FileTableIndex, source: String) -> Tokenizer {
         let chars = source.chars().collect::<Vec<_>>();
         //add a new line always so that the loop finds a newline in the end
 
@@ -302,7 +301,6 @@ impl<'interner> Tokenizer<'interner> {
             chars,
             cur_partial_token: PartialToken::UndefinedOrWhitespace,
             eater_buf: String::new(),
-            interner,
             line_indices,
             start_token: SourceLocation { line: 0, column: 0 },
             end_token: SourceLocation { line: 0, column: 0 },
@@ -495,7 +493,7 @@ impl<'interner> Tokenizer<'interner> {
             PartialToken::UndefinedOrWhitespace,
         );
 
-        let as_token = cur_token.to_token(self.interner);
+        let as_token = cur_token.to_token();
         table.add(as_token, self.file, self.start_token, self.end_token);
     }
 
@@ -529,8 +527,8 @@ impl<'interner> Tokenizer<'interner> {
         let mut token_table = TokenTable::new();
 
         let operators = &[
-            "+", "->", "-", "*", "%", "/", "<<", "<=", ">=", ">", "<", "!=", "==", "=", "^",
-            "(", ")", "&", "...",
+            "+", "->", "-", "*", "%", "/", "<<", "<=", ">=", ">", "<", "!=", "==", "=", "^", "(",
+            ")", "&", "...",
         ];
         while self.can_go() {
             self.commit_current_token(&mut token_table);
@@ -569,9 +567,10 @@ impl<'interner> Tokenizer<'interner> {
                     self.next();
                 }
 
+                let location = self.get_location(self.index);
                 assert!(
                     current_spaces % 4 == 0,
-                    "Indentation must be a multiple of 4"
+                    "Indentation must be a multiple of 4, found {current_spaces} at {location:?}"
                 );
                 let indents = current_spaces / 4;
 
@@ -601,7 +600,7 @@ impl<'interner> Tokenizer<'interner> {
                 self.eat_string_literal();
                 self.end_token();
 
-                let interned = self.interner.get(&self.eater_buf);
+                let interned = InternedString::new(&self.eater_buf);
 
                 token_table.add(
                     Token::LiteralString(interned),
@@ -654,34 +653,23 @@ impl<'interner> Tokenizer<'interner> {
     }
 }
 
-pub fn tokenize(
-    file: FileTableIndex,
-    source: &str,
-    interner: &StringInterner,
-) -> Result<TokenTable, String> {
-    Tokenizer::new(file, source.to_string(), interner).tokenize()
+pub fn tokenize(file: FileTableIndex, source: &str) -> Result<TokenTable, String> {
+    Tokenizer::new(file, source.to_string()).tokenize()
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::semantic::context::test_utils::tls_interner;
+    use crate::semantic::context::test_utils::istr;
 
     use super::*;
-    thread_local! {
-        static INTERNER: StringInterner = StringInterner::new();
-    }
-
-    tls_interner!(INTERNER);
 
     fn tokenize(str: &str) -> Result<Vec<Token>, String> {
-        INTERNER.with(|interner| {
-            crate::ast::lexer::tokenize(FileTableIndex(0), str, interner).map(|table| {
-                table
-                    .tokens
-                    .into_iter()
-                    .map(|x| x.token)
-                    .collect::<Vec<_>>()
-            })
+        crate::ast::lexer::tokenize(FileTableIndex(0), str).map(|table| {
+            table
+                .tokens
+                .into_iter()
+                .map(|x| x.token)
+                .collect::<Vec<_>>()
         })
     }
 
@@ -1158,6 +1146,13 @@ mod tests {
     fn ellipsis() -> Result<(), String> {
         let result = tokenize("...")?;
         assert_eq!(result, [Token::Ellipsis,]);
+        Ok(())
+    }
+
+    #[test]
+    fn as_cast() -> Result<(), String> {
+        let result = tokenize("as")?;
+        assert_eq!(result, [Token::AsKeyword]);
         Ok(())
     }
 }

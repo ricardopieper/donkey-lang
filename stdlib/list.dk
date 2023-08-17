@@ -1,0 +1,35 @@
+struct List<T>:
+    buf: ptr<T>
+    len: u32
+    cap: u32
+
+def list_new<T>() -> List<T>:
+    list = List<T>()
+    list.len = 0
+    list.cap = 0
+
+    return list
+
+def list_add<T>(list: ptr<List<T>>, item: T):
+    len = (*list).len
+    cap = (*list).cap
+    if len == cap:
+        if len == 0:
+            (*list).cap = 4
+        else:
+            (*list).cap = cap * 2
+        
+    ptr_as_u8 = reinterpret_ptr<T, u8>((*list).buf)
+    ptr_reallocated = malloc(cap * (4 as u64))
+    (*list).buf = reinterpret_ptr<u8, T>(ptr_reallocated)
+
+    (*list).buf.write(len, item)
+    (*list).len = len + 1
+
+
+def reinterpret_ptr<T, U>(p: ptr<T>) -> ptr<U>:
+    intrinsic
+
+def main():
+    new_list = list_new<i32>()
+    list_add<i32>(&new_list, 1)

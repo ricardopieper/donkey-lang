@@ -1,0 +1,32 @@
+def atoi(buf: ptr<u8>) -> i32:
+    external
+
+def puts(null_terminated_char_ptr: ptr<u8>) -> u64:
+    external
+
+def pow(base: f64, exponent: f64) -> f64:
+    external
+
+def powf(base: f32, exponent: f32) -> f32:
+    external
+
+def sqrt(val: f64) -> f64:
+    external
+
+def sqrtf(val: f32) -> f32:
+    external
+
+def exit(code: i32):
+    external
+
+def malloc(size: u32) -> ptr<u8>:
+    external
+    
+def free(buf: ptr<u8>):
+    external
+
+def snprintf(buf: ptr<u8>, size: u64, format: ptr<u8>, ...) -> i64:
+    external
+
+def printf(format: ptr<u8>, ...) -> i64:
+    external

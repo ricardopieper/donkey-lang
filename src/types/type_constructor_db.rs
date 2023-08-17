@@ -1,8 +1,14 @@
 use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
-use crate::interner::{InternedString, StringInterner};
+use crate::interner::InternedString;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct TypeConstructorId(pub usize);
+
+impl TypeConstructorId {
+    pub fn to_string(&self, constructor_db: &TypeConstructorDatabase) -> String {
+        constructor_db.get_name(*self)
+    }
+}
 
 //Types arent simple, generic, function.... but rather primitive, struct and trait.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,16 +31,42 @@ pub enum TypeSign {
     Unsigned,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeParameter(pub InternedString);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeConstructorFunctionDeclaration {
     pub name: InternedString,
-    //pub type_args: Vec<GenericParameter>,
     pub args: Vec<TypeConstructParams>,
     pub return_type: TypeConstructParams,
     pub is_variadic: bool,
+}
+
+impl TypeConstructorFunctionDeclaration {
+    pub fn into_function_signature(&self, root_constructor: TypeConstructorId, type_constructors: &TypeConstructorDatabase) -> FunctionSignature<TypeConstructParams> {
+        let type_data = &type_constructors.find(root_constructor);
+        
+        let mut args =  if type_data.type_params.is_empty() {
+            vec![
+                TypeConstructParams::Given(root_constructor)
+            ]
+        }   else {
+            let type_construct_params = TypeConstructParams::Parameterized(
+                TypeConstructParams::Given(root_constructor).into(),
+                type_data.type_params.iter().map(|param| TypeConstructParams::Generic(param.clone())).collect()
+            );
+            vec![type_construct_params]
+        };
+        args.extend(self.args.clone());
+        
+        FunctionSignature {
+            generics: type_data.type_params.clone(),
+            params: args,
+            return_type: Box::new(self.return_type.clone()),
+            variadic: Variadic(self.is_variadic),
+        }
+
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,17 +97,16 @@ pub enum TypeConstructParams {
     FunctionSignature(FunctionSignature<TypeConstructParams>),
     //on generics when the base root type is not known. This is basically the HIRType.
     //The base shouldn't really be a FunctionSignature, never...
-    Parameterized(Box<TypeConstructParams>, Vec<TypeConstructParams>), 
+    Parameterized(Box<TypeConstructParams>, Vec<TypeConstructParams>),
 }
 
 impl TypeConstructParams {
     pub fn to_string(&self, type_db: &TypeConstructorDatabase) -> String {
-        let interner = &type_db.interner;
         match self {
-            TypeConstructParams::Given(id) => type_db.find(*id).name.to_string(interner),
-            TypeConstructParams::Generic(generic) => format!("generic {}", generic.0.to_string(interner)),
+            TypeConstructParams::Given(id) => type_db.find(*id).name.to_string(),
+            TypeConstructParams::Generic(generic) => format!("generic {}", generic.0.to_string()),
             TypeConstructParams::Parameterized(id, args) => {
-                let mut s = id.to_string(type_db);// type_db.find(*id).name.to_string(interner);
+                let mut s = id.to_string(type_db); // type_db.find(*id).name.into();
                 s.push('<');
                 for arg in args {
                     s.push_str(&arg.to_string(type_db));
@@ -84,30 +115,43 @@ impl TypeConstructParams {
                 s.push('>');
                 s
             }
-            TypeConstructParams::FunctionSignature(FunctionSignature{generics, params, return_type, ..}) => {
+            TypeConstructParams::FunctionSignature(FunctionSignature {
+                generics,
+                params,
+                return_type,
+                ..
+            }) => {
                 let mut s = String::new();
                 s.push_str("fn");
                 if !generics.is_empty() {
                     s.push('<');
                     for param in generics {
                         s.push_str("generic ");
-                        s.push_str(&param.0.to_string(interner));
+                        s.push_str(&param.0.to_string());
                         s.push_str(", ");
                     }
                     s.push('>')
                 }
-               
+
                 s.push_str("(");
                 for param in params {
                     s.push_str(&param.to_string(type_db));
                     s.push_str(", ");
                 }
                 s.push_str("): ");
-                
+
                 s.push_str(&return_type.to_string(type_db));
-               
+
                 s
             }
+        }
+    }
+
+    pub fn try_get_root_type_constructor_id(&self) -> Option<TypeConstructorId> {
+        match self {
+            TypeConstructParams::Given(id) => Some(*id),
+            TypeConstructParams::Parameterized(id, _) => id.try_get_root_type_constructor_id(),
+            _ => None,
         }
     }
 }
@@ -119,7 +163,7 @@ pub struct TypeConstructor {
     pub sign: TypeSign,
     pub name: InternedString,
     //Type args are just Generic parameters, in the future we can add type bounds, in which we would add a Type enum here as well
-    pub type_args: Vec<TypeParameter>,
+    pub type_params: Vec<TypeParameter>,
     //these fields inform type capabilities, i.e. operators it can deal with, fields and functions it has if its a struct, types it can be casted to, etc
     pub allowed_casts: Vec<TypeConstructParams>,
     //operator, rhs_type, result_type, for now cannot be generic
@@ -130,6 +174,17 @@ pub struct TypeConstructor {
     pub fields: Vec<TypeConstructorFieldDeclaration>,
     //method (name, args, return type)
     pub methods: Vec<TypeConstructorFunctionDeclaration>,
+    pub needs_intrinsic_codegen: bool,
+}
+
+impl TypeConstructor {
+    pub fn find_method(&self, name: InternedString) -> Option<&TypeConstructorFunctionDeclaration> {
+        self.methods.iter().find(|m| m.name == name)
+    }
+
+    pub fn find_field(&self, name: InternedString) -> Option<&TypeConstructorFieldDeclaration> {
+        self.fields.iter().find(|m| m.name == name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -150,18 +205,16 @@ pub struct CommonTypeConstructors {
     pub str: TypeConstructorId,
 }
 
-pub struct TypeConstructorDatabase<'interner> {
+pub struct TypeConstructorDatabase {
     pub types: Vec<TypeConstructor>,
     pub common_types: CommonTypeConstructors,
-    pub interner: &'interner StringInterner,
 }
 
-impl<'interner> TypeConstructorDatabase<'interner> {
-    pub fn new(interner: &'interner StringInterner) -> Self {
+impl TypeConstructorDatabase {
+    pub fn new() -> Self {
         let mut item = Self {
             types: vec![],
             common_types: Default::default(),
-            interner,
         };
         item.init_builtin();
         item
@@ -183,8 +236,9 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             fields: vec![],
             methods: vec![],
             rhs_binary_ops: vec![],
-            type_args: vec![],
+            type_params: vec![],
             unary_ops: vec![],
+            needs_intrinsic_codegen: false
         });
         next_id
     }
@@ -215,15 +269,21 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             id: next_id,
             kind,
             name,
-            type_args,
+            type_params: type_args,
             allowed_casts: vec![],
             fields: vec![],
             methods: vec![],
             rhs_binary_ops: vec![],
             unary_ops: vec![],
             sign: TypeSign::Unsigned,
+            needs_intrinsic_codegen: false
         });
         next_id
+    }
+
+    fn mark_as_intrisic(&mut self, type_id: TypeConstructorId) {
+        let record = self.types.get_mut(type_id.0).unwrap();
+        record.needs_intrinsic_codegen = true;
     }
 
     pub fn add_unary_operator(
@@ -243,11 +303,12 @@ impl<'interner> TypeConstructorDatabase<'interner> {
     }
 
     pub fn get_name(&self, id: TypeConstructorId) -> String {
-        self.types
+        let type_data = self
+            .types
             .get(id.0)
-            .unwrap_or_else(|| panic!("Type ID not found: {}", id.0))
-            .name
-            .to_string(self.interner)
+            .unwrap_or_else(|| panic!("Type ID not found: {}", id.0));
+        let base_name = type_data.name;
+        base_name.to_string()
     }
 
     pub fn find_by_name(&self, name: InternedString) -> Option<&TypeConstructor> {
@@ -293,7 +354,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             TypeConstructParams::Given(type_id),
         );
 
-        let bool_id = self.find_by_name(self.interner.get("bool")).unwrap().id;
+        let bool_id = self.find_by_name(InternedString::new("bool")).unwrap().id;
         self.add_binary_operator(
             type_id,
             Operator::Equals,
@@ -332,7 +393,11 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         );
 
         self.add_unary_operator(type_id, Operator::Plus, TypeConstructParams::Given(type_id));
-        self.add_unary_operator(type_id, Operator::Minus, TypeConstructParams::Given(type_id));
+        self.add_unary_operator(
+            type_id,
+            Operator::Minus,
+            TypeConstructParams::Given(type_id),
+        );
 
         type_id
     }
@@ -372,9 +437,19 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         });
     }
 
+    //Note: this could be more complex and allow a whole TypeConstructorParams, but for now we just allow a type constructor id
+    pub fn add_cast_to_type(
+        &mut self,
+        type_id: TypeConstructorId,
+        cast_type: TypeConstructorId,
+    ) {
+        let record = self.types.get_mut(type_id.0).unwrap();
+        record.allowed_casts.push(TypeConstructParams::Given(cast_type));
+    }
+
     #[allow(clippy::similar_names)]
     fn init_builtin(&mut self) {
-        let istr = |s| self.interner.get(s);
+        let istr = |s| InternedString::new(s);
 
         let void_type = self.add(
             TypeKind::Primitive {
@@ -385,14 +460,6 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         );
         self.common_types.void = void_type;
 
-        //nullptr type
-        self.add(
-            TypeKind::Primitive {
-                size: Bytes::size_of::<usize>(),
-            },
-            TypeSign::Unsigned,
-            istr("None"),
-        );
         self.common_types.bool = self.add(
             TypeKind::Primitive {
                 size: Bytes::size_of::<()>(),
@@ -433,6 +500,7 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         );
 
         //internal type for pointers, ptr<i32> points to a buffer of i32, and so on
+
         let ptr_type = self.add_generic(
             TypeKind::Primitive {
                 size: Bytes::size_of::<usize>(),
@@ -441,8 +509,30 @@ impl<'interner> TypeConstructorDatabase<'interner> {
             vec![TypeParameter(istr("TPtr"))],
             Some(Bytes::size_of::<usize>()),
         );
+        self.add_method(
+            ptr_type,
+            TypeConstructorFunctionDeclaration {
+                name: istr("write"),
+                args: vec![
+                    TypeConstructParams::Given(u32_type), /* offset * sizeof(TPtr)*/
+                    TypeConstructParams::Generic(TypeParameter(istr("TPtr"))),
+                ],
+                return_type: TypeConstructParams::Given(void_type),
+                is_variadic: false,
+            },
+        );
+        self.add_method(
+            ptr_type,
+            TypeConstructorFunctionDeclaration {
+                name: istr("read"),
+                args: vec![TypeConstructParams::Given(u32_type)],/* offset * sizeof(TPtr) */
+                return_type: TypeConstructParams::Generic(TypeParameter(istr("TPtr"))),
+                is_variadic: false,
+            },
+        );
+        self.mark_as_intrisic(ptr_type);
         self.common_types.ptr = ptr_type;
-
+        
         //ptr + num items
         let arr_type = self.add_generic(
             TypeKind::Struct,
@@ -476,5 +566,49 @@ impl<'interner> TypeConstructorDatabase<'interner> {
         self.add_simple_field(arr_type, istr("length"), u32_type);
 
         self.common_types.array = arr_type;
+
+        //self cast is ok... silly but ok
+        self.add_cast_to_type(self.common_types.i32, self.common_types.i32);
+        self.add_cast_to_type(self.common_types.i32, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.i32, self.common_types.f32);
+        self.add_cast_to_type(self.common_types.i32, self.common_types.f64);
+        self.add_cast_to_type(self.common_types.i32, self.common_types.char);
+        self.add_cast_to_type(self.common_types.i32, self.common_types.u8);
+
+        self.add_cast_to_type(self.common_types.i64, self.common_types.i32);
+        self.add_cast_to_type(self.common_types.i64, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.i64, self.common_types.f32);
+        self.add_cast_to_type(self.common_types.i64, self.common_types.f64);
+        self.add_cast_to_type(self.common_types.i64, self.common_types.char);
+        self.add_cast_to_type(self.common_types.i64, self.common_types.u8);
+
+        self.add_cast_to_type(self.common_types.f32, self.common_types.i32);
+        self.add_cast_to_type(self.common_types.f32, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.f32, self.common_types.f32);
+        self.add_cast_to_type(self.common_types.f32, self.common_types.f64);
+        self.add_cast_to_type(self.common_types.f32, self.common_types.char);
+        self.add_cast_to_type(self.common_types.f32, self.common_types.u8);
+
+        self.add_cast_to_type(self.common_types.f64, self.common_types.i32);
+        self.add_cast_to_type(self.common_types.f64, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.f64, self.common_types.f32);
+        self.add_cast_to_type(self.common_types.f64, self.common_types.f64);
+        self.add_cast_to_type(self.common_types.f64, self.common_types.char);
+        self.add_cast_to_type(self.common_types.f64, self.common_types.u8);
+
+        self.add_cast_to_type(self.common_types.char, self.common_types.i32);
+        self.add_cast_to_type(self.common_types.char, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.char, self.common_types.f32);
+        self.add_cast_to_type(self.common_types.char, self.common_types.f64);
+        self.add_cast_to_type(self.common_types.char, self.common_types.char);
+        self.add_cast_to_type(self.common_types.char, self.common_types.u8);
+
+        self.add_cast_to_type(self.common_types.u8, self.common_types.i32);
+        self.add_cast_to_type(self.common_types.u8, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.u8, self.common_types.f32);
+        self.add_cast_to_type(self.common_types.u8, self.common_types.f64);
+        self.add_cast_to_type(self.common_types.u8, self.common_types.char);
+        self.add_cast_to_type(self.common_types.u8, self.common_types.u8);
     }
+        
 }

@@ -1,7 +1,7 @@
 Monomorphization
 ================
 
-I think there are several ways to implement monomorphization. The issue is that I didn't think this through in the beginning 
+I think there are several ways to implement monomorphization. The issue is that I didn't think this through in the beginning
 and now my MIR does not support generics. Maybe it shouldn't?
 
 The issue is that the later stages of HIR also kinda does not support generics, they require a `TypeInstanceId` 💀
@@ -30,24 +30,24 @@ Suppose we have this function:
 
 We will loop through the global symbols of the code, and determine per-function:
 
- - Does it have generic parameters? 
+ - Does it have generic parameters?
    - Put into a map of <symbol name, HIR node cloned. Yes, just clone it. And don't worry because it will likely be cloned even more!>
  - No, it doesnt:
    - Skip for now!
 
 Iterate again:
- - Does it have generic parameters? 
+ - Does it have generic parameters?
    - Skip!
  - No it doesn't
-   - Iterate over AST
+   - Iterate over HIR
    - For every generic type usage found:
-     - Add into a queue of monomorphizations, where we pass the symbol name + positional generic arguments 
+     - Add into a queue of monomorphizations, where we pass the symbol name + positional generic arguments
      - Replace call by symbol_name + some well-defined prefix, for instance, {symbol_name}_i64 or something
 
 
 What if the monomorphized function also calls into another function?
 
-    
+
     def new_list<T>() -> List<T>:
         ls = List<T>()
         return ls
@@ -84,7 +84,7 @@ Monomorphization queue: [
 
 When we monomorphize "list_maker", we will have to run the step 2's process too! Why?
 
-Because we are generating an list_maker_i64 function which has no generic arguments. This is as if  list_maker_i64 was in the original user's code
+Because we are generating an list_maker_i64 function which has no generic arguments. This is as if list_maker_i64 was in the original user's code
 that is calling onto a generic function. It's all the same for us.
 
 Step 3: Run monomorphization queue:
@@ -195,6 +195,7 @@ We will use it and for now just call the appropriate functions.
 
  - Type inference for binary operators don't work when types can't be inferred because things haven't been mmonomorphized, if x and y are generic, what is the type of x + y?
  - Would need to rerun type inference for these kinds of things, after monomorphization
+  - Maybe binary ops logic can just be duplicated for now?
 
 # C# w/o type bounds vs C++ approach
 

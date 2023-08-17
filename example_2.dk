@@ -1,0 +1,26 @@
+struct counter:
+    x: i32
+
+def increment_counter(c: ptr<counter>):
+    (*c).x = (*c).x + 1
+
+def main() -> i32:
+    c = counter()
+    c.x = 0
+    target = 100
+    i = 0
+    while i < target:
+        increment_counter(&c)
+        i = i + 1
+        
+    print_int(c.x)
+
+    counter_i64 = c.x as i64
+
+    counter_float = counter_i64 as f32
+
+    another_float = 12.627635174
+
+    print_f32(counter_float * another_float)
+
+    return 1
