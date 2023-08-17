@@ -11,12 +11,12 @@ use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue, BasicValue, IntValue, BasicMetadataValueEnum};
 use inkwell::{AddressSpace, OptimizationLevel};
 
 use crate::ast::lexer::Operator;
 use crate::compiler::layouts::FunctionLayout;
-use crate::interner::{InternedString, StringInterner};
+use crate::interner::InternedString;
 use crate::llvm::linker::{link, LinkerError};
 
 use crate::semantic::mir::{
@@ -24,11 +24,8 @@ use crate::semantic::mir::{
     MIRScope, MIRTypedBoundName, ScopeId,
 };
 
-use crate::types::type_instance_db::{StructMember, TypeInstanceId};
-use crate::{
-    semantic::{hir::Checked, mir::MIRTopLevelNode},
-    types::type_instance_db::TypeInstanceManager,
-};
+use crate::types::type_instance_db::{StructMember, TypeInstanceId, TypeInstance};
+use crate::{semantic::mir::MIRTopLevelNode, types::type_instance_db::TypeInstanceManager};
 
 #[allow(clippy::enum_variant_names)] //RValue and LValue are known terms, let me use it
 pub enum LlvmExpression<'ctx> {
@@ -65,19 +62,21 @@ impl<'ctx> LlvmExpression<'ctx> {
     }
 }
 
-pub struct CodeGen<'codegen_scope, 'ctx, 'interner> {
+pub struct CodeGen<'codegen_scope, 'ctx> {
     context: &'ctx Context,
     builder: &'codegen_scope Builder<'ctx>,
     module: &'codegen_scope Module<'ctx>,
-    type_db: &'codegen_scope TypeInstanceManager<'interner>,
-    interner: &'interner StringInterner,
+    type_db: &'codegen_scope TypeInstanceManager,
     type_cache: HashMap<TypeInstanceId, AnyTypeEnum<'ctx>>,
     functions: HashMap<InternedString, FunctionValue<'ctx>>,
     next_temporary: u32,
+    //InternedString here is a hack to avoid cloning strings
+    mangled_name_cache: HashMap<TypeInstanceId, InternedString>,
+    mangled_method_cache: HashMap<(TypeInstanceId, InternedString), InternedString>,
     //    fpm: PassManager<FunctionValue<'ctx>>
 }
 
-impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
+impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
     pub fn as_basic_type(&self, typ: AnyTypeEnum<'ctx>) -> BasicTypeEnum<'ctx> {
         match typ.try_into() {
             Ok(b) => b,
@@ -113,7 +112,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
             //@TODO LLVM is moving towards opaque ptrs, llvm 17 won't support this
             let pointee = self.make_llvm_type(this_type.type_args[0]);
             self.as_basic_type(pointee)
-                .ptr_type(AddressSpace::Generic)
+                .ptr_type(AddressSpace::default())
                 .into()
         } else {
             //if it's not primitive then it's a struct or func
@@ -148,7 +147,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         function_name: InternedString,
         parameters: &[MIRTypedBoundName],
         return_type: TypeInstanceId,
-        is_intrinsic: bool,
+        is_external: bool,
         is_varargs: bool,
     ) -> FunctionValue<'ctx> {
         let params = parameters
@@ -168,17 +167,17 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 .fn_type(&params, is_varargs)
         };
 
-        let linkage = if function_name == self.interner.get("main") || is_intrinsic {
+        let linkage = if function_name == InternedString::new("main") || is_external {
             None
         } else {
             Some(inkwell::module::Linkage::Private)
         };
-        let function =
-            self.module
-                .add_function(function_name.borrow(self.interner), function_type, linkage);
+        let function = self
+            .module
+            .add_function(&function_name.to_string(), function_type, linkage);
 
         for (i, param) in function.get_param_iter().enumerate() {
-            param.set_name(parameters[i].name.borrow(self.interner));
+            param.set_name(&parameters[i].name.to_string());
         }
         self.functions.insert(function_name, function);
 
@@ -210,22 +209,44 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         alloca
     }
 
-    pub fn generate_for_top_lvl<'source>(
-        &mut self,
-        node: &'source MIRTopLevelNode<'source, Checked>,
-    ) {
+    pub fn register_top_lvl<'source>(&mut self, node: &'source MIRTopLevelNode<'source>) {
+        match node {
+            MIRTopLevelNode::DeclareFunction {
+                function_name,
+                parameters,
+                body: _,
+                scopes: _,
+                return_type,
+            } => {
+                self.create_function(*function_name, parameters, *return_type, false, false);
+            }
+
+            MIRTopLevelNode::IntrinsicOrExternalFunction {
+                function_name,
+                parameters,
+                return_type,
+                is_varargs,
+                is_external
+            } => {
+                println!("Registering top_lvl function {} {is_external}", function_name.to_string().as_str());
+                self.create_function(*function_name, parameters, *return_type, *is_external, *is_varargs);
+            }
+        }
+    }
+
+
+    pub fn generate_for_top_lvl<'source>(&mut self, node: &'source MIRTopLevelNode<'source>) {
         match node {
             MIRTopLevelNode::DeclareFunction {
                 function_name,
                 parameters,
                 body,
                 scopes,
-                return_type,
+                return_type: _,
             } => {
                 let function_layout =
                     crate::compiler::layouts::generate_function_layout(scopes, self.type_db);
-                let function_signature =
-                    self.create_function(*function_name, parameters, *return_type, false, false);
+                let function_signature = *self.functions.get(function_name).expect("Expected function to be registered already");
 
                 let cur_basic = self.context.append_basic_block(function_signature, "entry");
                 self.builder.position_at_end(cur_basic);
@@ -237,7 +258,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     let param_name = &parameters[i].name;
                     let alloca = self
                         .builder
-                        .build_alloca(param.get_type(), param_name.borrow(self.interner));
+                        .build_alloca(param.get_type(), param_name.to_string().as_str());
                     self.builder.build_store(alloca, param);
                     llvm_variables.insert(*param_name, alloca);
                 }
@@ -260,7 +281,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                         };
                         let ptr = self.create_variable_stack_alloc(
                             function_signature,
-                            name.borrow(self.interner),
+                            name.to_string().as_str(),
                             *type_instance,
                         );
                         llvm_variables.insert(*name, ptr);
@@ -344,11 +365,47 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                                     self.builder.build_call(*f, &llvm_args, &self.make_temp(""));
                                 } else {
                                     panic!(
-                                        "Function not yet added to llvm IR {function}",
-                                        function = function.borrow(self.interner)
+                                        "Function not yet added to llvm IR {function}"
                                     );
                                 }
                             }
+                            MIRBlockNode::MethodCall {
+                                object,
+                                method_name,
+                                args,
+                                meta_ast: _,
+                                meta_expr: _,
+                                return_type: _,
+                            } => {
+                                let method_name = self.get_method_name_type_id(object.get_type(), *method_name);
+                                let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![];
+                                let self_value = 
+                                    self.compile_expr(block.scope, &symbol_table, object)
+                                        .load_if_lvalue(self.builder)
+                                        .expect_rvalue()
+                                        .into();
+                                 //TODO deduplicate this code
+                                 let call_args : Vec<BasicMetadataValueEnum> = args
+                                    .iter()
+                                    .map(|x| {
+                                        self.compile_expr(block.scope, &symbol_table, x)
+                                            .load_if_lvalue(self.builder)
+                                            .expect_rvalue()
+                                            .into()
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                llvm_args.push(self_value);
+                                llvm_args.extend(call_args);
+
+                                if let Some(f) = self.functions.get(&method_name) {
+                                    self.builder.build_call(*f, &llvm_args, &self.make_temp(""));
+                                } else {
+                                    panic!(
+                                        "Method not yet added to llvm IR {method_name}"
+                                    );
+                                }
+                            },
                         }
                     }
 
@@ -384,13 +441,30 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 function_signature.verify(true);
             }
 
-            MIRTopLevelNode::IntrinsicFunction {
+            MIRTopLevelNode::IntrinsicOrExternalFunction {
                 function_name,
                 parameters,
                 return_type,
                 is_varargs,
+                is_external
             } => {
-                self.create_function(*function_name, parameters, *return_type, true, *is_varargs);
+                println!("Registering function {} {is_external}", function_name.to_string().as_str());
+                //was already registered, no need to register again... but some functions are special
+                let name = function_name.to_string();
+                if name.contains("reinterpret_ptr") && !is_external {
+                    let function_signature = *self.functions.get(function_name).expect("Expected function to be registered already");
+                    let cur_basic = self.context.append_basic_block(function_signature, "entry");
+                    self.builder.position_at_end(cur_basic);
+
+                    let origin = function_signature.get_first_param().unwrap().into_pointer_value();
+                    let target = function_signature.get_type().get_return_type().unwrap().into_pointer_type();
+                    println!("Cast: {origin:?} -> {target:?}");
+
+                    let casted = self.builder.build_pointer_cast(origin, target, "casted");
+                    self.builder.build_return(Some(&casted));
+                }
+                println!("Cast done");
+
             }
         }
     }
@@ -399,18 +473,17 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         &mut self,
         current_scope: ScopeId,
         symbol_table: &FunctionSymbolTable<'ctx>,
-        expression: &MIRExpr<Checked>,
+        expression: &MIRExpr<'_>,
     ) -> LlvmExpression<'ctx> {
         match expression {
             MIRExpr::RValue(rvalue) => self.compile_rvalue(rvalue, current_scope, symbol_table),
             MIRExpr::LValue(lvalue) => self.compile_lvalue(lvalue, symbol_table, current_scope),
-            MIRExpr::TypecheckTag(_) => panic!(),
         }
     }
 
     fn compile_rvalue(
         &mut self,
-        rvalue: &MIRExprRValue<Checked>,
+        rvalue: &MIRExprRValue<'_>,
         current_scope: ScopeId,
         symbol_table: &FunctionSymbolTable<'ctx>,
     ) -> LlvmExpression<'ctx> {
@@ -422,7 +495,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 self.build_binary_expr(lhs, rhs, current_scope, symbol_table, op, types)
             }
             MIRExprRValue::MethodCall(_, _, _, _ty, _) => todo!(),
-            MIRExprRValue::FunctionCall(function_expr, arg_exprs, _ty, _) => {
+            MIRExprRValue::FunctionCall(function_expr, arg_exprs, _ty, _, _) => {
                 //let expr = self.compile_expr(current_scope, symbol_table, &function_expr);
                 let MIRExprLValue::Variable(var_name, ..) = function_expr.as_ref() else {
                     panic!(
@@ -445,8 +518,11 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
                 let function_compiled = self
                     .module
-                    .get_function(var_name.borrow(self.interner))
-                    .expect("Function does not exist or was not compiled");
+                    .get_function(var_name.to_string().as_str())
+                    .expect(&format!(
+                        "Function does not exist or was not compiled: {}",
+                        var_name.to_string().as_str()
+                    ));
                 let call_site_val = self.builder.build_call(
                     function_compiled,
                     &llvm_args,
@@ -512,17 +588,78 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                     .build_alloca(llvm_str_type.into_struct_type(), &self.make_temp("struct"));
                 LlvmExpression::LValue(llvm_struct)
             }
+            MIRExprRValue::Cast(expr, casted_type, _) => {
+                
+                let expr_compiled = self
+                    .compile_expr(current_scope, symbol_table, expr)
+                    .load_if_lvalue(self.builder)
+                    .expect_rvalue();
+
+                let llvm_casted_type = self.make_llvm_type(*casted_type);
+
+                //generate a numeric cast, i.e. i32 -> i64, f32 -> f64, i32 -> f64, etc
+
+                let casted: BasicValueEnum = if expr.get_type().is_integer(self.type_db) {
+                    if (*casted_type).is_integer(self.type_db) {
+                        self.builder
+                            .build_int_cast(
+                                expr_compiled.into_int_value(),
+                                self.as_basic_type(llvm_casted_type).into_int_type(),
+                                &self.make_temp("casted"),
+                            ).into()
+                    } else if casted_type.is_float(self.type_db) {
+                        self.builder
+                            .build_signed_int_to_float(
+                                expr_compiled.into_int_value(),
+                                self.as_basic_type(llvm_casted_type).into_float_type(),
+                                &self.make_temp("casted"),
+                            ).into()
+                    } else {
+                        todo!("Cast not implemented")
+                    }
+                } else if expr.get_type().is_float(self.type_db) {
+                    if (*casted_type).is_integer(self.type_db) {
+                        self.builder
+                            .build_float_to_signed_int(
+                                expr_compiled.into_float_value(),
+                                self.as_basic_type(llvm_casted_type).into_int_type(),
+                                &self.make_temp("casted"),
+                            ).into()
+                    } else if casted_type.is_float(self.type_db) {
+                        self.builder
+                            .build_float_cast(
+                                expr_compiled.into_float_value(),
+                                self.as_basic_type(llvm_casted_type).into_float_type(),
+                                &self.make_temp("casted"),
+                            ).into()
+                    } else {
+                        todo!("Cast not implemented")
+                    }
+                } else {
+                    todo!("Cast not implemented")
+                };
+
+                LlvmExpression::RValue(casted)
+
+            },
         }
     }
 
     fn compile_lvalue(
         &mut self,
-        lvalue: &MIRExprLValue<Checked>,
+        lvalue: &MIRExprLValue<'_>,
         symbol_table: &FunctionSymbolTable<'ctx>,
         current_scope: ScopeId,
     ) -> LlvmExpression<'ctx> {
         match lvalue {
             MIRExprLValue::Variable(name, _, _) => {
+                log!(
+                    "LValue compile, name = {} {:?}, {}",
+                    name,
+                    name,
+                    symbol_table.len()
+                );
+
                 LlvmExpression::LValue(*symbol_table.get(&(*name, current_scope)).unwrap())
             }
             MIRExprLValue::MemberAccess(obj, member, _, _) => {
@@ -586,8 +723,8 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
 
     fn build_binary_expr(
         &mut self,
-        lhs: &MIRExpr<Checked>,
-        rhs: &MIRExpr<Checked>,
+        lhs: &MIRExpr<'_>,
+        rhs: &MIRExpr<'_>,
         current_scope: ScopeId,
         symbol_table: &FunctionSymbolTable<'ctx>,
         op: &crate::ast::parser::SpannedOperator,
@@ -737,7 +874,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented Equals for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -763,7 +900,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented Not Equals for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -779,7 +916,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented OR for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -795,7 +932,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented And for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -811,7 +948,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented Xor for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -846,7 +983,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented Greater Than comparison for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -881,7 +1018,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented Greater Than Or Equals comparison for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -916,7 +1053,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented Less Than comparison for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -951,7 +1088,7 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
                 } else {
                     panic!(
                         "Not implemented Less Than Or Equals comparison for type {}",
-                        lhs_type.as_string(self.type_db)
+                        lhs_type.to_string(self.type_db)
                     )
                 }
             }
@@ -1011,14 +1148,14 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
     fn build_string_literal(&mut self, s: &InternedString) -> PointerValue<'ctx> {
         //build a buf, len struct
 
-        let mut null_terminated = s.to_string(self.interner);
+        let mut null_terminated = s.to_string();
         null_terminated.push('\0');
 
         //let buf_val = self.context.const_string(null_terminated.as_bytes(), true);
         let len_val = self
             .context
             .i64_type()
-            .const_int(s.borrow(self.interner).len() as u64, false);
+            .const_int(s.to_string().as_str().len() as u64, false);
         let str = self.type_db.find_by_name("str").unwrap();
         let llvm_str_type = self.make_llvm_type(str.id);
 
@@ -1054,12 +1191,118 @@ impl<'codegen_scope, 'ctx, 'interner> CodeGen<'codegen_scope, 'ctx, 'interner> {
         self.next_temporary += 1;
         ret
     }
+
+    fn generate_intrinsics(&mut self) {
+
+        //go over all type instances, check if their constructor is a intrinsic we support
+
+        for type_data in self.type_db.types.iter() {
+            if type_data.base == self.type_db.constructors.common_types.ptr {
+                self.generate_ptr_write_intrinsic(type_data);
+               
+            }
+        }
+
+
+    }
+
+    //makes a type name including generics without special characters
+    fn get_mangled_type_name<'a, 'b>(&'a mut self, type_data: &'b TypeInstance) -> InternedString { 
+        let existing_mangled_name = self.mangled_name_cache.get(&type_data.id);
+        if let Some(existing_mangled_name) = existing_mangled_name {
+            return *existing_mangled_name;
+        }
+        let base_constructor = self.type_db.constructors.find(type_data.base);
+        let mut name = base_constructor.name.to_string();
+        let args_len = type_data.type_args.len();
+        if args_len > 0 {
+            name.push('<');
+          //  name.push('_');
+          //  name.push('A');
+          //  name.push_str(&args_len.to_string());
+    
+        
+            for type_arg in type_data.type_args.iter() {
+                let type_instance = self.type_db.get_instance(*type_arg);
+                let type_arg_name = self.get_mangled_type_name(&type_instance);
+                name.push_str(&format!("{},", type_arg_name));
+                //name.push_str(&format!("_{}", type_arg_name));
+            }
+            name.push('>');
+        }
+        self.mangled_name_cache.insert(type_data.id, name.into());
+        return *self.mangled_name_cache.get(&type_data.id).unwrap();
+    }
+
+    fn get_method_name(&mut self, type_data: &TypeInstance, method_name: InternedString) -> InternedString {
+        //try to find in cache first
+        let existing_mangled_name = self.mangled_method_cache.get(&(type_data.id, method_name));
+        if let Some(existing_mangled_name) = existing_mangled_name {
+            return *existing_mangled_name;
+        }
+
+        let type_name = self.get_mangled_type_name(type_data);
+        let mangled_method_name = format!("{}::{}", type_name, method_name);
+        //let mangled_method_name = format!("{}__{}", type_name, method_name);
+        self.mangled_method_cache.insert((type_data.id, method_name), mangled_method_name.into());
+        return *self.mangled_method_cache.get(&(type_data.id, method_name)).unwrap();
+    }
+
+    fn get_method_name_type_id(&mut self, type_id: TypeInstanceId, method_name: InternedString) -> InternedString {
+        let type_data = self.type_db.get_instance(type_id);
+        return self.get_method_name(&type_data, method_name);
+    }
+
+    fn generate_ptr_write_intrinsic(&mut self, type_data: &TypeInstance) {
+        //generate intrinsic for ptr<T>.write
+        let method_write = type_data.find_method_by_name("write".into()).expect("ptr type HAS to have write method!");
+        let method_name = self.get_method_name(type_data, "write".into());
+
+        let method_type_details = self.type_db.get_instance(method_write.function_type);
+        assert!(method_type_details.is_function);
+        
+        //get the first argument which will be a u32 (trust me bro)
+        let index_arg = method_type_details.function_args[0];
+        let element_arg = method_type_details.function_args[1]; //this will be a ptr<T>, i.e. exact same type as type_data (we hope!)
+
+        let parameters = vec![
+            MIRTypedBoundName { 
+                name: "self".into(), 
+                type_instance: type_data.id
+            },
+            MIRTypedBoundName { 
+                name: "index".into(), 
+                type_instance: index_arg
+            },
+            MIRTypedBoundName { 
+                name: "element".into(), 
+                type_instance: element_arg
+            }
+        ];
+
+        let return_type = method_type_details.function_return_type.unwrap();
+
+        let llvm_function = self.create_function(method_name.into(), &parameters, return_type, false, false);
+        let cur_basic = self.context.append_basic_block(llvm_function, "entry");
+        self.builder.position_at_end(cur_basic);
+
+        let self_arg = llvm_function.get_params()[0].into_pointer_value();
+        let index_arg = llvm_function.get_params()[1].into_int_value();
+        let element_arg = llvm_function.get_params()[2];
+
+        let store_address = unsafe { self.builder.build_in_bounds_gep(self_arg, &[index_arg], "self_at_index") };
+        self.builder.build_store(store_address, element_arg);
+
+        self.builder.build_return(None);
+        
+    }
+
 }
 
 type FunctionSymbolTable<'llvm_ctx> = HashMap<(InternedString, ScopeId), PointerValue<'llvm_ctx>>;
 
 fn build_function_symbol_table<'mir, 'function_layout, 'ctx>(
-    body: &'mir [MIRBlock<Checked>],
+    body: &'mir [MIRBlock<'_>],
     scopes: &'mir [MIRScope],
     function_layout: &'function_layout FunctionLayout,
     llvm_variables: HashMap<InternedString, PointerValue<'ctx>>,
@@ -1074,6 +1317,8 @@ fn build_function_symbol_table<'mir, 'function_layout, 'ctx>(
             let variable_llvm = llvm_variables
                 .get(name)
                 .expect("Should find the variable here");
+
+            //log!("Symbol table insert: {:?} -> {:?}", name, variable_llvm);
             symbol_table.insert((*name, block.scope), *variable_llvm);
         }
     }
@@ -1096,8 +1341,7 @@ fn optimize_module(target_machine: &TargetMachine, module: &Module) {
 
 pub fn generate_llvm(
     type_db: &TypeInstanceManager,
-    mir_top_level_nodes: &[MIRTopLevelNode<Checked>],
-    interner: &StringInterner,
+    mir_top_level_nodes: &[MIRTopLevelNode<'_>],
 ) -> Result<(), Box<dyn Error>> {
     let context = Context::create();
     let module = context.create_module("program");
@@ -1111,17 +1355,30 @@ pub fn generate_llvm(
         type_cache: HashMap::new(),
         next_temporary: 0,
         functions: HashMap::new(),
-        interner,
+        mangled_name_cache: HashMap::new(),
+        mangled_method_cache: HashMap::new()
     };
+
+    codegen.generate_intrinsics();
+
+    for mir_node in mir_top_level_nodes {
+        codegen.register_top_lvl(mir_node);
+    }
 
     for mir_node in mir_top_level_nodes {
         codegen.generate_for_top_lvl(mir_node);
     }
 
+    println!("Codegen done");
+
+    module.print_to_stderr();
     match codegen.module.verify() {
-        Ok(_) => {}
+        Ok(_) => {
+            println!("Verified");
+
+        }
         Err(e) => {
-            codegen.module.print_to_stderr();
+            //codegen.module.print_to_stderr();
             panic!(
                 "Error compiling code to LLVM\n{llvm_err}",
                 llvm_err = e.to_string()
@@ -1129,11 +1386,11 @@ pub fn generate_llvm(
         }
     }
 
-    //module.print_to_stderr();
+
 
     let target_machine = get_native_target_machine();
 
-    optimize_module(&target_machine, &module);
+    //optimize_module(&target_machine, &module);
 
     //module.print_to_stderr();
 
@@ -1167,6 +1424,9 @@ pub fn generate_llvm(
     }
     std::fs::remove_file(output_obj_file).unwrap();
 
+
+   
+
     let ee = module
         .create_jit_execution_engine(OptimizationLevel::Aggressive)
         .unwrap();
@@ -1178,7 +1438,7 @@ pub fn generate_llvm(
             panic!("!> Error during ee: {:?}", err);
         }
     };
-
+    println!("Start running code...");
     unsafe {
         compiled_fn.call();
     };

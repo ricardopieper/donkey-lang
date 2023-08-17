@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
-use crate::interner::{InternedString, StringInterner};
+use crate::interner::InternedString;
 use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
 use super::type_constructor_db::{
-    TypeConstructor, TypeConstructorDatabase, TypeConstructorId, TypeKind, TypeUsage,
+    FunctionSignature, TypeConstructParams, TypeConstructor, TypeConstructorDatabase,
+    TypeConstructorId, TypeKind, TypeParameter,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -12,13 +13,15 @@ pub enum TypeConstructionError {
     TypeNotFound { name: InternedString },
     //GenericArgumentNotFound { name: String },
     IncorrectNumberOfArgs { expected: usize, received: usize },
+    InsufficientInformation,
+    InvalidTypeConstructionArguments,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TypeInstanceId(pub usize);
 
 impl TypeInstanceId {
-    pub fn as_string(self, type_db: &TypeInstanceManager) -> String {
+    pub fn to_string(self, type_db: &TypeInstanceManager) -> String {
         type_db.get_instance(self).name.to_string()
     }
 
@@ -28,7 +31,7 @@ impl TypeInstanceId {
 
     pub fn is_integer(self, type_db: &TypeInstanceManager) -> bool {
         let types = &type_db.common_types;
-        self == types.i32 || self == types.i64 || self == types.u32 || self == types.u64
+        self == types.i32 || self == types.i64 || self == types.u32 || self == types.u64 || self == types.u8
     }
 
     pub fn is_float(self, type_db: &TypeInstanceManager) -> bool {
@@ -68,7 +71,7 @@ pub struct TypeInstance {
     pub is_variadic: bool,
     //only valid if this is a function
     pub function_args: Vec<TypeInstanceId>,
-    //only valid if this is a function
+    //only valid if this is a function, and if it's a function this is always Some(...)
     pub function_return_type: Option<TypeInstanceId>,
     pub is_method_of: Option<TypeInstanceId>,
     //these fields inform type capabilities, i.e. operators it can deal with, fields and functions it has if its a struct, types it can be casted to, etc
@@ -83,6 +86,16 @@ pub struct TypeInstance {
     pub methods: Vec<TypeInstanceStructMethod>,
     //The arguments used in the type constructor
     pub type_args: Vec<TypeInstanceId>,
+}
+
+impl TypeInstance {
+    pub fn find_method_by_name(&self, name: InternedString) -> Option<&TypeInstanceStructMethod> {
+        self.methods.iter().find(|x| x.name == name)
+    }
+
+    pub fn find_field_by_name(&self, name: InternedString) -> Option<&TypeInstanceStructField> {
+        self.fields.iter().find(|x| x.name == name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -105,17 +118,17 @@ pub enum StructMember<'type_db> {
     NotFound,
 }
 
-pub struct TypeInstanceManager<'interner> {
-    pub constructors: TypeConstructorDatabase<'interner>,
+pub struct TypeInstanceManager {
+    pub constructors: TypeConstructorDatabase,
     pub types: Vec<TypeInstance>,
     pub common_types: CommonTypeInstances,
 }
 
-impl<'interner> TypeInstanceManager<'interner> {
-    pub fn new(interner: &'interner StringInterner) -> TypeInstanceManager<'interner> {
+impl TypeInstanceManager {
+    pub fn new() -> TypeInstanceManager {
         let mut item = TypeInstanceManager {
             types: vec![],
-            constructors: TypeConstructorDatabase::new(interner),
+            constructors: TypeConstructorDatabase::new(),
             common_types: Default::default(),
         };
         item.init_builtin();
@@ -228,7 +241,7 @@ impl<'interner> TypeInstanceManager<'interner> {
 
     pub fn construct_usage(
         &mut self,
-        usage: &TypeUsage,
+        usage: &TypeConstructParams,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
@@ -246,25 +259,104 @@ impl<'interner> TypeInstanceManager<'interner> {
         def __index_ptr__(i: u32): ptr<TItem>
 
     */
+
+    fn print_type_args_pretty(&self, type_args: &HashMap<TypeParameter, TypeInstanceId>) -> String {
+        let mut type_args_str = String::new();
+        for (i, (param, type_id)) in type_args.iter().enumerate() {
+            if i > 0 {
+                type_args_str.push_str(", ");
+            }
+            type_args_str.push_str(&format!(
+                "{}: {}",
+                param.0,
+                self.get_instance(*type_id).name
+            ));
+        }
+        type_args_str
+    }
+
     pub fn construct_usage_generic(
         &mut self,
-        usage: &TypeUsage,
-        type_args: &HashMap<InternedString, TypeInstanceId>,
+        usage: &TypeConstructParams,
+        type_args: &HashMap<TypeParameter, TypeInstanceId>,
     ) -> Result<TypeInstanceId, TypeConstructionError> {
+        log!(
+            "construct_usage_generic {} type_args: {}",
+            usage.to_string(&self.constructors),
+            self.print_type_args_pretty(type_args)
+        );
         match usage {
-            TypeUsage::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
-            TypeUsage::Generic(param) => type_args
-                .get(&param.0)
-                .ok_or(TypeConstructionError::TypeNotFound { name: param.0 })
-                .map(|op| *op),
-            TypeUsage::Parameterized(constructor_id, params) => {
-                let mut constructed = vec![];
+            TypeConstructParams::Given(constructor_id) => self.construct_type(*constructor_id, &[]),
+            TypeConstructParams::Generic(param) => {
+                let arg = type_args.get(&param);
 
-                for item in params.iter() {
-                    let type_id = self.construct_usage_generic(item, type_args)?;
-                    constructed.push(type_id);
+                match arg {
+                    Some(type_id) => Ok(*type_id),
+                    None => {
+                        let param_str = param.0;
+                        log!(
+                            "Insufficient information because param {param_str} wasn't found in map"
+                        );
+                        Err(TypeConstructionError::InsufficientInformation)
+                    }
                 }
-                self.construct_type(*constructor_id, &constructed)
+            }
+            TypeConstructParams::Parameterized(base, params) => {
+                match **base {
+                    TypeConstructParams::Given(constructor_id) => {
+                        log!("Base is given");
+                        let mut constructed = vec![];
+
+                        for item in params.iter() {
+                            let type_id = self.construct_usage_generic(item, type_args)?;
+                            constructed.push(type_id);
+                        }
+                        log!("Will construct type now");
+                        let result = self.construct_type(constructor_id, &constructed);
+                        log!("Result is {result:?}");
+                        return result;
+                    }
+                    TypeConstructParams::Generic(_) => {
+                        //@TODO maybe in some cases there *is* enough information, we have a map of type args after all.
+                        //But the more likely case is that monomorphization will run and then types will be able to be constructed
+                        //(i.e. the base  will become Given instead of Generic)
+                        //so we just need to return a flag saying we can't construct it yet
+                        log!("Insufficient information because it's generic");
+                        Err(TypeConstructionError::InsufficientInformation)
+                    }
+                    TypeConstructParams::FunctionSignature(_) => {
+                        Err(TypeConstructionError::InvalidTypeConstructionArguments)
+                    }
+                    TypeConstructParams::Parameterized(_, _) => {
+                        Err(TypeConstructionError::InvalidTypeConstructionArguments)
+                    }
+                }
+            }
+            TypeConstructParams::FunctionSignature(FunctionSignature {
+                generics: _,
+                params,
+                return_type,
+                variadic,
+            }) => {
+                let params_constructed = params
+                    .iter()
+                    .map(|x| {
+                        log!("Building parameter {x:?}");
+
+                        self.construct_usage_generic(x, type_args)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                log!("Building return type {return_type:?}");
+                let return_type_constructed =
+                    self.construct_usage_generic(return_type, type_args)?;
+
+                log!("Building function now");
+                Ok(self.construct_function(
+                    &params_constructed,
+                    return_type_constructed,
+                    variadic.0,
+                ))
             }
         }
     }
@@ -274,47 +366,53 @@ impl<'interner> TypeInstanceManager<'interner> {
         constructor_id: TypeConstructorId,
         positional_args: &[TypeInstanceId],
     ) -> Result<TypeInstanceId, TypeConstructionError> {
+        log!("Construct_type called with parameters {constructor_id:?} {positional_args:?}");
+
         let c = self.constructors.find(constructor_id);
 
         for existing_type in &self.types {
             if existing_type.base == constructor_id && existing_type.type_args == positional_args {
+                log!(
+                    "Returning cached type id {existing_type_id:?} {name}",
+                    existing_type_id = existing_type.id,
+                    name = existing_type.name
+                );
                 return Ok(existing_type.id);
             }
         }
 
+        log!("Type not yet cached, will construct");
+
         let id = TypeInstanceId(self.types.len());
-        self.types.push(make_base_instance(
-            id,
-            c,
-            positional_args,
-            self.constructors.interner,
-        ));
+        self.types.push(make_base_instance(id, c, positional_args));
 
         //build a map of argname => type id
         let mut type_args = HashMap::new();
         {
             let constructor = self.constructors.find(constructor_id);
-            if constructor.type_args.len() != positional_args.len() {
+            if constructor.type_params.len() != positional_args.len() {
                 return Err(TypeConstructionError::IncorrectNumberOfArgs {
-                    expected: constructor.type_args.len(),
+                    expected: constructor.type_params.len(),
                     received: positional_args.len(),
                 });
             }
 
-            for (index, type_arg) in constructor.type_args.iter().enumerate() {
-                type_args.insert(type_arg.0, positional_args[index]);
+            for (index, type_arg) in constructor.type_params.iter().enumerate() {
+                type_args.insert(type_arg.clone(), positional_args[index]);
             }
         }
-
         let allowed_casts = self.make_casts(constructor_id)?;
         let rhs_binary_ops = self.make_binary_ops(constructor_id)?;
         let unary_ops = self.make_unary_ops(constructor_id)?;
-        let fields = self.make_fields(constructor_id)?;
+
+        log!("MAKE_FIELDS about to be called");
+
+        let fields = self.make_fields(constructor_id, &type_args)?;
+
         let methods = self.make_methods(constructor_id, &type_args, id)?;
 
         let name = if positional_args.is_empty() {
-            let constructor = self.constructors.find(constructor_id);
-            self.constructors.interner.get_string(constructor.name)
+            self.constructors.get_name(constructor_id)
         } else {
             let constructor = self.constructors.find(constructor_id);
             let generics = positional_args
@@ -322,14 +420,11 @@ impl<'interner> TypeInstanceManager<'interner> {
                 .map(|x| self.get_instance(*x).name.clone())
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!(
-                "{base}<{generics}>",
-                base = self.constructors.interner.get_string(constructor.name)
-            )
+            format!("{base}<{generics}>", base = constructor.name)
         };
 
         {
-            let mut cur = &mut self.types[id.0];
+            let cur = &mut self.types[id.0];
             cur.allowed_casts = allowed_casts;
             cur.rhs_binary_ops = rhs_binary_ops;
             cur.unary_ops = unary_ops;
@@ -401,15 +496,21 @@ impl<'interner> TypeInstanceManager<'interner> {
     fn make_fields(
         &mut self,
         constructor_id: TypeConstructorId,
+        type_args: &HashMap<TypeParameter, TypeInstanceId>,
     ) -> Result<Vec<TypeInstanceStructField>, TypeConstructionError> {
+        log!(
+            "Constructing fields, type args = {}",
+            self.print_type_args_pretty(type_args)
+        );
         let fields = {
             let constructor = self.constructors.find(constructor_id);
             let mut result = vec![];
             let fields = constructor.fields.clone();
             for field_decl in &fields {
+                log!("Constructing field {}", field_decl.name);
                 result.push(TypeInstanceStructField {
                     name: field_decl.name,
-                    field_type: self.construct_usage(&field_decl.field_type)?,
+                    field_type: self.construct_usage_generic(&field_decl.field_type, type_args)?,
                 });
             }
             result
@@ -420,7 +521,7 @@ impl<'interner> TypeInstanceManager<'interner> {
     fn make_methods(
         &mut self,
         constructor_id: TypeConstructorId,
-        type_args: &HashMap<InternedString, TypeInstanceId>,
+        type_args: &HashMap<TypeParameter, TypeInstanceId>,
         id: TypeInstanceId,
     ) -> Result<Vec<TypeInstanceStructMethod>, TypeConstructionError> {
         let methods = {
@@ -432,7 +533,7 @@ impl<'interner> TypeInstanceManager<'interner> {
                 let args = {
                     let mut args = vec![];
                     for arg in &method_decl.args {
-                        let arg_constructed = self.construct_usage(arg)?;
+                        let arg_constructed = self.construct_usage_generic(arg, type_args)?;
                         args.push(arg_constructed);
                     }
                     args
@@ -472,7 +573,9 @@ impl<'interner> TypeInstanceManager<'interner> {
         macro_rules! make_type {
             ($type:tt) => {
                 self.common_types.$type = self
-                    .construct_usage(&TypeUsage::Given(self.constructors.common_types.$type))
+                    .construct_usage(&TypeConstructParams::Given(
+                        self.constructors.common_types.$type,
+                    ))
                     .unwrap();
             };
         }
@@ -494,13 +597,12 @@ fn make_base_instance(
     id: TypeInstanceId,
     constructor: &TypeConstructor,
     positional_args: &[TypeInstanceId],
-    interner: &StringInterner,
 ) -> TypeInstance {
     TypeInstance {
         id,
         base: constructor.id,
         size: Bytes(0),
-        name: interner.get_string(constructor.name),
+        name: constructor.name.to_string(),
         allowed_casts: vec![],
         rhs_binary_ops: vec![],
         unary_ops: vec![],

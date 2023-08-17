@@ -2,22 +2,22 @@ use std::collections::HashSet;
 
 use super::compiler_errors::CompilerError;
 use super::context::FileTableIndex;
-use super::hir::{Checked, HIRAstMetadata, HIRExprMetadata, NotCheckedSimplified};
+use super::hir::{HIRAstMetadata, HIRExprMetadata};
 
 use super::hir_type_resolution::RootElementType;
-use super::mir_printer::MIRExprPrinter;
+use super::mir_printer::{self, MIRPrinter};
 
 use crate::ast::parser::{Expr, SpannedOperator};
-use crate::interner::{InternedString, StringInterner};
-use crate::types::type_errors::{
-    ArrayExpressionsNotAllTheSameType, AssignContext, DerefOnNonPointerError,
-    FunctionCallArgumentCountMismatch, FunctionCallContext, RefOnNonLValueError,
-    ReturnTypeContext, TypeErrorAtLocation, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
-    UnexpectedTypeInferenceMismatch,
+use crate::interner::InternedString;
+use crate::types::diagnostics::{
+    ArrayExpressionsNotAllTheSameType, AssignContext, ContextualizedCompilerError,
+    DerefOnNonPointerError, FunctionCallArgumentCountMismatch, FunctionCallContext, MethodNotFound,
+    RefOnNonLValueError, ReturnTypeContext, TypeErrors, TypeMismatch, UnaryOperatorNotFound,
+    UnexpectedTypeInferenceMismatch, InvalidCast,
 };
-use crate::types::type_errors::{
-    BinaryOperatorNotFound, FieldOrMethodNotFound, IfStatementNotBoolean, InvalidCast,
-    OutOfTypeBounds, UnexpectedTypeFound,
+use crate::types::diagnostics::{
+    BinaryOperatorNotFound, FieldNotFound, IfStatementNotBoolean, OutOfTypeBounds,
+    UnexpectedTypeFound,
 };
 use crate::types::type_instance_db::{
     CommonTypeInstances, StructMember, TypeInstanceId, TypeInstanceManager,
@@ -28,7 +28,7 @@ use super::mir::{
     MIRExprRValue, MIRScope, MIRTopLevelNode, ScopeId, TypecheckPendingExpression,
     TypecheckedExpression, TypecheckedMIRBlock,
 };
-use super::name_registry::NameRegistry;
+use super::top_level_decls::NameRegistry;
 
 //cloneless: This is cloneable because it's only really copied when needed,
 //and the names here are built by something else, it's a separate allocation.
@@ -48,25 +48,23 @@ pub enum FunctionName {
     },
 }
 
-pub struct TypeCheckContext<'compiler_context, 'source, 'interner> {
-    names: &'compiler_context NameRegistry,
-    type_db: &'compiler_context TypeInstanceManager<'interner>,
+pub struct TypeCheckContext<'compiler_context, 'source> {
+    top_level_decls: &'compiler_context NameRegistry,
+    type_db: &'compiler_context TypeInstanceManager,
     errors: &'compiler_context mut TypeErrors<'source>,
-    interner: &'interner StringInterner,
+
     on_element: RootElementType,
     on_file: FileTableIndex,
 }
 
-impl<'compiler_context, 'source, 'interner>
-    TypeCheckContext<'compiler_context, 'source, 'interner>
-{
+impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
     //We will check that function arguments and index operators are receiving the correct types.
     //Binary operators are actually certainly correct, since type inference will report errors if it can't find an appropriate operator.
     //We might implement sanity checks here, to prevent bugs in the type inference propagating to the backend code.
     //We also assert that literal types are within bounds.
     pub fn typecheck(
         &mut self,
-        expr: MIRExpr<'source, NotCheckedSimplified>,
+        expr: MIRExpr<'source>,
     ) -> Result<TypecheckedExpression<'source>, CompilerError> {
         match expr {
             MIRExpr::RValue(MIRExprRValue::Literal(literal, type_id, meta)) => self
@@ -76,9 +74,9 @@ impl<'compiler_context, 'source, 'interner>
                     &self.type_db.common_types,
                     meta,
                 ),
-            //MIRExpr::RValue(MIRExprRValue::Cast(cast_expr, cast_to, meta)) => {
-            //    self.check_expr_cast(*cast_expr, cast_to, meta)
-            //}
+            MIRExpr::RValue(MIRExprRValue::Cast(cast_expr, cast_to, meta)) => {
+                self.check_expr_cast(*cast_expr, cast_to, meta)
+            }
             MIRExpr::RValue(MIRExprRValue::BinaryOperation(lhs, op, rhs, expr_type, meta)) => {
                 self.check_fun_expr_bin_op(*lhs, *rhs, op, expr_type, meta)
             }
@@ -90,6 +88,7 @@ impl<'compiler_context, 'source, 'interner>
                 args,
                 return_type,
                 meta,
+                _,
             )) => self.check_expr_function_call(*function_expr, args, return_type, meta),
             MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, meta)) => {
                 Ok(MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, meta)))
@@ -104,8 +103,6 @@ impl<'compiler_context, 'source, 'interner>
             }
             MIRExpr::LValue(lvalue) => self.typecheck_lvalue(lvalue).map(MIRExpr::LValue),
 
-            MIRExpr::TypecheckTag(_) => unreachable!(),
-
             MIRExpr::RValue(MIRExprRValue::Ref(obj, expr_type, meta)) => {
                 self.check_ref_expr(*obj, expr_type, meta)
             }
@@ -114,8 +111,8 @@ impl<'compiler_context, 'source, 'interner>
 
     fn typecheck_lvalue(
         &mut self,
-        lvalue: MIRExprLValue<'source, NotCheckedSimplified>,
-    ) -> Result<MIRExprLValue<'source, Checked>, CompilerError> {
+        lvalue: MIRExprLValue<'source>,
+    ) -> Result<MIRExprLValue<'source>, CompilerError> {
         match lvalue {
             MIRExprLValue::MemberAccess(obj, member, inferred_type, meta) => {
                 self.check_expr_member_access(*obj, member, inferred_type, meta)
@@ -135,7 +132,7 @@ impl<'compiler_context, 'source, 'interner>
         obj: TypecheckPendingExpression<'source>,
         expr_type: TypeInstanceId,
         meta: &'source Expr,
-    ) -> Result<MIRExprLValue<'source, Checked>, CompilerError> {
+    ) -> Result<MIRExprLValue<'source>, CompilerError> {
         let typechecked = self.typecheck(obj)?;
         //expr_type should be type T
         //typechecked should be ptr<T>
@@ -144,18 +141,21 @@ impl<'compiler_context, 'source, 'interner>
         let ptr_type = self.type_db.get_instance(typechecked.get_type());
 
         if ptr_type.base != self.type_db.constructors.common_types.ptr {
-            self.errors.invalid_derefed_type.push(
-                DerefOnNonPointerError {
-                    attempted_type: ptr_type.id,
-                }
-                .at_spanned(self.on_element, self.on_file, meta),
-            );
-            return Err(CompilerError::TypeCheckError);
+            return self
+                .errors
+                .invalid_derefed_type
+                .push(
+                    DerefOnNonPointerError {
+                        attempted_type: ptr_type.id,
+                    }
+                    .at_spanned(self.on_element, self.on_file, meta, loc!()),
+                )
+                .as_type_check_error();
         }
 
         //check that expr_type is the same as the obj type dereferenced, if it isn't the same maybe there's a type inference error (in the compiler)
         if expr_type != ptr_type.type_args[0] {
-            panic!("Fatal error: Type inference error: pointer type of {} when dereferenced cannot result in a type {}", 
+            panic!("Fatal error: Type inference error: pointer type of {} when dereferenced cannot result in a type {}",
                 ptr_type.name,
                 derefed_type.name
             );
@@ -166,7 +166,7 @@ impl<'compiler_context, 'source, 'interner>
 
     fn check_ref_expr(
         &mut self,
-        obj: MIRExprLValue<'source, NotCheckedSimplified>,
+        obj: MIRExprLValue<'source>,
         expr_type: TypeInstanceId,
         meta: &'source Expr,
     ) -> Result<TypecheckedExpression<'source>, CompilerError> {
@@ -175,22 +175,20 @@ impl<'compiler_context, 'source, 'interner>
 
         //and expr_type has to be ptr<T> where T is the type of the object
         if ptr_type.type_args[0] != typechecked.get_type() {
-            panic!("Fatal error: Type inference error: on a ref expression, the type inferred is not a pointer to the type of the object, it is {}", 
+            panic!("Fatal error: Type inference error: on a ref expression, the type inferred is not a pointer to the type of the object, it is {}",
                 ptr_type.name
             );
         }
 
         let MIRExpr::LValue(lvalue) = typechecked else {
-            self.errors.invalid_refed_type.push(
-                RefOnNonLValueError {}
-                    .at_spanned(self.on_element, self.on_file, meta),
+            return self.errors.invalid_refed_type.push_inference_error(
+                RefOnNonLValueError {}.at_spanned(self.on_element, self.on_file, meta, loc!()),
             );
-            return Err(CompilerError::TypeCheckError);
         };
 
         //expr_type has to be ptr
         if ptr_type.base != self.type_db.constructors.common_types.ptr {
-            panic!("Fatal error: Type inference error: on a ref expression, the type inferred is not a pointer type, it is {}", 
+            panic!("Fatal error: Type inference error: on a ref expression, the type inferred is not a pointer type, it is {}",
                 ptr_type.name
             );
         }
@@ -204,7 +202,7 @@ impl<'compiler_context, 'source, 'interner>
 
     fn check_expr_function_call(
         &mut self,
-        function_expr: MIRExprLValue<'source, NotCheckedSimplified>,
+        function_expr: MIRExprLValue<'source>,
         args: Vec<TypecheckPendingExpression<'source>>,
         return_type: TypeInstanceId,
         meta: HIRExprMetadata<'source>,
@@ -215,10 +213,8 @@ impl<'compiler_context, 'source, 'interner>
             function_type_id,
             || {
                 //@TODO invoking the printer here is kinda sus
-                let printer = MIRExprPrinter::new(self.interner, self.type_db);
-                let interned = self
-                    .interner
-                    .get(&printer.print_lvalue(&checked_func.clone()));
+                let printer = MIRPrinter::new(self.type_db);
+                let interned = InternedString::new(&printer.print_lvalue(&checked_func.clone()));
                 FunctionName::Function(interned)
             },
             args,
@@ -229,6 +225,7 @@ impl<'compiler_context, 'source, 'interner>
             checked_args,
             return_type,
             meta,
+            None,
         )))
     }
 
@@ -272,13 +269,14 @@ impl<'compiler_context, 'source, 'interner>
                 meta,
             )))
         } else {
-            self.errors.array_expressions_not_all_the_same_type.push(
-                ArrayExpressionsNotAllTheSameType {
-                    expected_type: all_array_exprs_checked[0].get_type(),
-                }
-                .at_spanned(self.on_element, self.on_file, meta),
-            );
-            Err(CompilerError::TypeCheckError)
+            self.errors
+                .array_expressions_not_all_the_same_type
+                .push_typecheck_error(
+                    ArrayExpressionsNotAllTheSameType {
+                        expected_type: all_array_exprs_checked[0].get_type(),
+                    }
+                    .at_spanned(self.on_element, self.on_file, meta, loc!()),
+                )
         }
     }
 
@@ -288,7 +286,7 @@ impl<'compiler_context, 'source, 'interner>
         member: InternedString,
         inferred_type: TypeInstanceId,
         meta: HIRExprMetadata<'source>,
-    ) -> Result<MIRExprLValue<'source, Checked>, CompilerError> {
+    ) -> Result<MIRExprLValue<'source>, CompilerError> {
         let obj_type = obj.get_type();
         let checked_obj = self.typecheck(obj)?;
         let member_type = match self
@@ -298,27 +296,28 @@ impl<'compiler_context, 'source, 'interner>
             StructMember::Field(f, _) => f.field_type,
             StructMember::Method(m) => m.function_type,
             StructMember::NotFound => {
-                self.errors.field_or_method_not_found.push(
-                    FieldOrMethodNotFound {
+                return self.errors.field_not_found.push_typecheck_error(
+                    FieldNotFound {
                         object_type: obj_type,
-                        field_or_method: member,
+                        field: member,
                     }
-                    .at_spanned(self.on_element, self.on_file, meta),
-                );
-                return Err(CompilerError::TypeCheckError);
+                    .at_spanned(self.on_element, self.on_file, meta, loc!()),
+                )
             }
         };
 
         if member_type != inferred_type {
-            self.errors.type_inference_check_mismatch.push(
-                UnexpectedTypeInferenceMismatch {
-                    inferred: inferred_type,
-                    checked: checked_obj.get_type(),
-                    expr: checked_obj,
-                }
-                .at_spanned(self.on_element, self.on_file, meta),
-            );
-            return Err(CompilerError::TypeCheckError);
+            return self
+                .errors
+                .type_inference_check_mismatch
+                .push_typecheck_error(
+                    UnexpectedTypeInferenceMismatch {
+                        inferred: inferred_type,
+                        checked: checked_obj.get_type(),
+                        expr: checked_obj,
+                    }
+                    .at_spanned(self.on_element, self.on_file, meta, loc!()),
+                );
         }
         Ok(MIRExprLValue::MemberAccess(
             checked_obj.into(),
@@ -353,14 +352,13 @@ impl<'compiler_context, 'source, 'interner>
                 meta,
             )))
         } else {
-            self.errors.unary_op_not_found.push(
+            return self.errors.unary_op_not_found.push_typecheck_error(
                 UnaryOperatorNotFound {
                     rhs: checked_rhs.get_type(),
                     operator: op.0,
                 }
-                .at_spanned(self.on_element, self.on_file, &op.1),
+                .at_spanned(self.on_element, self.on_file, &op.1, loc!()),
             );
-            Err(CompilerError::TypeCheckError)
         }
     }
 
@@ -390,40 +388,14 @@ impl<'compiler_context, 'source, 'interner>
                 meta,
             )))
         } else {
-            self.errors.binary_op_not_found.push(
+            return self.errors.binary_op_not_found.push_typecheck_error(
                 BinaryOperatorNotFound {
                     lhs: checked_lhs.get_type(),
                     rhs: checked_rhs.get_type(),
                     operator: op.0,
                 }
-                .at_spanned(self.on_element, self.on_file, &op.1),
+                .at_spanned(self.on_element, self.on_file, &op.1, loc!()),
             );
-            Err(CompilerError::TypeCheckError)
-        }
-    }
-
-    fn check_expr_cast(
-        &mut self,
-        expr: TypecheckPendingExpression<'source>,
-        cast_to: TypeInstanceId,
-        meta: HIRExprMetadata<'source>,
-    ) -> Result<TypecheckedExpression<'source>, CompilerError> {
-        let checked = self.typecheck(expr)?;
-        //is type of expr castable to cast_to?
-        let type_data = self.type_db.get_instance(checked.get_type());
-        if type_data.allowed_casts.contains(&cast_to) {
-            //@TODO check if the cast is valid
-            todo!("check if the cast is valid");
-            //Ok(MIRExpr::RValue(MIRExprRValue::Cast(checked.into(), cast_to, meta)))
-        } else {
-            self.errors.invalid_casts.push(
-                InvalidCast {
-                    expr: checked,
-                    cast_to,
-                }
-                .at_spanned(self.on_element, self.on_file, meta),
-            );
-            Err(CompilerError::TypeCheckError)
         }
     }
 
@@ -445,26 +417,31 @@ impl<'compiler_context, 'source, 'interner>
                 } else if type_id == common_types.u64 {
                     i >= i128::from(u64::MIN) && i <= i128::from(u64::MAX)
                 } else {
-                    self.errors.unexpected_types.push(
+                    return self.errors.unexpected_types.push_typecheck_error(
                         UnexpectedTypeFound { type_def: type_id }.at_spanned(
                             self.on_element,
                             self.on_file,
                             meta,
+                            loc!(),
                         ),
                     );
-                    return Err(CompilerError::TypeCheckError);
                 };
                 if is_within_bounds {
                     true
                 } else {
-                    self.errors.out_of_bounds.push(
+                    //@TODO this is bad, we end up reporting 2 errors instead of just one, maybe we should return Ok(()) or Err(CompilerError) inside this match
+                    return self.errors.out_of_bounds.push_typecheck_error(
                         OutOfTypeBounds {
                             typ: type_id,
                             expr: meta,
                         }
-                        .at_spanned(self.on_element, self.on_file, meta),
+                        .at_spanned(
+                            self.on_element,
+                            self.on_file,
+                            meta,
+                            loc!(),
+                        ),
                     );
-                    false
                 }
             }
             LiteralMIRExpr::Float(f) => {
@@ -474,26 +451,30 @@ impl<'compiler_context, 'source, 'interner>
                 } else if type_id == common_types.f64 {
                     true
                 } else {
-                    self.errors.unexpected_types.push(
+                    return self.errors.unexpected_types.push_typecheck_error(
                         UnexpectedTypeFound { type_def: type_id }.at_spanned(
                             self.on_element,
                             self.on_file,
                             meta,
+                            loc!(),
                         ),
                     );
-                    return Err(CompilerError::TypeCheckError);
                 };
                 if is_within_bounds {
                     true
                 } else {
-                    self.errors.out_of_bounds.push(
+                    return self.errors.out_of_bounds.push_typecheck_error(
                         OutOfTypeBounds {
                             expr: meta,
                             typ: type_id,
                         }
-                        .at_spanned(self.on_element, self.on_file, meta),
+                        .at_spanned(
+                            self.on_element,
+                            self.on_file,
+                            meta,
+                            loc!(),
+                        ),
                     );
-                    false
                 }
             }
             LiteralMIRExpr::String(_) | LiteralMIRExpr::Boolean(_) | LiteralMIRExpr::Char(_) => {
@@ -505,7 +486,14 @@ impl<'compiler_context, 'source, 'interner>
                 literal, type_id, meta,
             )))
         } else {
-            Err(CompilerError::TypeCheckError)
+            return self.errors.unexpected_types.push_typecheck_error(
+                UnexpectedTypeFound { type_def: type_id }.at_spanned(
+                    self.on_element,
+                    self.on_file,
+                    meta,
+                    loc!(),
+                ),
+            );
         }
     }
 
@@ -522,20 +510,24 @@ impl<'compiler_context, 'source, 'interner>
         ),
         CompilerError,
     > {
-        let checked_method = self.typecheck(obj)?;
-        let obj_type = self.type_db.get_instance(checked_method.get_type());
+        let checked_obj = self.typecheck(obj)?;
+        log!(
+            "method call check, checked_obj = {}",
+            checked_obj.get_type().to_string(&self.type_db)
+        );
+        let obj_type = self.type_db.get_instance(checked_obj.get_type());
 
         let function_type = if let Some(ftype) = obj_type.methods.iter().find(|x| x.name == name) {
             self.type_db.get_instance(ftype.function_type)
         } else {
-            self.errors.field_or_method_not_found.push(
-                FieldOrMethodNotFound {
-                    object_type: checked_method.get_type(),
-                    field_or_method: name,
+            log!("Error accessing method {} {}", name, obj_type.name);
+            return self.errors.method_not_found.push_typecheck_error(
+                MethodNotFound {
+                    object_type: checked_obj.get_type(),
+                    method: name,
                 }
-                .at_spanned(self.on_element, self.on_file, meta),
+                .at_spanned(self.on_element, self.on_file, meta, loc!()),
             );
-            return Err(CompilerError::TypeCheckError);
         };
 
         let checked_args = args
@@ -544,20 +536,17 @@ impl<'compiler_context, 'source, 'interner>
             .collect::<Result<Vec<_>, _>>()?;
 
         if function_type.function_args.len() != checked_args.len() {
-            self.errors.function_call_argument_count.push(
-                FunctionCallArgumentCountMismatch {
-                    called_function_name: make_method_name_or_index(
-                        name,
-                        &obj_type.name,
-                        meta,
-                        self.interner,
-                    ),
-                    expected_count: function_type.function_args.len(),
-                    passed_count: checked_args.len(),
-                }
-                .at_spanned(self.on_element, self.on_file, meta),
-            );
-            return Err(CompilerError::TypeCheckError);
+            return self
+                .errors
+                .function_call_argument_count
+                .push_typecheck_error(
+                    FunctionCallArgumentCountMismatch {
+                        called_function_name: make_method_name_or_index(name, &obj_type.name, meta),
+                        expected_count: function_type.function_args.len(),
+                        passed_count: checked_args.len(),
+                    }
+                    .at_spanned(self.on_element, self.on_file, meta, loc!()),
+                );
         };
 
         let checked_arg_types = checked_args.iter().map(|x| x.get_type());
@@ -569,25 +558,19 @@ impl<'compiler_context, 'source, 'interner>
             .find(|(_index, (expected, actual))| *expected != actual);
 
         if let Some((arg_pos, types)) = has_invalid_arg {
-            self.errors.function_call_mismatches.push(
+            return self.errors.function_call_mismatches.push_typecheck_error(
                 TypeMismatch {
                     context: FunctionCallContext {
-                        called_function_name: make_method_name_or_index(
-                            name,
-                            &obj_type.name,
-                            meta,
-                            self.interner,
-                        ),
+                        called_function_name: make_method_name_or_index(name, &obj_type.name, meta),
                         argument_position: arg_pos,
                     },
                     expected: *types.0,
                     actual: types.1,
                 }
-                .at_spanned(self.on_element, self.on_file, meta),
+                .at_spanned(self.on_element, self.on_file, meta, loc!()),
             );
-            return Err(CompilerError::TypeCheckError);
         }
-        Ok((checked_method, checked_args))
+        Ok((checked_obj, checked_args))
     }
 
     fn function_call_check<FName>(
@@ -611,37 +594,41 @@ impl<'compiler_context, 'source, 'interner>
 
         //for non-variadic calls, argument amount must be the same
         if different_arg_count && !function_type.is_variadic {
-            self.errors.function_call_argument_count.push(
-                FunctionCallArgumentCountMismatch {
-                    called_function_name: function_name(),
-                    expected_count: function_type.function_args.len(),
-                    passed_count: checked_args.len(),
-                }
-                .at_spanned(self.on_element, self.on_file, meta),
-            );
-            return Err(CompilerError::TypeCheckError);
+            return self
+                .errors
+                .function_call_argument_count
+                .push_typecheck_error(
+                    FunctionCallArgumentCountMismatch {
+                        called_function_name: function_name(),
+                        expected_count: function_type.function_args.len(),
+                        passed_count: checked_args.len(),
+                    }
+                    .at_spanned(self.on_element, self.on_file, meta, loc!()),
+                );
         }
 
         //for variadic calls, the argument number has to be at least the same as the non-variadic arguments
         if function_type.is_variadic && !valid_vararg_call {
-            self.errors.function_call_argument_count.push(
-                FunctionCallArgumentCountMismatch {
-                    called_function_name: function_name(),
-                    expected_count: function_type.function_args.len(),
-                    passed_count: checked_args.len(),
-                }
-                .at_spanned(self.on_element, self.on_file, meta),
-            );
-            return Err(CompilerError::TypeCheckError);
+            return self
+                .errors
+                .function_call_argument_count
+                .push_typecheck_error(
+                    FunctionCallArgumentCountMismatch {
+                        called_function_name: function_name(),
+                        expected_count: function_type.function_args.len(),
+                        passed_count: checked_args.len(),
+                    }
+                    .at_spanned(self.on_element, self.on_file, meta, loc!()),
+                );
         }
 
         let checked_arg_types = checked_args.iter().map(|x| x.get_type());
         let arg_pairs = function_type.function_args.iter().zip(checked_arg_types);
 
-        let mut has_errors = false;
+        let mut first_type_mismatch_err = None;
         for (index, (expected, actual)) in arg_pairs.enumerate() {
             if *expected != actual {
-                self.errors.function_call_mismatches.push(
+                let err = self.errors.function_call_mismatches.push_typecheck_error(
                     TypeMismatch {
                         context: FunctionCallContext {
                             called_function_name: function_name(),
@@ -650,30 +637,33 @@ impl<'compiler_context, 'source, 'interner>
                         expected: *expected,
                         actual,
                     }
-                    .at_spanned(self.on_element, self.on_file, meta),
+                    .at_spanned(self.on_element, self.on_file, meta, loc!()),
                 );
-                has_errors = true;
+                if first_type_mismatch_err.is_none() {
+                    first_type_mismatch_err = Some(err);
+                }
             }
         }
-        if has_errors {
-            return Err(CompilerError::TypeCheckError);
+        if first_type_mismatch_err.is_some() {
+            return first_type_mismatch_err.unwrap();
         }
         Ok(checked_args)
     }
 
     fn type_check_function<'scopes>(
         &mut self,
-        body: Vec<MIRBlock<'source, NotCheckedSimplified>>,
+        body: Vec<MIRBlock<'source>>,
         scopes: &'scopes [MIRScope],
         return_type: TypeInstanceId,
     ) -> Result<Vec<TypecheckedMIRBlock<'source>>, CompilerError> {
-        let mut has_errors = false;
+        let fname = self.on_element.get_name();
+        log!("Type checking {fname}");
         let mut new_body = vec![];
 
         for block in body {
             let scope = block.scope;
             let index = block.index;
-            let new_finish: MIRBlockFinal<Checked> = match block.finish {
+            let new_finish: MIRBlockFinal = match block.finish {
                 MIRBlockFinal::If(expr, goto_true, goto_false, ast_meta) => {
                     self.check_if_statement_expression(expr, goto_true, goto_false, ast_meta)?
                 }
@@ -684,7 +674,7 @@ impl<'compiler_context, 'source, 'interner>
                     if return_type == expr_type {
                         MIRBlockFinal::Return(checked_return_expr, ast_meta)
                     } else {
-                        self.errors.return_type_mismatches.push(
+                        return self.errors.return_type_mismatches.push_typecheck_error(
                             TypeMismatch {
                                 context: ReturnTypeContext(),
                                 expected: return_type,
@@ -694,16 +684,16 @@ impl<'compiler_context, 'source, 'interner>
                                 self.on_element,
                                 self.on_file,
                                 ast_meta,
+                                loc!(),
                             ),
                         );
-                        return Err(CompilerError::TypeCheckError);
                     }
                 }
                 MIRBlockFinal::EmptyReturn(ast_meta) => {
                     if return_type == self.type_db.common_types.void {
                         MIRBlockFinal::EmptyReturn(ast_meta)
                     } else {
-                        self.errors.return_type_mismatches.push(
+                        return self.errors.return_type_mismatches.push_typecheck_error(
                             TypeMismatch {
                                 context: ReturnTypeContext(),
                                 expected: return_type,
@@ -713,22 +703,24 @@ impl<'compiler_context, 'source, 'interner>
                                 self.on_element,
                                 self.on_file,
                                 ast_meta,
+                                loc!(),
                             ),
                         );
-                        return Err(CompilerError::TypeCheckError);
                     }
                 }
             };
+            let mut first_error = None;
 
             let mut new_blocks = vec![];
             for node in block.nodes {
                 match self.check_mir_block_node(node, block.scope, scopes) {
                     Ok(new_node) => new_blocks.push(new_node),
-                    Err(_) => has_errors = true,
+                    Err(e) if first_error.is_none() => first_error = Some(e),
+                    Err(_) => {}
                 }
             }
-            if has_errors {
-                return Err(CompilerError::TypeCheckError);
+            if let Some(e) = first_error {
+                return Err(e);
             }
 
             new_body.push(MIRBlock {
@@ -738,16 +730,21 @@ impl<'compiler_context, 'source, 'interner>
                 nodes: new_blocks,
             });
         }
-
+        log!("Completed type check of {fname}");
         Ok(new_body)
     }
 
     fn check_mir_block_node<'scopes>(
         &mut self,
-        node: MIRBlockNode<'source, NotCheckedSimplified>,
+        node: MIRBlockNode<'source>,
         scope: ScopeId,
         scopes: &'scopes [MIRScope],
-    ) -> Result<MIRBlockNode<'source, Checked>, CompilerError> {
+    ) -> Result<MIRBlockNode<'source>, CompilerError> {
+        let mir_printer = mir_printer::MIRPrinter::new(&&self.type_db);
+        let mir_str = mir_printer.print_mir_block_node(&node);
+        log!("Checking MIR node: {mir_str}");
+        let fname = self.on_element.get_name();
+
         match node {
             MIRBlockNode::Assign {
                 path,
@@ -757,9 +754,19 @@ impl<'compiler_context, 'source, 'interner>
             } => {
                 match path {
                     MIRExprLValue::Variable(var_name, _, _) => {
+                        let vname = var_name;
+                        log!("Checking ASSIGN to variable `{vname}` in {fname}");
                         let variable_type =
                             self.find_variable_and_get_type(var_name, scope, scopes);
+
+                        let var_type_name = variable_type.to_string(self.type_db);
+
                         let expr_type = expression.get_type();
+
+                        let expr_type_name = variable_type.to_string(self.type_db);
+
+                        log!("Assign value of type {expr_type_name} to variable `{vname}` of type {var_type_name}");
+
                         let typechecked_lhs = self.typecheck_lvalue(path)?;
 
                         if variable_type == expr_type {
@@ -771,7 +778,7 @@ impl<'compiler_context, 'source, 'interner>
                                 meta_expr,
                             })
                         } else {
-                            self.errors.assign_mismatches.push(
+                            self.errors.assign_mismatches.push_typecheck_error(
                                 TypeMismatch {
                                     context: AssignContext {
                                         assign_lvalue_expr: typechecked_lhs.clone(),
@@ -783,9 +790,9 @@ impl<'compiler_context, 'source, 'interner>
                                     self.on_element,
                                     self.on_file,
                                     meta_ast,
+                                    loc!(),
                                 ),
-                            );
-                            Err(CompilerError::TypeCheckError)
+                            )
                         }
                     }
                     MIRExprLValue::MemberAccess(object, member, ty, meta) => {
@@ -808,7 +815,7 @@ impl<'compiler_context, 'source, 'interner>
                                 meta_expr,
                             })
                         } else {
-                            self.errors.assign_mismatches.push(
+                            self.errors.assign_mismatches.push_typecheck_error(
                                 TypeMismatch {
                                     context: AssignContext {
                                         assign_lvalue_expr: checked_member_access,
@@ -820,9 +827,9 @@ impl<'compiler_context, 'source, 'interner>
                                     self.on_element,
                                     self.on_file,
                                     meta_ast,
+                                    loc!(),
                                 ),
-                            );
-                            Err(CompilerError::TypeCheckError)
+                            )
                         }
                     }
                     MIRExprLValue::Deref(ptr, ty, meta) => {
@@ -840,7 +847,7 @@ impl<'compiler_context, 'source, 'interner>
                                 meta_expr,
                             })
                         } else {
-                            self.errors.assign_mismatches.push(
+                            self.errors.assign_mismatches.push_typecheck_error(
                                 TypeMismatch {
                                     context: AssignContext {
                                         assign_lvalue_expr: checked_deref,
@@ -852,9 +859,9 @@ impl<'compiler_context, 'source, 'interner>
                                     self.on_element,
                                     self.on_file,
                                     meta_ast,
+                                    loc!(),
                                 ),
-                            );
-                            Err(CompilerError::TypeCheckError)
+                            )
                         }
                     }
                 }
@@ -883,6 +890,31 @@ impl<'compiler_context, 'source, 'interner>
                     Err(e) => Err(e),
                 }
             }
+            MIRBlockNode::MethodCall {
+                object,
+                method_name,
+                args,
+                meta_ast,
+                meta_expr,
+                return_type,
+            } => {
+                log!(
+                    "Checking method call on object {c}",
+                    c = mir_printer.print(&object)
+                );
+                let typedef = object.get_type().to_string(&self.type_db);
+                log!("Typedef unchecked = {typedef}");
+
+                let (obj, args) = self.method_call_check(object, method_name, args, meta_expr)?;
+                Ok(MIRBlockNode::MethodCall {
+                    object: obj,
+                    method_name,
+                    args,
+                    meta_ast,
+                    meta_expr,
+                    return_type,
+                })
+            }
         }
     }
 
@@ -905,8 +937,18 @@ impl<'compiler_context, 'source, 'interner>
             current_scope = &scopes[current_scope.id.0 - 1];
         }
 
-        //try find in the global scope
-        return *self.names.get(&name).unwrap();
+        //at this point all top_level_decls should be inferred
+        match self.top_level_decls.get(&name) {
+            Some(super::type_inference::TypeInferenceResult::Monomorphic(type_instance)) => {
+                *type_instance
+            }
+            Some(super::type_inference::TypeInferenceResult::Polymorphic(_)) => {
+                panic!("Unmonomorphized type in top level declaration")
+            }
+            _ => {
+                panic!("Not found: {}", name)
+            }
+        }
     }
 
     fn check_if_statement_expression(
@@ -915,20 +957,49 @@ impl<'compiler_context, 'source, 'interner>
         goto_true: BlockId,
         goto_false: BlockId,
         ast: HIRAstMetadata<'source>,
-    ) -> Result<MIRBlockFinal<'source, Checked>, CompilerError> {
+    ) -> Result<MIRBlockFinal<'source>, CompilerError> {
         let expr_type = expr.get_type();
         let expr_checked = self.typecheck(expr)?;
         Ok(if expr_type == self.type_db.common_types.bool {
             MIRBlockFinal::If(expr_checked, goto_true, goto_false, ast)
         } else {
-            self.errors.if_statement_unexpected_type.push(
-                IfStatementNotBoolean {
-                    actual_type: expr_type,
-                }
-                .at_spanned(self.on_element, self.on_file, ast),
-            );
-            return Err(CompilerError::TypeCheckError);
+            return self
+                .errors
+                .if_statement_unexpected_type
+                .push_typecheck_error(
+                    IfStatementNotBoolean {
+                        actual_type: expr_type,
+                    }
+                    .at_spanned(self.on_element, self.on_file, ast, loc!()),
+                );
         })
+    }
+
+    fn check_expr_cast(
+        &mut self,
+        cast_expr: MIRExpr<'source>,
+        cast_to: TypeInstanceId,
+        meta: HIRExprMetadata<'source>,
+    ) -> Result<MIRExpr<'source>, CompilerError> {
+        let cast_expr_checked = self.typecheck(cast_expr)?;
+
+        let cast_expr_type = self.type_db.get_instance(cast_expr_checked.get_type());
+
+        if cast_expr_type.allowed_casts.contains(&cast_to) {
+            Ok(MIRExpr::RValue(MIRExprRValue::Cast(
+                cast_expr_checked.into(),
+                cast_to,
+                meta,
+            )))
+        } else {
+            return self.errors.invalid_casts.push_typecheck_error(
+                InvalidCast {
+                    expr: cast_expr_checked,
+                    cast_to,
+                }
+                .at_spanned(self.on_element, self.on_file, meta, loc!()),
+            );
+        }
     }
 }
 
@@ -936,39 +1007,40 @@ fn make_method_name_or_index(
     name: InternedString,
     obj_type_name: &str,
     expr: HIRExprMetadata,
-    interner: &StringInterner,
 ) -> FunctionName {
     match expr {
         Expr::IndexAccess(..) => FunctionName::IndexAccess,
         _ => FunctionName::Method {
             function_name: name,
-            type_name: interner.get(obj_type_name),
+            type_name: InternedString::new(obj_type_name),
         },
     }
 }
 
 pub fn typecheck<'source>(
-    top_nodes: Vec<MIRTopLevelNode<'source, NotCheckedSimplified>>,
+    top_nodes: Vec<MIRTopLevelNode<'source>>,
     type_db: &TypeInstanceManager,
     names: &NameRegistry,
     errors: &mut TypeErrors<'source>,
-    interner: &StringInterner,
+
     file: FileTableIndex,
-) -> Result<Vec<MIRTopLevelNode<'source, Checked>>, CompilerError> {
+) -> Result<Vec<MIRTopLevelNode<'source>>, CompilerError> {
     let mut new_mir = vec![];
     for node in top_nodes {
         match node {
-            MIRTopLevelNode::IntrinsicFunction {
+            MIRTopLevelNode::IntrinsicOrExternalFunction {
                 function_name,
                 parameters,
                 return_type,
                 is_varargs,
+                is_external,
             } => {
-                new_mir.push(MIRTopLevelNode::IntrinsicFunction {
+                new_mir.push(MIRTopLevelNode::IntrinsicOrExternalFunction {
                     function_name,
                     parameters,
                     return_type,
                     is_varargs,
+                    is_external,
                 });
             }
             MIRTopLevelNode::DeclareFunction {
@@ -979,11 +1051,11 @@ pub fn typecheck<'source>(
                 return_type,
             } => {
                 let mut context = TypeCheckContext {
-                    names,
+                    top_level_decls: names,
                     type_db,
                     errors,
                     on_element: RootElementType::Function(function_name),
-                    interner,
+
                     on_file: file,
                 };
 
@@ -1013,21 +1085,17 @@ mod tests {
             },
             mir_printer,
         },
-        types::type_errors::TypeErrorPrinter,
+        types::diagnostics::TypeErrorPrinter,
     };
-    use pretty_assertions::assert_eq;
+    use pretty_assertions::{assert_eq, assert_str_eq};
 
     //Parses a single expression
 
-    fn run_test(src: &Source) -> (TypeErrors<'_>, TypeInstanceManager<'_>) {
+    fn run_test(src: &Source) -> (TypeErrors<'_>, TypeInstanceManager) {
         let analysis_result = do_analysis(src);
         println!(
             "{}",
-            mir_printer::print_mir(
-                &analysis_result.mir,
-                &analysis_result.type_db,
-                &src.interner
-            )
+            mir_printer::print_mir(&analysis_result.mir, &analysis_result.type_db)
         );
 
         if analysis_result.type_errors.count() > 0 {
@@ -1036,7 +1104,6 @@ mod tests {
                 TypeErrorPrinter::new(
                     &analysis_result.type_errors,
                     &analysis_result.type_db,
-                    &src.interner,
                     &src.file_table
                 )
             );
@@ -1120,7 +1187,7 @@ def main() -> i32:
     }
 
     #[test]
-    fn assign_incorrect_type_literal() {
+    fn assign_incorrect_type_literall() {
         let ast = parse(
             "
 def main():
@@ -1341,7 +1408,7 @@ def main(args: array<str>):
     }
 
     fn print_error(err: &TypeErrors, db: &TypeInstanceManager, source: &Source) -> String {
-        let printer = TypeErrorPrinter::new(err, db, &source.interner, &source.file_table);
+        let printer = TypeErrorPrinter::new(err, db, &source.file_table);
         let error_msg = format!("{printer}");
         error_msg
     }
@@ -1361,7 +1428,7 @@ def main():
         let error_msg = print_error(&err, &db, &ast);
         let expected =
             "test:3:10: In function main, binary operator + not found for types: i32 + f32\n";
-        assert_eq!(error_msg, expected);
+        assert_str_eq!(error_msg, expected);
     }
 
     #[test]
@@ -1383,7 +1450,7 @@ def main():
     }
 
     #[test]
-    fn binary_operation_type_err_in_subexpression() {
+    fn binary_operation_numeric_cast_between_float_i32_does_not_work() {
         let ast = parse_no_std(
             "
 def main():
@@ -1393,7 +1460,6 @@ def main():
 
         let (err, _) = run_test(&ast);
         assert_eq!(1, err.count());
-        assert_eq!(1, err.binary_op_not_found.len());
     }
 
     #[test]

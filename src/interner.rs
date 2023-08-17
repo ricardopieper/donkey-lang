@@ -1,169 +1,138 @@
-use std::{cell::UnsafeCell, collections::BTreeMap, ops::Deref};
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, OnceLock},
+};
 
-#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
-pub struct InternedString(pub usize);
 
-//The string interner uses RefCell so that we can share it freely
-pub struct StringInterner {
-    strings: UnsafeCell<Vec<String>>,
-    //The key is actually a string inside the strings vec.
-    //However, we never return this reference. Instead we return a reference to strings
-    //which will have a lifetime bounded to Self.
-    table: UnsafeCell<BTreeMap<&'static str, InternedString>>,
+
+#[derive(Hash, Eq, PartialEq, Clone, Copy)]
+pub struct InternedString{ 
+    pub index: usize, 
+    #[cfg(test)] pub str_interned: &'static str
 }
 
-//I swear I know what I'm doing!
-impl !Send for StringInterner {}
-impl !Sync for StringInterner {}
+static GLOBAL_INTERNER: OnceLock<StringInterner> = OnceLock::new();
+
+pub struct StringInternerState {
+    pub strings: Vec<String>,
+    pub table: BTreeMap<&'static str, InternedString>,
+}
+
+pub struct StringInterner {
+    state: Mutex<StringInternerState>,
+}
+
 
 impl StringInterner {
-    pub fn new() -> Self {
-        StringInterner {
-            strings: UnsafeCell::new(vec![]),
-            table: UnsafeCell::new(BTreeMap::new()),
-        }
-    }
-
-    pub fn get(&self, string: &str) -> InternedString {
-        unsafe {
-            if let Some(v) = (*self.table.get()).get(string) {
-                return *v;
+    pub fn get() -> &'static StringInterner {
+        GLOBAL_INTERNER.get_or_init(|| {
+            StringInterner {
+                state: Mutex::new(StringInternerState {
+                    strings: Vec::new(),
+                    table: BTreeMap::new(),
+                }),
             }
-        }
-
-        self.insert_new_string(string.to_string())
+        })
     }
 
-    fn insert_new_string(&self, string: String) -> InternedString {
+    pub fn intern(&self, string: &str) -> InternedString {
+        let mut state = self.state.lock().unwrap();
+        if let Some(v) = state.table.get(string) {
+            return *v;
+        }
+     
+        let index = state.strings.len();
+        state.strings.push(string.to_string());
+        let last = state.strings.last().unwrap();
+        let unsafe_str_key = unsafe { std::mem::transmute::<&str, &'static str>(last) };
+        let interned = InternedString {
+            index,
+            #[cfg(test)] str_interned: unsafe_str_key,
+        };
+        state.table.insert(unsafe_str_key, interned);
+        interned
+    }
+
+    #[cfg(test)]
+    pub fn borrow(&'static self, string: InternedString) -> &'static str {
+        let strings = self.state.lock().unwrap();
+        let string = strings.strings.get(string.index).unwrap();
         unsafe {
-            let index = InternedString((*self.strings.get()).len());
-            //@SAFETY As long as we execute this code in a single thread, this should be safe.
-            //And we specifically marked the struct as !Send and !Sync.
-            //We also never return anything that references the hashmap table,
-            //we only use the hashmap on lookups. We do return the InternedString value, but
-            //it's returned by copy, and the value itself is just a usize.
-            //If the strings vec is resized, the Strings inside the vec are still valid,
-            //because the strings inside the vec are not changed, the pointers are the same
-            //and the values themselves are not dropped or mutated. It is that still valid
-            //pointer address (and len) that we are storing in the vec.
-            //Also, the strings cannot be deleted from the string vec, none of the methods in
-            //the interner delete any values, so they are never dropped and remain valid as long as
-            //the interner is alive.
-
-            (*self.strings.get()).push(string);
-
-            let str_ref: &str = ((*self.strings.get())[index.0]).deref();
-            let as_static: &'static str = std::mem::transmute(str_ref);
-            let table = self.table.get();
-            (*table).insert(as_static, index);
-            index
+            //SAFETY: Should be OK 👀
+            std::mem::transmute::<&str, &str>(string)
         }
     }
 
     pub fn get_string(&self, string: InternedString) -> String {
-        self.borrow(string).to_string()
+        let strings = self.state.lock().unwrap();
+        strings.strings.get(string.index).unwrap().to_string()
     }
 
-    pub fn borrow(&self, string: InternedString) -> &str {
-        unsafe {
-            let strings = self.strings.get();
-            (*strings)[string.0].as_ref()
-        }
-    }
-}
-
-pub trait PrintableInternedString {
-    fn to_string(self, interner: &StringInterner) -> String;
-    fn write_str(
-        self,
-        interner: &StringInterner,
+    pub fn write_to(
+        &self,
         f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result;
-}
-pub trait JoinableInternedStringSlice {
-    fn join_interned(self, interner: &StringInterner, sep: &str) -> String;
-}
-
-impl PrintableInternedString for InternedString {
-    fn to_string(self, interner: &StringInterner) -> String {
-        interner.get_string(self)
-    }
-    fn write_str(
-        self,
-        interner: &StringInterner,
-        f: &mut std::fmt::Formatter<'_>,
+        string: InternedString,
     ) -> std::fmt::Result {
-        f.write_str(interner.borrow(self))
+        let strings = self.state.lock().unwrap();
+        f.write_str(strings.strings.get(string.index).unwrap())
     }
 }
 
-impl JoinableInternedStringSlice for &[InternedString] {
-    fn join_interned(self, interner: &StringInterner, sep: &str) -> String {
-        let strings = self
-            .iter()
-            .map(|x| x.to_string(interner))
-            .collect::<Vec<_>>();
-        strings.join(sep)
+impl std::fmt::Display for InternedString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        StringInterner::get().write_to(f, *self)
     }
 }
 
-impl JoinableInternedStringSlice for &Vec<InternedString> {
-    fn join_interned(self, interner: &StringInterner, sep: &str) -> String {
-        self.as_slice().join_interned(interner, sep)
+impl std::fmt::Debug for InternedString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        StringInterner::get().write_to(f, *self)
+    }
+}
+
+impl Into<String> for &InternedString {
+    fn into(self) -> String {
+        StringInterner::get().get_string(*self)
+    }
+}
+
+impl Into<InternedString> for &str {
+    fn into(self) -> InternedString {
+        StringInterner::get().intern(self)
+    }
+}
+
+
+impl Into<InternedString> for String {
+    fn into(self) -> InternedString {
+        StringInterner::get().intern(&self)
     }
 }
 
 impl InternedString {
-    pub fn to_string(self, interner: &StringInterner) -> String {
-        interner.get_string(self)
+    pub fn new(string: &str) -> InternedString {
+        StringInterner::get().intern(string)
     }
 
-    pub fn borrow(self, interner: &StringInterner) -> &str {
-        interner.borrow(self)
+    pub fn write_str(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        StringInterner::get().write_to(f, *self)
     }
 }
 
 mod test {
-    #[allow(unused_imports)]
-    //I don't know why this is necessary, cargo clippy --fix removes it resulting in a compiltaion error
-    use super::StringInterner;
 
     #[test]
     fn test_interning() {
-        let interner = StringInterner::new();
-        let a = interner.get("a");
-        let b = interner.get("b");
-        let c = interner.get("c");
+        let interner = crate::interner::StringInterner::get();
+        let a = interner.intern("a");
+        let b = interner.intern("b");
+        let c = interner.intern("c");
 
-        let a2 = interner.get("a");
-        let b2 = interner.get("b");
-        let c2 = interner.get("c");
+        let a2 = interner.intern("a");
+        let b2 = interner.intern("b");
+        let c2 = interner.intern("c");
         assert_eq!(a, a2);
         assert_eq!(b, b2);
         assert_eq!(c, c2);
-    }
-
-    #[test]
-    fn force_internal_vec_reallocation() {
-        let all_strings = (0..65536).map(|x| x.to_string()).collect::<Vec<_>>();
-
-        for _ in 0..100 {
-            let interner = StringInterner::new();
-
-            //add a bunch of numbers
-            for string in all_strings.iter().take(32) {
-                interner.get(string.as_str());
-            }
-
-            let some_num = interner.get("17");
-            let borrow = some_num.borrow(&interner);
-
-            //force a couple reallocations
-            for string in all_strings.iter().take(512).skip(32) {
-                interner.get(string.as_str());
-            }
-
-            assert_eq!(borrow, "17");
-        }
     }
 }

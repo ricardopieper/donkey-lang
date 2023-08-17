@@ -1,33 +1,42 @@
-use crate::{ast::parser::ASTIfStatement, interner::StringInterner};
+use super::parser::{ASTIfStatement, Expr, SpanAST, StringSpan, AST};
 
-use super::parser::{Expr, SpanAST, AST};
-
-pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -> String {
+pub fn print_expr(expr: &Expr, parenthesized: bool) -> String {
     match expr {
-        Expr::IntegerValue(i, _) => format!("{i}"),
-        Expr::FloatValue(f, _) => format!("{}", f.0),
-        Expr::StringValue(s) => format!("{:?}", interner.borrow(s.0)),
+        Expr::IntegerValue(i, _) => i.to_string(),
+        Expr::FloatValue(f, _) => f.0.to_string(),
+        Expr::StringValue(s) => format!("{:?}", s.0.to_string()),
         Expr::CharValue(c, _) => format!("{:?}", c),
         Expr::BooleanValue(b, _) => if *b { "True" } else { "False" }.to_string(),
         Expr::NoneValue(_) => "None".to_string(),
-        Expr::Variable(name) => interner.get_string(name.0),
-        Expr::FunctionCall(function_expr, params, _) => {
-            let call_expr_str = print_expr(function_expr, interner, parenthesized);
+        Expr::Variable(name) => name.0.to_string(),
+        Expr::FunctionCall(function_expr, type_parameters, params, _) => {
+            let call_expr_str = print_expr(function_expr, parenthesized);
+            let generic_args = if !type_parameters.is_empty() {
+                let generic_args = type_parameters
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("<{generic_args}>")
+            } else {
+                "".to_string()
+            };
+
             let args = params
                 .iter()
-                .map(|x| print_expr(&x.expr, interner, parenthesized))
+                .map(|x| print_expr(&x.expr, parenthesized))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{call_expr_str}({args})")
+            format!("{call_expr_str}{generic_args}({args})")
         }
         Expr::IndexAccess(indexed_expr, index_expr, _) => {
-            let indexed_expr_str = print_expr(indexed_expr, interner, parenthesized);
-            let index_expr_str = print_expr(index_expr, interner, parenthesized);
+            let indexed_expr_str = print_expr(indexed_expr, parenthesized);
+            let index_expr_str = print_expr(index_expr, parenthesized);
             format!("{indexed_expr_str}[{index_expr_str}]")
         }
         Expr::BinaryOperation(lhs, op, rhs) => {
-            let mut lhs_str = print_expr(lhs, interner, parenthesized);
-            let mut rhs_str = print_expr(rhs, interner, parenthesized);
+            let mut lhs_str = print_expr(lhs, parenthesized);
+            let mut rhs_str = print_expr(rhs, parenthesized);
             let op_str = op.0.to_string();
             let lhs_is_binary = matches!(lhs.as_ref(), Expr::BinaryOperation(_, _, _));
             let rhs_is_binary = matches!(rhs.as_ref(), Expr::BinaryOperation(_, _, _));
@@ -47,7 +56,7 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -
         }
         Expr::Parenthesized(_) => panic!("Parenthesized expr reached print_expr"),
         Expr::UnaryExpression(op, expr) => {
-            let mut expr_str = print_expr(expr, interner, parenthesized);
+            let mut expr_str = print_expr(expr, parenthesized);
             let expr_is_binary = matches!(expr.as_ref(), Expr::BinaryOperation(_, _, _));
 
             if expr_is_binary {
@@ -55,49 +64,50 @@ pub fn print_expr(expr: &Expr, interner: &StringInterner, parenthesized: bool) -
             }
             let op_str = op.0.to_string();
             if parenthesized {
-                format!("{op_str} ({expr_str})")
+                format!("({op_str} ({expr_str}))")
             } else {
                 format!("{op_str} {expr_str}")
             }
         }
         Expr::MemberAccess(obj, member) => {
-            let obj_str = print_expr(obj, interner, parenthesized);
-            let member_str = interner.borrow(member.0);
+            let obj_str = print_expr(obj, parenthesized);
+            let member_str = member.0;
             format!("{obj_str}.{member_str}")
         }
         Expr::Array(items, _) => {
             let items_str = items
                 .iter()
-                .map(|x| print_expr(&x.expr, interner, parenthesized))
+                .map(|x| print_expr(&x.expr, parenthesized))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("[{items_str}]")
         }
+        Expr::Cast(expr, ty, _) => {
+            let expr_str = print_expr(expr, parenthesized);
+            let ty_str = ty.to_string();
+            if (parenthesized) {
+                format!("({expr_str} as {ty_str})")
+            } else {
+                format!("{expr_str} as {ty_str}")
+            }
+        }
     }
 }
 
-fn print_ast_internal(
-    ast: &AST,
-    interner: &StringInterner,
-    indent: &str,
-    parenthesized: bool,
-) -> String {
+fn print_ast_internal(ast: &AST, indent: &str, parenthesized: bool) -> String {
     let indent_block = format!("{indent}    ");
 
     match ast {
-        AST::StandaloneExpr(e) => format!(
-            "{indent}{e}",
-            e = print_expr(&e.expr, interner, parenthesized)
-        ),
+        AST::StandaloneExpr(e) => format!("{indent}{e}", e = print_expr(&e.expr, parenthesized)),
         AST::Assign { path, expression } => {
-            let lhs_expr = print_expr(&path.expr, interner, parenthesized);
-            let expr = print_expr(&expression.expr, interner, parenthesized);
+            let lhs_expr = print_expr(&path.expr, parenthesized);
+            let expr = print_expr(&expression.expr, parenthesized);
             format!("{indent}{lhs_expr} = {expr}")
         }
         AST::Declare { var, expression } => {
-            let var_name = interner.borrow(var.name.0);
-            let type_name = var.name_type.to_string(interner);
-            let expr = print_expr(&expression.expr, interner, parenthesized);
+            let var_name = var.name.0;
+            let type_name = var.name_type.to_string();
+            let expr = print_expr(&expression.expr, parenthesized);
             format!("{var_name}: {type_name} = {expr}")
         }
         AST::IfStatement {
@@ -107,13 +117,13 @@ fn print_ast_internal(
         } => {
             let mut buf = "".to_string();
 
-            let if_expr = print_expr(&true_branch.expression.expr, interner, parenthesized);
+            let if_expr = print_expr(&true_branch.expression.expr, parenthesized);
             buf.push_str(&format!("{indent}if {if_expr}:\n"));
 
             let body = true_branch
                 .statements
                 .iter()
-                .map(|x| print_ast_internal(&x.ast, interner, &indent_block, parenthesized))
+                .map(|x| print_ast_internal(&x.ast, &indent_block, parenthesized))
                 .collect::<Vec<_>>()
                 .join("\n");
             buf.push_str(&body);
@@ -123,11 +133,11 @@ fn print_ast_internal(
                 statements,
             } in elifs.iter()
             {
-                let expr = print_expr(&expression.expr, interner, parenthesized);
+                let expr = print_expr(&expression.expr, parenthesized);
                 buf.push_str(&format!("{indent}elif {expr}:\n"));
                 let body = statements
                     .iter()
-                    .map(|x| print_ast_internal(&x.ast, interner, &indent_block, parenthesized))
+                    .map(|x| print_ast_internal(&x.ast, &indent_block, parenthesized))
                     .collect::<Vec<_>>()
                     .join("\n");
                 buf.push_str(&body);
@@ -136,7 +146,7 @@ fn print_ast_internal(
                 buf.push_str(&format!("{indent}\nelse:\n"));
                 let body = final_else_statements
                     .iter()
-                    .map(|x| print_ast_internal(&x.ast, interner, &indent_block, parenthesized))
+                    .map(|x| print_ast_internal(&x.ast, &indent_block, parenthesized))
                     .collect::<Vec<_>>()
                     .join("\n");
                 buf.push_str(&body);
@@ -146,12 +156,12 @@ fn print_ast_internal(
         }
         AST::WhileStatement { expression, body } => {
             let mut buf = "".to_string();
-            let if_expr = print_expr(&expression.expr, interner, parenthesized);
+            let if_expr = print_expr(&expression.expr, parenthesized);
             buf.push_str(&format!("{indent}while {if_expr}:\n"));
 
             let body = body
                 .iter()
-                .map(|x| print_ast_internal(&x.ast, interner, &indent_block, parenthesized))
+                .map(|x| print_ast_internal(&x.ast, &indent_block, parenthesized))
                 .collect::<Vec<_>>()
                 .join("\n");
             buf.push_str(&body);
@@ -164,15 +174,15 @@ fn print_ast_internal(
             body,
         } => {
             let mut buf = "".to_string();
-            let item_var = interner.borrow(item_name.0);
-            let list_expr_str = print_expr(&list_expression.expr, interner, parenthesized);
+            let item_var = item_name.0;
+            let list_expr_str = print_expr(&list_expression.expr, parenthesized);
 
             buf.push_str(&format!("{indent}for {item_var} in {list_expr_str}:\n"));
             let indent_block = format!("{indent}    ");
 
             let body = body
                 .iter()
-                .map(|x| print_ast_internal(&x.ast, interner, &indent_block, parenthesized))
+                .map(|x| print_ast_internal(&x.ast, &indent_block, parenthesized))
                 .collect::<Vec<_>>()
                 .join("\n");
             buf.push_str(&body);
@@ -184,13 +194,9 @@ fn print_ast_internal(
             body,
         } => {
             let mut buf = "".to_string();
-            let struct_name = interner.borrow(struct_name.0);
+            let struct_name = struct_name.0;
             if !type_parameters.is_empty() {
-                let generic_args = type_parameters
-                    .iter()
-                    .map(|x| interner.borrow(x.0))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let generic_args = join_comma_sep(type_parameters);
                 buf.push_str(&format!("{indent}struct {struct_name}<{generic_args}>:"));
             } else {
                 buf.push_str(&format!("{indent}struct {struct_name}:"));
@@ -198,8 +204,8 @@ fn print_ast_internal(
             buf.push('\n');
 
             for b in body {
-                let var_name = interner.borrow(b.name.0);
-                let type_name = b.name_type.to_string(interner);
+                let var_name = b.name.0;
+                let type_name = &b.name_type;
                 buf.push_str(&format!("{indent}    {var_name}: {type_name}"));
                 buf.push('\n');
             }
@@ -209,16 +215,17 @@ fn print_ast_internal(
             function_name,
             parameters,
             body,
+            type_parameters,
             return_type,
             is_varargs,
         } => {
             let mut buf = "".to_string();
-            let function_name = interner.borrow(function_name.0);
+            let function_name = function_name.0;
             let params = parameters
                 .iter()
                 .map(|x| {
-                    let var_name = interner.borrow(x.name.0);
-                    let type_name = x.name_type.to_string(interner);
+                    let var_name = x.name.0;
+                    let type_name = &x.name_type;
                     format!("{var_name}: {type_name}")
                 })
                 .collect::<Vec<_>>()
@@ -232,11 +239,18 @@ fn print_ast_internal(
                 ""
             };
 
+            let generic_args = if !type_parameters.is_empty() {
+                let generic_args = join_comma_sep(type_parameters);
+                format!("<{generic_args}>")
+            } else {
+                "".to_string()
+            };
+
             match return_type {
                 Some(x) => {
-                    let return_type = x.to_string(interner);
+                    let return_type = x;
                     buf.push_str(&format!(
-                        "{indent}def {function_name}({params}{comma_if_params}{varargs}) -> {return_type}:"
+                        "{indent}def {function_name}{generic_args}({params}{comma_if_params}{varargs}) -> {return_type}:"
                     ));
                 }
                 None => {
@@ -250,7 +264,7 @@ fn print_ast_internal(
 
             let body = body
                 .iter()
-                .map(|x| print_ast_internal(&x.ast, interner, &indent_block, parenthesized))
+                .map(|x| print_ast_internal(&x.ast, &indent_block, parenthesized))
                 .collect::<Vec<_>>()
                 .join("\n");
             buf.push_str(&body);
@@ -260,7 +274,7 @@ fn print_ast_internal(
         AST::Intrinsic(_) => format!("{indent}intrinsic"),
         AST::Return(_, ret_expr) => match ret_expr {
             Some(x) => {
-                let expr = print_expr(&x.expr, interner, parenthesized);
+                let expr = print_expr(&x.expr, parenthesized);
                 format!("{indent}return {expr}")
             }
             None => format!("{indent}return"),
@@ -268,26 +282,36 @@ fn print_ast_internal(
         AST::Root(r) => {
             return r
                 .iter()
-                .map(|x| print_ast_internal(&x.ast, interner, indent, parenthesized))
+                .map(|x| print_ast_internal(&x.ast, indent, parenthesized))
                 .collect::<Vec<_>>()
                 .join("\n");
         }
+        AST::External(_) => format!("{indent}external"),
     }
 }
 
-pub fn print_ast(ast: &[SpanAST], interner: &StringInterner) -> String {
+fn join_comma_sep(type_parameters: &[StringSpan]) -> String {
+    type_parameters
+        .iter()
+        .map(|x| x.0.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[allow(dead_code)]
+pub fn print_ast(ast: &[SpanAST]) -> String {
     return ast
         .iter()
-        .map(|x| print_ast_internal(&x.ast, interner, "", false))
+        .map(|x| print_ast_internal(&x.ast, "", false))
         .collect::<Vec<_>>()
         .join("\n");
 }
 
 #[allow(dead_code)]
-pub fn print_fully_parenthesized_ast(ast: &[SpanAST], interner: &StringInterner) -> String {
+pub fn print_fully_parenthesized_ast(ast: &[SpanAST]) -> String {
     return ast
         .iter()
-        .map(|x| print_ast_internal(&x.ast, interner, "", true))
+        .map(|x| print_ast_internal(&x.ast, "", true))
         .collect::<Vec<_>>()
         .join("\n");
 }
