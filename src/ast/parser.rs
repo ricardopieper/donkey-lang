@@ -50,7 +50,7 @@ impl Deref for SpanExpr {
 
 pub trait Spanned {
     fn get_span(&self) -> AstSpan;
-}
+}     
 
 impl Spanned for TokenSpanIndex {
     fn get_span(&self) -> AstSpan {
@@ -437,7 +437,7 @@ fn clean_parens(expr: SpanExpr) -> SpanExpr {
 pub struct Parser<'tok> {
     parsing_state: Vec<ParsingState>,
     tokens: &'tok TokenTable,
-    pub errors: Vec<(ParsingErrorDetails, FileTableIndex, TokenSpanIndex)>,
+    pub errors: Vec<(ParsingErrorDetails, TokenSpanIndex)>,
     irrecoverable_error: bool,
 }
 
@@ -482,10 +482,10 @@ pub enum ParsingEvent<T> {
     TryAnotherGrammarRule,
     //When the compiler found the correct grammar rule, but the input is not legal. It can continue parsing the next elements to report more errors.
     //However the parser will generate AST that is unusable by the next stages
-    GrammarRuleFail(ParsingErrorDetails, FileTableIndex, TokenSpanIndex),
+    GrammarRuleFail(ParsingErrorDetails, TokenSpanIndex),
     //When there is a syntax error so big that there is just no recovering from it, continuing parsing would only throw hundreds more errors.
     //Those are most errors @TODO maybe should be the only one?
-    NonRecoverable(ParsingErrorDetails, FileTableIndex, TokenSpanIndex),
+    NonRecoverable(ParsingErrorDetails, TokenSpanIndex),
     //When parsing of a grammar rule succeeds
     Success(T),
 }
@@ -496,11 +496,11 @@ impl<T> FromResidual<ParsingEvent<!>> for ParsingEvent<T> {
     fn from_residual(residual: ParsingEvent<!>) -> Self {
         match residual {
             ParsingEvent::TryAnotherGrammarRule => ParsingEvent::TryAnotherGrammarRule,
-            ParsingEvent::GrammarRuleFail(details, file, span) => {
-                ParsingEvent::GrammarRuleFail(details, file, span)
+            ParsingEvent::GrammarRuleFail(details, token) => {
+                ParsingEvent::GrammarRuleFail(details, token)
             }
-            ParsingEvent::NonRecoverable(details, file, span) => {
-                ParsingEvent::NonRecoverable(details, file, span)
+            ParsingEvent::NonRecoverable(details, token) => {
+                ParsingEvent::NonRecoverable(details, token)
             }
             ParsingEvent::Success(s) => s, //this returns Never, thus it typechecks, but it will never be called
         }
@@ -522,11 +522,11 @@ impl<T> Try for ParsingEvent<T> {
             ParsingEvent::TryAnotherGrammarRule => {
                 ControlFlow::Break(ParsingEvent::TryAnotherGrammarRule)
             }
-            ParsingEvent::GrammarRuleFail(details, file, span) => {
-                ControlFlow::Break(ParsingEvent::GrammarRuleFail(details, file, span))
+            ParsingEvent::GrammarRuleFail(details, token) => {
+                ControlFlow::Break(ParsingEvent::GrammarRuleFail(details, token))
             }
-            ParsingEvent::NonRecoverable(details, file, span) => {
-                ControlFlow::Break(ParsingEvent::NonRecoverable(details, file, span))
+            ParsingEvent::NonRecoverable(details, token) => {
+                ControlFlow::Break(ParsingEvent::NonRecoverable(details, token))
             }
         }
     }
@@ -561,7 +561,7 @@ impl<'tok> Parser<'tok> {
     }
 
     #[cfg(test)]
-    pub fn get_errors(&self) -> &[(ParsingErrorDetails, FileTableIndex, TokenSpanIndex)] {
+    pub fn get_errors(&self) -> &[(ParsingErrorDetails, TokenSpanIndex)] {
         &self.errors
     }
 
@@ -776,7 +776,6 @@ impl<'tok> Parser<'tok> {
             return ParsingEvent::Success(());
         } else {
             let token = self.peek().clone();
-            let span = self.tokens.spans[token.span_index.0];
             self.irrecoverable_error = true;
             return ParsingEvent::NonRecoverable(
                 ParsingErrorDetails::InvalidSyntax(format!(
@@ -784,7 +783,6 @@ impl<'tok> Parser<'tok> {
                     tok.name(),
                     self.peek().token.name()
                 )),
-                span.file,
                 token.span_index,
             );
         }
@@ -802,14 +800,12 @@ impl<'tok> Parser<'tok> {
             self.next();
             ParsingEvent::Success(id.token_spanned(token.span_index))
         } else {
-            let span = self.tokens.spans[token.span_index.0];
             return ParsingEvent::GrammarRuleFail(
                 ParsingErrorDetails::InvalidSyntax(format!(
                     "Expected {}, got {}",
                     role,
                     self.peek().token.name()
                 )),
-                span.file,
                 token.span_index,
             );
         }
@@ -1369,8 +1365,7 @@ impl<'tok> Parser<'tok> {
 
                 if self.is_not_end() && !self.cur_is_newline() {
                     let cur = self.peek();
-                    let span = &self.tokens.spans[cur.span_index.0];
-                    let file = span.file;
+                    let file = cur.span_index.file;
                     let error_msg = format!(
                         "Newline or EOF expected after {}, got {:?}",
                         name, cur.token
@@ -1378,7 +1373,6 @@ impl<'tok> Parser<'tok> {
 
                     self.errors.push((
                         ParsingErrorDetails::InvalidSyntax(error_msg),
-                        file,
                         cur.span_index,
                     ));
                     return false;
@@ -1389,13 +1383,13 @@ impl<'tok> Parser<'tok> {
                 self.pop_stack();
                 true
             }
-            ParsingEvent::GrammarRuleFail(error, file, token) => {
+            ParsingEvent::GrammarRuleFail(error, token) => {
                 self.skip_to_next_line();
-                self.errors.push((error, file, token));
+                self.errors.push((error, token));
                 true
             }
-            ParsingEvent::NonRecoverable(error, file, token) => {
-                self.errors.push((error, file, token));
+            ParsingEvent::NonRecoverable(error, token) => {
+                self.errors.push((error, token));
                 false
             }
         }
@@ -2141,16 +2135,12 @@ impl<'tok> Parser<'tok> {
     fn non_recoverable(&mut self, parsing_error: ParsingErrorDetails) -> ASTParsingEvent {
         self.irrecoverable_error = true;
         let cur = self.peek();
-        let span = &self.tokens.spans[cur.span_index.0];
-
-        ParsingEvent::NonRecoverable(parsing_error, span.file, cur.span_index)
+        ParsingEvent::NonRecoverable(parsing_error, cur.span_index)
     }
 
     fn grammar_fail(&mut self, parsing_error: ParsingErrorDetails) -> ASTParsingEvent {
         let cur = self.peek();
-        let span = &self.tokens.spans[cur.span_index.0];
-
-        ParsingEvent::GrammarRuleFail(parsing_error, span.file, cur.span_index)
+        ParsingEvent::GrammarRuleFail(parsing_error, cur.span_index)
     }
 }
 
@@ -2177,11 +2167,11 @@ pub fn parse_ast<'a>(
 }
 
 pub fn print_errors(parser: &Parser, file_table: &[FileTableEntry], tokens: &TokenTable) {
-    for (error, file, token) in parser.errors.iter() {
+    for (error, token) in parser.errors.iter() {
         let err = error.to_string();
-        let file_name = &file_table[file.0].path;
-        let tok = tokens.tokens[token.0];
-        let span = tokens.spans[tok.span_index.0];
+        let file_name = &file_table[token.file.0].path;
+        let tok = tokens.tokens[token.index];
+        let span = tokens.spans[tok.span_index.index];
         let line = span.start.line;
         let column = span.start.column;
         println!("{err}\nat {file_name}:{line}:{column}\n");
@@ -2227,13 +2217,13 @@ mod tests {
     fn parse(tokens: TokenTable) -> SpanExpr {
         let table = &[FileTableEntry {
             ast: AST::Break(AstSpan {
-                start: TokenSpanIndex(0),
-                end: TokenSpanIndex(0),
+                start: TokenSpanIndex{ index: 0, file: FileTableIndex(0)},
+                end: TokenSpanIndex{ index: 0, file: FileTableIndex(0)},
             }),
             token_table: tokens,
-            index: FileTableIndex(0),
             contents: "none",
             path: "test".to_string(),
+            index: FileTableIndex(0),
         }];
         let mut parser = Parser::new(&table[0].token_table);
         print_errors(&parser, table, &table[0].token_table);
@@ -2243,8 +2233,8 @@ mod tests {
     fn test_parse(tokens: TokenTable) -> Vec<SpanAST> {
         let table = &[FileTableEntry {
             ast: AST::Break(AstSpan {
-                start: TokenSpanIndex(0),
-                end: TokenSpanIndex(0),
+                start: TokenSpanIndex{ file: FileTableIndex(0), index: 0 },
+                end: TokenSpanIndex { file: FileTableIndex(0), index: 0 },
             }),
             token_table: tokens,
             index: FileTableIndex(0),

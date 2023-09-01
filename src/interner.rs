@@ -53,13 +53,12 @@ impl StringInterner {
         interned
     }
 
-    #[cfg(test)]
     pub fn borrow(&'static self, string: InternedString) -> &'static str {
         let strings = self.state.lock().unwrap();
         let string = strings.strings.get(string.index).unwrap();
         unsafe {
-            //SAFETY: Should be OK 👀
-            std::mem::transmute::<&str, &str>(string)
+            //SAFETY: it's OK because we know that the string is never removed
+            std::mem::transmute::<&str, &'static str>(string)
         }
     }
 
@@ -116,6 +115,18 @@ impl InternedString {
 
     pub fn write_str(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         StringInterner::get().write_to(f, *self)
+    }
+}
+
+impl PartialEq<str> for InternedString {
+    fn eq(&self, other: &str) -> bool {
+        StringInterner::get().borrow(*self) == other
+    }
+}
+
+impl AsRef<str> for InternedString {
+    fn as_ref(&self) -> &str {
+        StringInterner::get().borrow(*self)
     }
 }
 

@@ -19,7 +19,7 @@ def sqrtf(val: f32) -> f32:
 def exit(code: i32):
     external
 
-def malloc(size: u32) -> ptr<u8>:
+def malloc(size: u64) -> ptr<u8>:
     external
     
 def free(buf: ptr<u8>):

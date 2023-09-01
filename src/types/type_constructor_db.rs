@@ -514,7 +514,7 @@ impl TypeConstructorDatabase {
             TypeConstructorFunctionDeclaration {
                 name: istr("write"),
                 args: vec![
-                    TypeConstructParams::Given(u32_type), /* offset * sizeof(TPtr)*/
+                    TypeConstructParams::Given(self.common_types.u64), /* offset * sizeof(TPtr)*/
                     TypeConstructParams::Generic(TypeParameter(istr("TPtr"))),
                 ],
                 return_type: TypeConstructParams::Given(void_type),
@@ -525,8 +525,20 @@ impl TypeConstructorDatabase {
             ptr_type,
             TypeConstructorFunctionDeclaration {
                 name: istr("read"),
-                args: vec![TypeConstructParams::Given(u32_type)],/* offset * sizeof(TPtr) */
+                args: vec![TypeConstructParams::Given(self.common_types.u64)],/* offset * sizeof(TPtr) */
                 return_type: TypeConstructParams::Generic(TypeParameter(istr("TPtr"))),
+                is_variadic: false,
+            },
+        );
+        self.add_method(
+            ptr_type,
+            TypeConstructorFunctionDeclaration {
+                name: istr("__index_ptr__"),
+                args: vec![TypeConstructParams::Given(self.common_types.u64)],/* offset * sizeof(TPtr) */
+                return_type: TypeConstructParams::Parameterized(
+                    TypeConstructParams::Given(ptr_type).into(),
+                    vec![TypeConstructParams::Generic(TypeParameter(istr("TPtr")))],
+                ),
                 is_variadic: false,
             },
         );
@@ -570,6 +582,8 @@ impl TypeConstructorDatabase {
         //self cast is ok... silly but ok
         self.add_cast_to_type(self.common_types.i32, self.common_types.i32);
         self.add_cast_to_type(self.common_types.i32, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.i32, self.common_types.u32);
+        self.add_cast_to_type(self.common_types.i32, self.common_types.u64);
         self.add_cast_to_type(self.common_types.i32, self.common_types.f32);
         self.add_cast_to_type(self.common_types.i32, self.common_types.f64);
         self.add_cast_to_type(self.common_types.i32, self.common_types.char);
@@ -577,6 +591,8 @@ impl TypeConstructorDatabase {
 
         self.add_cast_to_type(self.common_types.i64, self.common_types.i32);
         self.add_cast_to_type(self.common_types.i64, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.i64, self.common_types.u32);
+        self.add_cast_to_type(self.common_types.i64, self.common_types.u64);
         self.add_cast_to_type(self.common_types.i64, self.common_types.f32);
         self.add_cast_to_type(self.common_types.i64, self.common_types.f64);
         self.add_cast_to_type(self.common_types.i64, self.common_types.char);
@@ -584,6 +600,8 @@ impl TypeConstructorDatabase {
 
         self.add_cast_to_type(self.common_types.f32, self.common_types.i32);
         self.add_cast_to_type(self.common_types.f32, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.f32, self.common_types.u32);
+        self.add_cast_to_type(self.common_types.f32, self.common_types.u64);
         self.add_cast_to_type(self.common_types.f32, self.common_types.f32);
         self.add_cast_to_type(self.common_types.f32, self.common_types.f64);
         self.add_cast_to_type(self.common_types.f32, self.common_types.char);
@@ -591,6 +609,8 @@ impl TypeConstructorDatabase {
 
         self.add_cast_to_type(self.common_types.f64, self.common_types.i32);
         self.add_cast_to_type(self.common_types.f64, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.f64, self.common_types.u32);
+        self.add_cast_to_type(self.common_types.f64, self.common_types.u64);
         self.add_cast_to_type(self.common_types.f64, self.common_types.f32);
         self.add_cast_to_type(self.common_types.f64, self.common_types.f64);
         self.add_cast_to_type(self.common_types.f64, self.common_types.char);
@@ -598,6 +618,8 @@ impl TypeConstructorDatabase {
 
         self.add_cast_to_type(self.common_types.char, self.common_types.i32);
         self.add_cast_to_type(self.common_types.char, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.char, self.common_types.u32);
+        self.add_cast_to_type(self.common_types.char, self.common_types.u64);
         self.add_cast_to_type(self.common_types.char, self.common_types.f32);
         self.add_cast_to_type(self.common_types.char, self.common_types.f64);
         self.add_cast_to_type(self.common_types.char, self.common_types.char);
@@ -605,10 +627,30 @@ impl TypeConstructorDatabase {
 
         self.add_cast_to_type(self.common_types.u8, self.common_types.i32);
         self.add_cast_to_type(self.common_types.u8, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.u8, self.common_types.u32);
+        self.add_cast_to_type(self.common_types.u8, self.common_types.u64);
         self.add_cast_to_type(self.common_types.u8, self.common_types.f32);
         self.add_cast_to_type(self.common_types.u8, self.common_types.f64);
         self.add_cast_to_type(self.common_types.u8, self.common_types.char);
         self.add_cast_to_type(self.common_types.u8, self.common_types.u8);
+
+        self.add_cast_to_type(self.common_types.u32, self.common_types.i32);
+        self.add_cast_to_type(self.common_types.u32, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.u32, self.common_types.u32);
+        self.add_cast_to_type(self.common_types.u32, self.common_types.u64);
+        self.add_cast_to_type(self.common_types.u32, self.common_types.f32);
+        self.add_cast_to_type(self.common_types.u32, self.common_types.f64);
+        self.add_cast_to_type(self.common_types.u32, self.common_types.char);
+        self.add_cast_to_type(self.common_types.u32, self.common_types.u8);
+
+        self.add_cast_to_type(self.common_types.u64, self.common_types.i32);
+        self.add_cast_to_type(self.common_types.u64, self.common_types.i64);
+        self.add_cast_to_type(self.common_types.u64, self.common_types.u32);
+        self.add_cast_to_type(self.common_types.u64, self.common_types.u64);
+        self.add_cast_to_type(self.common_types.u64, self.common_types.f32);
+        self.add_cast_to_type(self.common_types.u64, self.common_types.f64);
+        self.add_cast_to_type(self.common_types.u64, self.common_types.char);
+        self.add_cast_to_type(self.common_types.u64, self.common_types.u8);
     }
         
 }

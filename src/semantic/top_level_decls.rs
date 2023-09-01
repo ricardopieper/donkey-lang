@@ -2,14 +2,13 @@ use std::collections::HashMap;
 
 use crate::interner::InternedString;
 use crate::semantic::type_name_printer::TypeNamePrinter;
+use crate::types::diagnostics::TypeErrors;
 use crate::types::type_constructor_db::{
     FunctionSignature, TypeConstructParams, TypeKind, TypeSign, Variadic,
 };
-use crate::types::diagnostics::TypeErrors;
 use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::compiler_errors::CompilerError;
-use super::context::FileTableIndex;
 use super::hir::{GlobalsInferredMIRRoot, HIRRoot, HIRType, HIRTypedBoundName, StartingHIRRoot};
 use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
 use super::type_inference::{TypeInferenceContext, TypeInferenceResult};
@@ -56,7 +55,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
     registry: &'a mut NameRegistry,
     errors: &'a mut TypeErrors<'source>,
     hir: Vec<StartingHIRRoot<'source>>,
-    file: FileTableIndex,
+    //file: FileTableIndex,
 ) -> Result<Vec<GlobalsInferredMIRRoot<'source>>, CompilerError> {
     //register_builtins(type_db, registry);
     let mut new_hir: Vec<GlobalsInferredMIRRoot<'source>> = vec![];
@@ -73,11 +72,14 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 meta,
                 is_intrinsic,
                 is_varargs,
-                is_external
+                is_external,
             } => {
+
+                log!("Top level function: {function_name}");
+
                 let mut typer = TypeInferenceContext {
                     on_function: RootElementType::Function(function_name),
-                    on_file: file,
+                    //on_file: file,
                     type_parameters: type_parameters.clone(),
                     type_db,
                     errors,
@@ -97,6 +99,9 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 );
 
                 let function_type = typer.instantiate_type(&hir_type, meta)?;
+
+                let ty_name = function_type.print_name(type_db);
+                log!("Inferred function type: {ty_name}");
 
                 registry.insert(function_name, function_type.clone());
 
@@ -123,7 +128,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             meta,
                             is_intrinsic,
                             is_varargs,
-                            is_external
+                            is_external,
                         });
                     }
                     TypeInferenceResult::Polymorphic(TypeConstructParams::FunctionSignature(
@@ -150,7 +155,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             meta,
                             is_intrinsic,
                             is_varargs,
-                            is_external
+                            is_external,
                         });
                     }
                     _ => {
@@ -179,8 +184,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             type_db,
                             &[],
                             errors,
-                            meta,
-                            file,
+                            meta
                         )?;
                         type_db
                             .constructors
@@ -200,8 +204,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             type_db,
                             &type_parameters,
                             errors,
-                            meta,
-                            file,
+                            meta
                         )?;
                         type_db
                             .constructors

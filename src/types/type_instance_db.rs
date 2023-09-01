@@ -333,11 +333,17 @@ impl TypeInstanceManager {
                 }
             }
             TypeConstructParams::FunctionSignature(FunctionSignature {
-                generics: _,
+                generics,
                 params,
                 return_type,
                 variadic,
             }) => {
+
+                if generics.len() > 0 && type_args.len() == 0 {
+                    log!("Insufficient information because it's generic");
+                    return Err(TypeConstructionError::InsufficientInformation);
+                }
+
                 let params_constructed = params
                     .iter()
                     .map(|x| {

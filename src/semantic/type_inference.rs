@@ -32,7 +32,7 @@ pub type TypeInferenceInputHIR<'source> = FirstAssignmentsDeclaredHIR<'source>;
 
 pub struct TypeInferenceContext<'compiler_state, 'source> {
     pub on_function: RootElementType,
-    pub on_file: FileTableIndex,
+    //pub on_file: FileTableIndex,
     //If the function is def foo<T>(), this will contain ["T"]
     pub type_parameters: Vec<TypeParameter>,
     //@TODO move function parameters into here
@@ -48,7 +48,7 @@ impl ErrorReporter for TypeInferenceContext<'_, '_> {
         span: &impl Spanned,
         compiler_code_location: &'static str,
     ) -> crate::types::diagnostics::CompilerErrorContext<T> {
-        error.at_spanned(self.on_function, self.on_file, span, compiler_code_location)
+        error.at_spanned(self.on_function, span, compiler_code_location)
     }
 }
 
@@ -64,8 +64,7 @@ impl<'source> TypeInferenceContext<'_, 'source> {
             self.type_db,
             &self.type_parameters,
             self.errors,
-            location,
-            self.on_file,
+            location
         )
     }
 
@@ -119,7 +118,6 @@ impl ErrorReporter for FunctionTypeInferenceContext<'_, '_> {
     ) -> crate::types::diagnostics::CompilerErrorContext<T> {
         error.at_spanned(
             self.ctx.on_function,
-            self.ctx.on_file,
             span,
             compiler_code_location,
         )
@@ -141,6 +139,13 @@ impl TypeInferenceResult {
             TypeInferenceResult::Polymorphic(usage) => usage
                 .try_get_root_type_constructor_id()
                 .and_then(|x| type_db.construct_type(x, &[]).ok()),
+        }
+    }
+
+    pub fn expect_monomorphic(&self) -> TypeInstanceId {
+        match self {
+            TypeInferenceResult::Monomorphic(id) => *id,
+            TypeInferenceResult::Polymorphic(_) => panic!("Expected monomorphic type"),
         }
     }
 }
@@ -235,15 +240,52 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 
                 match decl_type {
                     Some(decl_type) => Ok(HIRExpr::Variable(var, decl_type.clone(), meta)),
-                    None => self
-                        .ctx
-                        .errors
-                        .variable_not_found
-                        .push_inference_error(report!(
-                            self,
-                            meta,
-                            VariableNotFound { variable_name: var }
-                        )),
+                    None => {
+                        let type_data_type_id = self.load_stdlib_builtin("TypeData");
+                        
+                        //try to find a type with this name
+                        let type_id = self.ctx.type_db.find_by_name(&var.to_string());
+
+                        //if we have it, then we're done
+          
+                        if let Some(type_id) = type_id {
+                            return Ok(HIRExpr::TypeName { 
+                                type_variable: TypeInferenceResult::Monomorphic(type_id.id), 
+                                type_data: TypeInferenceResult::Monomorphic(type_data_type_id),
+                                meta
+                            });
+                        }
+
+                        //if we don't have it, maybe it's a type variable coming from a generic
+                        let is_type_param = self
+                            .ctx
+                            .type_parameters
+                            .iter()
+                            .find(|x| x.0 == var);
+
+                        match is_type_param {
+                            Some(type_param) => {
+                                Ok(
+                                    HIRExpr::TypeName { 
+                                        type_variable: TypeInferenceResult::Polymorphic(TypeConstructParams::Generic(type_param.clone())), 
+                                        type_data: TypeInferenceResult::Monomorphic(type_data_type_id),
+                                        meta 
+                                    }
+                                )
+                            }
+                            None => {
+                                self
+                                .ctx
+                                .errors
+                                .variable_not_found
+                                .push_inference_error(report!(
+                                    self,
+                                    meta,
+                                    VariableNotFound { variable_name: var }
+                                ))
+                            }
+                        }
+                    }
                 }
             }
             HIRExpr::Literal(literal_expr, _, meta) => {
@@ -295,7 +337,41 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             HIRExpr::StructInstantiate(struct_name, type_args, _, meta) => {
                 self.infer_struct_instantiate(struct_name, type_args, meta)
             }
+            HIRExpr::TypeName { .. } => {
+                panic!("Generic and given type names should not be created before type inference. They are created *during* type inference!")
+            }
         }
+    }
+
+    fn load_stdlib_builtin(&mut self, name: &str) -> TypeInstanceId {
+
+        //check if instance already exists
+        let type_data_type = self.ctx.type_db.find_by_name(name);
+
+        match type_data_type {
+            Some(d) => return d.id,
+            None => {
+                let type_data_type_constructor = self
+                    .ctx
+                    .type_db
+                    .constructors
+                    .find_by_name(InternedString::new(name));
+
+                match type_data_type_constructor {
+                    Some(type_data_type_constructor) => {
+                        let type_data_type_instance = self.ctx.type_db.construct_type(type_data_type_constructor.id, &[]).unwrap();
+                        return type_data_type_instance;
+                    }
+                    None => {
+                        //TODO: Fix: navigate through all types and roots before running inference,
+                        //otherwise we can't use types in stdlib
+                        panic!("Type {} not found in stdlib", name);
+                    }
+                }
+            }
+        }
+
+        
     }
 
     fn infer_literal(
@@ -331,13 +407,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             }
             LiteralHIRExpr::Float(_) => self.ctx.type_db.common_types.f32,
             LiteralHIRExpr::String(_) => {
-                let str_type = self
-                    .ctx
-                    .type_db
-                    .constructors
-                    .find_by_name(InternedString::new("str"))
-                    .expect("str intrinsic not loaded");
-                self.ctx.type_db.construct_type(str_type.id, &[]).unwrap()
+                self.load_stdlib_builtin("str")
             }
             LiteralHIRExpr::Boolean(_) => self.ctx.type_db.common_types.bool,
             LiteralHIRExpr::None => todo!("Must implement None"),
@@ -446,7 +516,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                     meta_ast: None,
                 };
 
-                let strr = HIRExprPrinter::new(&self.ctx.type_db).print(&result.function);
+                let strr = HIRExprPrinter::new(&self.ctx.type_db, false).print(&result.function);
 
                 log!("Function call variable (monomorphic): {}", strr);
 
@@ -523,7 +593,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                     meta_ast: None,
                 };
 
-                let strr = HIRExprPrinter::new(&self.ctx.type_db).print(&result.function);
+                let strr = HIRExprPrinter::new(&self.ctx.type_db, false).print(&result.function);
 
                 log!("Function call variable (polymorphic): {}", strr);
                 let type_printed = TypeInferenceResult::Polymorphic(
@@ -1092,7 +1162,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                 //get the type argument at the same index
                 let type_arg = positional_type_args
                     .get(index)
-                    .expect("Type argument not found");
+                    .expect("Type argument not found"); //TODO nicer error
                 //return the type argument
                 type_arg.resolved_type.clone()
             }
@@ -1328,7 +1398,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         meta_expr: HIRExprMetadata<'source>,
         synthetic: bool,
     ) -> Result<InferredTypeHIR<'source>, CompilerError> {
-        let expr_str = HIRExprPrinter::new(&&self.ctx.type_db).print(&assigned_value);
+        let expr_str = HIRExprPrinter::new(&&self.ctx.type_db, false).print(&assigned_value);
         log!("Assigned value {expr_str}");
         //Type hint takes precedence over expr type
         let variable_chosen = match variable_typedecl {
@@ -1388,7 +1458,6 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             errors: self.ctx.errors,
             decls_in_scope: &mut decls_in_scope,
             on_function: self.ctx.on_function,
-            on_file: self.ctx.on_file,
             type_parameters: self.ctx.type_parameters.clone(),
         };
 
@@ -1405,8 +1474,6 @@ pub fn infer_types<'source>(
     type_db: &mut TypeInstanceManager,
     mir: Vec<TypeInferenceInputHIRRoot<'source>>,
     errors: &mut TypeErrors<'source>,
-
-    file: FileTableIndex,
 ) -> Result<Vec<InferredTypeHIRRoot<'source>>, CompilerError> {
     //log!("globals:");
     //globals.print( type_db);
@@ -1428,7 +1495,6 @@ pub fn infer_types<'source>(
             } => {
                 let inference_ctx = TypeInferenceContext {
                     on_function: RootElementType::Function(function_name),
-                    on_file: file,
                     type_db,
                     errors,
                     decls_in_scope: globals,
@@ -1463,7 +1529,6 @@ pub fn infer_types<'source>(
             } => {
                 let mut inference_ctx = TypeInferenceContext {
                     on_function: RootElementType::Struct(struct_name),
-                    on_file: file,
                     type_db,
                     errors,
                     decls_in_scope: globals,

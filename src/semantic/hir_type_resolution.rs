@@ -38,8 +38,7 @@ pub fn hir_type_to_usage(
     type_db: &TypeInstanceManager,
     type_parameters: &[TypeParameter],
     errors: &mut TypeErrors,
-    location: &impl Spanned,
-    file: FileTableIndex,
+    location: &impl Spanned
 ) -> Result<TypeConstructParams, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
@@ -59,7 +58,7 @@ pub fn hir_type_to_usage(
                     TypeNotFound {
                         type_name: HIRType::Simple(*name),
                     }
-                    .at_spanned(on_code_element, file, location, loc!()),
+                    .at_spanned(on_code_element, location, loc!()),
                 )
                 .as_type_inference_error();
         }
@@ -73,8 +72,7 @@ pub fn hir_type_to_usage(
                         type_db,
                         type_parameters,
                         errors,
-                        location,
-                        file,
+                        location
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -86,7 +84,6 @@ pub fn hir_type_to_usage(
                 type_parameters,
                 errors,
                 location,
-                file,
             )?;
 
             Ok(TypeConstructParams::FunctionSignature(FunctionSignature {
@@ -106,7 +103,6 @@ pub fn hir_type_to_usage(
                 type_parameters,
                 errors,
                 location,
-                file,
             );
         }
         HIRType::Generic(base, args) => {
@@ -121,7 +117,6 @@ pub fn hir_type_to_usage(
                         type_parameters,
                         errors,
                         location,
-                        file,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -147,7 +142,7 @@ pub fn hir_type_to_usage(
                     TypeNotFound {
                         type_name: HIRType::Simple(*base),
                     }
-                    .at_spanned(on_code_element, file, location, loc!()),
+                    .at_spanned(on_code_element, location, loc!()),
                 )
                 .as_type_inference_error()
         }
