@@ -1,7 +1,7 @@
 struct List<T>:
     buf: ptr<T>
-    len: u32
-    cap: u32
+    len: u64
+    cap: u64
 
 def list_new<T>() -> List<T>:
     list = List<T>()
@@ -18,18 +18,31 @@ def list_add<T>(list: ptr<List<T>>, item: T):
             (*list).cap = 4
         else:
             (*list).cap = cap * 2
-        
-    ptr_as_u8 = reinterpret_ptr<T, u8>((*list).buf)
-    ptr_reallocated = malloc(cap * (4 as u64))
-    (*list).buf = reinterpret_ptr<u8, T>(ptr_reallocated)
 
-    (*list).buf.write(len, item)
+        new_allocation = mem_alloc<T>((*list).cap)
+        if len > 0:
+            i: u64 = 0
+            while i < len:
+                new_allocation[i] = (*list).buf[i]
+                i = i + 1
+            mem_free<T>((*list).buf)
+
+        (*list).buf = new_allocation   
+    
+    (*list).buf[len] = item
     (*list).len = len + 1
 
-
-def reinterpret_ptr<T, U>(p: ptr<T>) -> ptr<U>:
-    intrinsic
+def list_get<T>(list: ptr<List<T>>, index: u64) -> T:
+    return (*list).buf[index]
 
 def main():
     new_list = list_new<i32>()
-    list_add<i32>(&new_list, 1)
+    items = 0
+    while items <= 10:
+        list_add<i32>(&new_list, items)
+        items = items + 1
+
+    i: u64 = 0
+    while i < new_list.len:
+        print_int(list_get<i32>(&new_list, i))
+        i = i + 1

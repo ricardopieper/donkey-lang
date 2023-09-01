@@ -12,6 +12,7 @@ use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 
 use crate::types::diagnostics::{ContextualizedCompilerError, DerefOnNonPointerError, TypeErrors};
+use crate::types::type_constructor_db::TypeParameter;
 use crate::{
     ast::parser::{Expr, AST},
     types::type_instance_db::TypeInstanceId,
@@ -91,6 +92,11 @@ pub enum MIRExprRValue<'source> {
         Option<PolymorphicName>,
     ),
     StructInstantiate(TypeInstanceId, MIRExprMetadata<'source>),
+    TypeVariable {
+        type_variable: TypeInstanceId,
+        type_data: TypeInstanceId,
+        meta: MIRExprMetadata<'source>,
+    },
     Ref(
         //you can only ref an lvalue
         Box<MIRExprLValue<'source>>,
@@ -125,6 +131,7 @@ impl MIRExpr<'_> {
     pub fn get_type(&self) -> TypeInstanceId {
         match self {
             MIRExpr::RValue(rvalue_expr) => match rvalue_expr {
+                MIRExprRValue::TypeVariable { type_data, .. } => *type_data,
                 MIRExprRValue::Literal(_, type_id, _) => *type_id,
                 MIRExprRValue::BinaryOperation(_, _, _, type_id, _) => *type_id,
                 MIRExprRValue::MethodCall(_, _, _, type_id, _) => *type_id,
@@ -133,7 +140,7 @@ impl MIRExpr<'_> {
                 MIRExprRValue::UnaryExpression(_, _, type_id, _) => *type_id,
                 MIRExprRValue::Array(_, type_id, _) => *type_id,
                 MIRExprRValue::StructInstantiate(type_id, _) => *type_id,
-                MIRExprRValue::Cast(_, type_id, _) => *type_id
+                MIRExprRValue::Cast(_, type_id, _) => *type_id,
             },
             MIRExpr::LValue(lvalue) => lvalue.get_type(),
         }
@@ -164,7 +171,7 @@ pub enum MIRTopLevelNode<'source> {
         is_varargs: bool,
         is_external: bool,
     },
-    
+
     DeclareFunction {
         function_name: InternedString,
         parameters: Vec<MIRTypedBoundName>,
@@ -273,7 +280,10 @@ fn simplify_expression(expr: HIRExpr<'_, TypeInstanceId>) -> (HIRExpr<'_, TypeIn
         //@TODO casting a literal to a type can be optimized here, just change the inferred type instead of generating an actual cast
         HIRExpr::Cast(expr, user_type, ty, meta) => {
             let (expr, simplified) = simplify_expression(*expr);
-            (HIRExpr::Cast(Box::new(expr), user_type, ty, meta), simplified)
+            (
+                HIRExpr::Cast(Box::new(expr), user_type, ty, meta),
+                simplified,
+            )
         }
         HIRExpr::BinaryOperation(lhs, op, rhs, ty, type_certainty, meta) => {
             let (lhs, simplified_lhs) = simplify_expression(*lhs);
@@ -383,11 +393,22 @@ fn simplify_expression(expr: HIRExpr<'_, TypeInstanceId>) -> (HIRExpr<'_, TypeIn
             let simplified = simplified_items.iter().any(|simplified| *simplified);
             (HIRExpr::Array(items, ty, meta), simplified)
         }
+        HIRExpr::TypeName {
+            type_variable,
+            type_data,
+            meta,
+        } => (
+            HIRExpr::TypeName {
+                type_variable,
+                type_data,
+                meta,
+            },
+            false,
+        ),
     }
 }
 
 fn hir_expr_to_mir<'a>(
-    file: FileTableIndex,
     element: RootElementType,
     expr: HIRExpr<'a, TypeInstanceId>,
     errors: &mut TypeErrors<'a>,
@@ -395,14 +416,14 @@ fn hir_expr_to_mir<'a>(
     let (mut current_expr, mut simplified) = simplify_expression(expr);
     loop {
         if !simplified {
-            return convert_expr_to_mir(file, element, current_expr, errors);
+            return convert_expr_to_mir(element, current_expr, errors);
         }
         (current_expr, simplified) = simplify_expression(current_expr);
     }
 }
 
 macro_rules! expect_lvalue {
-    ($element:expr, $file:expr, $expr:expr, $errors:expr, $meta:expr) => {
+    ($element:expr, $expr:expr, $errors:expr, $meta:expr) => {
         match $expr {
             MIRExpr::RValue(_) => {
                 return $errors
@@ -411,7 +432,7 @@ macro_rules! expect_lvalue {
                         DerefOnNonPointerError {
                             attempted_type: $expr.get_type(),
                         }
-                        .at_spanned($element, $file, $meta, loc!()),
+                        .at_spanned($element, $meta, loc!()),
                     )
                     .as_type_check_error();
             }
@@ -421,7 +442,6 @@ macro_rules! expect_lvalue {
 }
 
 fn convert_expr_to_mir<'a>(
-    file: FileTableIndex,
     element: RootElementType,
     expr: HIRExpr<'a, TypeInstanceId>,
     errors: &mut TypeErrors<'a>,
@@ -445,16 +465,14 @@ fn convert_expr_to_mir<'a>(
         HIRExpr::Variable(name, ty, meta) => {
             Ok(MIRExpr::LValue(MIRExprLValue::Variable(name, ty, meta)))
         }
-        HIRExpr::Cast(expr, _, ty, meta) => {
-            Ok(MIRExpr::RValue(MIRExprRValue::Cast(
-                hir_expr_to_mir(file, element, *expr, errors)?.into(),
-                ty,
-                meta,
-            )))
-        },
+        HIRExpr::Cast(expr, _, ty, meta) => Ok(MIRExpr::RValue(MIRExprRValue::Cast(
+            hir_expr_to_mir(element, *expr, errors)?.into(),
+            ty,
+            meta,
+        ))),
         HIRExpr::BinaryOperation(lhs, op, rhs, ty, _, meta) => {
-            let lhs = hir_expr_to_mir(file, element, *lhs, errors)?;
-            let rhs = hir_expr_to_mir(file, element, *rhs, errors)?;
+            let lhs = hir_expr_to_mir(element, *lhs, errors)?;
+            let rhs = hir_expr_to_mir(element, *rhs, errors)?;
             Ok(MIRExpr::RValue(MIRExprRValue::BinaryOperation(
                 lhs.into(),
                 op,
@@ -471,10 +489,10 @@ fn convert_expr_to_mir<'a>(
                 return_type,
                 meta_expr,
             } = mcall;
-            let obj = hir_expr_to_mir(file, element, *object, errors)?;
+            let obj = hir_expr_to_mir(element, *object, errors)?;
             let args: Result<Vec<_>, _> = args
                 .into_iter()
-                .map(|arg| hir_expr_to_mir(file, element, arg, errors))
+                .map(|arg| hir_expr_to_mir(element, arg, errors))
                 .collect();
 
             Ok(MIRExpr::RValue(MIRExprRValue::MethodCall(
@@ -494,13 +512,13 @@ fn convert_expr_to_mir<'a>(
                 meta_expr,
                 meta_ast: _,
             } = *fcall;
-            let function_expr = hir_expr_to_mir(file, element, function, errors)?;
+            let function_expr = hir_expr_to_mir(element, function, errors)?;
             let args: Result<Vec<_>, _> = args
                 .into_iter()
-                .map(|arg| hir_expr_to_mir(file, element, arg, errors))
+                .map(|arg| hir_expr_to_mir(element, arg, errors))
                 .collect();
 
-            let function_lvalue = expect_lvalue!(element, file, function_expr, errors, meta_expr);
+            let function_lvalue = expect_lvalue!(element, function_expr, errors, meta_expr);
 
             Ok(MIRExpr::RValue(MIRExprRValue::FunctionCall(
                 function_lvalue.into(),
@@ -511,13 +529,13 @@ fn convert_expr_to_mir<'a>(
             )))
         }
         HIRExpr::Deref(expr, ty, meta) => {
-            let expr = hir_expr_to_mir(file, element, *expr, errors)?;
+            let expr = hir_expr_to_mir(element, *expr, errors)?;
             Ok(MIRExpr::LValue(MIRExprLValue::Deref(expr.into(), ty, meta)))
         }
         HIRExpr::Ref(expr, ty, meta) => {
-            let expr = hir_expr_to_mir(file, element, *expr, errors)?;
+            let expr = hir_expr_to_mir(element, *expr, errors)?;
 
-            let ref_lvalue = expect_lvalue!(element, file, expr, errors, meta);
+            let ref_lvalue = expect_lvalue!(element, expr, errors, meta);
 
             Ok(MIRExpr::RValue(MIRExprRValue::Ref(
                 ref_lvalue.into(),
@@ -526,7 +544,7 @@ fn convert_expr_to_mir<'a>(
             )))
         }
         HIRExpr::UnaryExpression(op, rhs, ty, _, meta) => {
-            let rhs = hir_expr_to_mir(file, element, *rhs, errors)?;
+            let rhs = hir_expr_to_mir(element, *rhs, errors)?;
             Ok(MIRExpr::RValue(MIRExprRValue::UnaryExpression(
                 op,
                 rhs.into(),
@@ -535,7 +553,7 @@ fn convert_expr_to_mir<'a>(
             )))
         }
         HIRExpr::MemberAccess(obj, field, ty, meta) => {
-            let obj = hir_expr_to_mir(file, element, *obj, errors)?;
+            let obj = hir_expr_to_mir(element, *obj, errors)?;
             Ok(MIRExpr::LValue(MIRExprLValue::MemberAccess(
                 obj.into(),
                 field,
@@ -546,13 +564,22 @@ fn convert_expr_to_mir<'a>(
         HIRExpr::Array(items, ty, meta) => {
             let items: Result<Vec<_>, _> = items
                 .into_iter()
-                .map(|item| hir_expr_to_mir(file, element, item, errors))
+                .map(|item| hir_expr_to_mir(element, item, errors))
                 .collect();
             Ok(MIRExpr::RValue(MIRExprRValue::Array(items?, ty, meta)))
         }
         HIRExpr::StructInstantiate(_name, _typeargs, ty, meta) => {
             Ok(MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, meta)))
         }
+        HIRExpr::TypeName {
+            type_variable,
+            type_data,
+            meta,
+        } => Ok(MIRExpr::RValue(MIRExprRValue::TypeVariable {
+            type_variable,
+            type_data,
+            meta,
+        })),
     }
 }
 
@@ -578,7 +605,6 @@ struct CodegenJob<'source> {
 }
 
 pub struct MIRFunctionEmitter<'source, 'errors> {
-    file: FileTableIndex,
     function_name: RootElementType,
     errors: &'errors mut TypeErrors<'source>,
     root_ast: HIRAstMetadata<'source>,
@@ -590,13 +616,11 @@ pub struct MIRFunctionEmitter<'source, 'errors> {
 
 impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
     pub fn new(
-        file: FileTableIndex,
         function_name: InternedString,
         errors: &'errors mut TypeErrors<'source>,
         root: HIRAstMetadata<'source>,
     ) -> Self {
         Self {
-            file,
             function_name: RootElementType::Function(function_name),
             errors,
             root_ast: root,
@@ -776,8 +800,7 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                             meta_ast,
                             meta_expr,
                         } => {
-                            let mir_expr =
-                                hir_expr_to_mir(self.file, self.function_name, path, self.errors)?;
+                            let mir_expr = hir_expr_to_mir(self.function_name, path, self.errors)?;
 
                             match mir_expr {
                                 MIRExpr::RValue(_) => {
@@ -787,7 +810,6 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                                         }
                                         .at_spanned(
                                             self.function_name,
-                                            self.file,
                                             meta_expr,
                                             loc!(),
                                         ),
@@ -795,7 +817,6 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                                 }
                                 MIRExpr::LValue(lvalue) => {
                                     let lvalue_rhs_expr = hir_expr_to_mir(
-                                        self.file,
                                         self.function_name,
                                         expression,
                                         self.errors,
@@ -824,14 +845,7 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                             HIRExpr::Variable(var, _function_type, ..) => {
                                 let pending_args: Result<Vec<_>, _> = args
                                     .into_iter()
-                                    .map(|x| {
-                                        hir_expr_to_mir(
-                                            self.file,
-                                            self.function_name,
-                                            x,
-                                            self.errors,
-                                        )
-                                    })
+                                    .map(|x| hir_expr_to_mir(self.function_name, x, self.errors))
                                     .collect();
 
                                 self.emit(
@@ -855,18 +869,11 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                             return_type,
                             meta_expr,
                         }) => {
-                            let object = hir_expr_to_mir(
-                                self.file,
-                                self.function_name,
-                                *object,
-                                self.errors,
-                            )?;
+                            let object = hir_expr_to_mir(self.function_name, *object, self.errors)?;
 
                             let args: Result<Vec<_>, _> = args
                                 .into_iter()
-                                .map(|x| {
-                                    hir_expr_to_mir(self.file, self.function_name, x, self.errors)
-                                })
+                                .map(|x| hir_expr_to_mir(self.function_name, x, self.errors))
                                 .collect();
 
                             self.emit(
@@ -892,12 +899,8 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                         } => {
                             self.scope_add_variable(scope, var, typedef);
                             let expr_type = expression.get_type();
-                            let declare_rhs_expr = hir_expr_to_mir(
-                                self.file,
-                                self.function_name,
-                                expression,
-                                self.errors,
-                            )?;
+                            let declare_rhs_expr =
+                                hir_expr_to_mir(self.function_name, expression, self.errors)?;
                             self.emit(
                                 block,
                                 MIRBlockNode::Assign {
@@ -942,7 +945,7 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                             };
 
                             let condition_expr =
-                                hir_expr_to_mir(self.file, self.function_name, expr, self.errors)?;
+                                hir_expr_to_mir(self.function_name, expr, self.errors)?;
 
                             //emit the if statement
                             self.finish_with(
@@ -975,7 +978,7 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                             });
 
                             let condition_expr =
-                                hir_expr_to_mir(self.file, self.function_name, expr, self.errors)?;
+                                hir_expr_to_mir(self.function_name, expr, self.errors)?;
 
                             //the current block is the condition evaluation
 
@@ -1000,7 +1003,7 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
                         HIR::Return(expr, meta_ast) => {
                             //if there are multiple returns in sequence, the rest of the block is unreachable, so we can actually just finish it and return
                             let return_expr =
-                                hir_expr_to_mir(self.file, self.function_name, expr, self.errors)?;
+                                hir_expr_to_mir(self.function_name, expr, self.errors)?;
                             self.finish_with(block, MIRBlockFinal::Return(return_expr, meta_ast));
                             return Ok(());
                         }
@@ -1049,7 +1052,6 @@ impl<'source, 'errors> MIRFunctionEmitter<'source, 'errors> {
 }
 
 pub fn hir_to_mir<'source>(
-    file: FileTableIndex,
     hir_nodes: Vec<MonomorphizedHIRRoot<'source>>,
     errors: &mut TypeErrors<'source>,
 ) -> Result<Vec<MIRTopLevelNode<'source>>, CompilerError> {
@@ -1065,7 +1067,7 @@ pub fn hir_to_mir<'source>(
                 meta,
                 is_intrinsic,
                 is_varargs,
-                is_external
+                is_external,
             } => {
                 let mir_parameters = parameters
                     .iter()
@@ -1081,13 +1083,11 @@ pub fn hir_to_mir<'source>(
                         parameters: mir_parameters,
                         return_type,
                         is_varargs,
-                        is_external
+                        is_external,
                     });
                     continue;
-                }
-                else {
-                    let mut mir_emitter =
-                        MIRFunctionEmitter::new(file, function_name, errors, meta);
+                } else {
+                    let mut mir_emitter = MIRFunctionEmitter::new(function_name, errors, meta);
 
                     mir_emitter.run(body, parameters)?;
 

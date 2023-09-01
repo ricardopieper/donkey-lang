@@ -3,7 +3,7 @@ use crate::{
 };
 
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
-pub struct TokenSpanIndex(pub usize);
+pub struct TokenSpanIndex { pub index: usize, pub file: FileTableIndex }
 
 #[derive(Eq, PartialEq, Debug, Clone, Copy)]
 pub struct TokenData {
@@ -19,7 +19,6 @@ pub struct SourceLocation {
 
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
 pub struct TokenSpan {
-    pub file: FileTableIndex,
     pub start: SourceLocation,
     pub end: SourceLocation,
 }
@@ -45,9 +44,9 @@ impl TokenTable {
         end: SourceLocation,
     ) {
         let cur_len = self.spans.len();
-        self.spans.push(TokenSpan { file, start, end });
+        self.spans.push(TokenSpan {  start, end });
         self.tokens.push(TokenData {
-            span_index: TokenSpanIndex(cur_len),
+            span_index: TokenSpanIndex { index: cur_len, file },
             token,
         });
     }

@@ -12,6 +12,8 @@ use super::type_checker::typecheck;
 use crate::ast::lexer::{TokenSpanIndex, TokenTable};
 use crate::ast::parser::{print_errors, AstSpan, Parser};
 use crate::ast::{lexer, parser};
+use crate::interner::InternedString;
+use crate::semantic::hir::HIRRoot;
 use crate::semantic::{first_assignments, mir_printer, top_level_decls, type_inference};
 use crate::types::diagnostics::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
@@ -49,8 +51,15 @@ impl Source {
             path: file_name,
             index: FileTableIndex(prev_count),
             ast: AST::Break(AstSpan {
-                start: TokenSpanIndex(0),
-                end: TokenSpanIndex(0),
+                //this gets replaced
+                start: TokenSpanIndex {
+                    file: FileTableIndex(0),
+                    index: 0,
+                },
+                end: TokenSpanIndex {
+                    file: FileTableIndex(0),
+                    index: 0,
+                },
             }),
             contents: source.leak(),
             token_table: TokenTable {
@@ -83,7 +92,6 @@ impl Source {
         let input = fs::read_to_string(file_location)
             .unwrap_or_else(|_| panic!("Could not read file {file_location}"));
         self.load(file_location.to_string(), input)
-
     }
 
     #[allow(dead_code)]
@@ -101,8 +109,8 @@ pub struct Analyzer<'source> {
     pub type_db: TypeInstanceManager,
     pub globals: NameRegistry,
     pub type_errors: TypeErrors<'source>,
-    pub hir: Vec<Vec<InferredTypeHIRRoot<'source>>>,
-    pub hir_monomorphized: Vec<Vec<MonomorphizedHIRRoot<'source>>>,
+    pub hir: Vec<InferredTypeHIRRoot<'source>>,
+    pub hir_monomorphized: Vec<MonomorphizedHIRRoot<'source>>,
     source: &'source Source,
 }
 
@@ -120,12 +128,48 @@ impl<'source> Analyzer<'source> {
         }
     }
 
+    pub fn last_hir(&self, n: usize) -> &[InferredTypeHIRRoot<'source>] {
+        &self.hir[self.hir.len() - n..]
+    }
+
+    pub fn last_hir_mono(&self, n: usize) -> &[MonomorphizedHIRRoot<'source>] {
+        &self.hir_monomorphized[self.hir_monomorphized.len() - n..]
+    }
+
     #[allow(dead_code)]
     pub fn print_errors(&self) {
         println!(
             "{}",
             TypeErrorPrinter::new(&self.type_errors, &self.type_db, &self.source.file_table)
         )
+    }
+
+    pub fn ensure_instantiate_builtin_type(&mut self, name: &str) {
+        //check if instance already exists
+        let type_data_type = self.type_db.find_by_name(name);
+
+        match type_data_type {
+            Some(_) => {}
+            None => {
+                let type_data_type_constructor = self
+                    .type_db
+                    .constructors
+                    .find_by_name(InternedString::new(name));
+
+                match type_data_type_constructor {
+                    Some(type_data_type_constructor) => {
+                        self.type_db
+                            .construct_type(type_data_type_constructor.id, &[])
+                            .unwrap();
+                    }
+                    None => {
+                        //TODO: Fix: navigate through all types and roots before running inference,
+                        //otherwise we can't use types in stdlib
+                        log!("Type {} not found in stdlib", name);
+                    }
+                }
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -136,105 +180,95 @@ impl<'source> Analyzer<'source> {
         self.generate_mir_and_typecheck(source, true);
     }
     pub fn generate_mir_and_typecheck(&mut self, source: &'source Source, do_typecheck: bool) {
-        for file in source.file_table.iter() {
-            let ast_hir = ast_globals_to_hir(&file.ast);
-            let inferred_globals_hir =
-                match top_level_decls::build_name_registry_and_resolve_signatures(
-                    &mut self.type_db,
-                    &mut self.globals,
-                    &mut self.type_errors,
-                    ast_hir,
-                    file.index,
-                ) {
-                    Ok(hir) => hir,
-                    Err(e) => {
-                        let printer = TypeErrorPrinter::new(
-                            &self.type_errors,
-                            &self.type_db,
-                            &source.file_table,
-                        );
-                        panic!("build_name_registry_and_resolve_signatures {e:?}\n{printer}");
-                    }
-                };
+        //stage 1: conversion to HIR
+        let all_hir = source
+            .file_table
+            .iter()
+            .flat_map(|file| ast_globals_to_hir(&file.ast))
+            .collect::<Vec<_>>();
 
-            let first_assignment_hir =
-                first_assignments::transform_first_assignment_into_declaration(
-                    inferred_globals_hir,
-                );
-
-            let struct_instantiations = struct_instantiations::construct_struct_instantiations(
-                first_assignment_hir,
-                &mut self.type_db,
-            );
-
-            let type_inferred = type_inference::infer_types(
-                &mut self.globals,
-                &mut self.type_db,
-                struct_instantiations,
-                &mut self.type_errors,
-                file.index,
-            );
-
-            let type_inferred_hir = match type_inferred {
-                Ok(hir) => hir,
-                Err(e) => {
-                    println!(
-                        "{e:?}\nType errors:\n{}",
-                        TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.file_table,)
-                    );
-                    return;
-                }
-            };
-
-            //let printed_inferred = HIRPrinter::new(&self.type_db).print_hir(&type_inferred_hir);
-
-            //println!("Inferred HIR: \n{}\n", printed_inferred);
-
-            self.hir.push(type_inferred_hir.clone());
-
-            let mut monomorphizer =
-                Monomorphizer::new(&mut self.type_db, &mut self.type_errors, file.index);
-
-            let mono_result = monomorphizer.run(type_inferred_hir);
-
-            match mono_result {
-                Ok(_) => {}
-                Err(e) => {
-                    println!(
-                        "{e:?}\nType errors:\n{}",
-                        TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.file_table,)
-                    );
-                    return;
-                }
+        let inferred_globals_hir = match top_level_decls::build_name_registry_and_resolve_signatures(
+            &mut self.type_db,
+            &mut self.globals,
+            &mut self.type_errors,
+            all_hir,
+        ) {
+            Ok(hir) => hir,
+            Err(e) => {
+                let printer =
+                    TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.file_table);
+                panic!("build_name_registry_and_resolve_signatures {e:?}\n{printer}")
             }
+        };
 
-            let (monomorphized_hir, new_top_level_decls) = monomorphizer.get_result();
+        let first_assignment_hir =
+            first_assignments::transform_first_assignment_into_declaration(inferred_globals_hir);
 
-            self.globals.include(&new_top_level_decls);
+        let struct_instantiations = struct_instantiations::construct_struct_instantiations(
+            first_assignment_hir,
+            &mut self.type_db,
+        );
 
-            self.hir_monomorphized.push(monomorphized_hir.clone());
+        let type_inferred = type_inference::infer_types(
+            &mut self.globals,
+            &mut self.type_db,
+            struct_instantiations,
+            &mut self.type_errors,
+        );
 
-            let mir = hir_to_mir(file.index, monomorphized_hir, &mut self.type_errors);
+        let type_inferred_hir = match type_inferred {
+            Ok(hir) => hir,
+            Err(e) => {
+                println!(
+                    "{e:?}\nType errors:\n{}",
+                    TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.file_table,)
+                );
+                return;
+            }
+        };
 
-            if let Ok(mir) = mir {
-                let printed_mir = mir_printer::print_mir(&mir, &self.type_db);
-                log!("MIR being typechecked: {printed_mir}");
+        //let printed_inferred = HIRPrinter::new(&self.type_db).print_hir(&type_inferred_hir);
 
-                if do_typecheck {
-                    let typechecked = typecheck(
-                        mir,
-                        &self.type_db,
-                        &self.globals,
-                        &mut self.type_errors,
-                        file.index,
-                    );
+        //println!("Inferred HIR: \n{}\n", printed_inferred);
 
-                    if self.type_errors.count() == 0 {
-                        self.mir.extend(typechecked.unwrap());
-                    }
-                } else {
-                    self.unchecked_mir.extend(mir);
+        self.hir = type_inferred_hir.clone();
+
+        let mut monomorphizer = Monomorphizer::new(&mut self.type_db, &mut self.type_errors);
+
+        let mono_result = monomorphizer.run(type_inferred_hir);
+
+        match mono_result {
+            Ok(_) => {}
+            Err(e) => {
+                println!(
+                    "{e:?}\nType errors:\n{}",
+                    TypeErrorPrinter::new(&self.type_errors, &self.type_db, &source.file_table,)
+                );
+                return;
+            }
+        }
+
+        let (monomorphized_hir, new_top_level_decls) = monomorphizer.get_result();
+
+        self.globals.include(&new_top_level_decls);
+
+        self.hir_monomorphized = monomorphized_hir.clone();
+
+        let mir = hir_to_mir(monomorphized_hir, &mut self.type_errors);
+
+        if let Ok(mir) = mir {
+            let printed_mir = mir_printer::print_mir(&mir, &self.type_db);
+            log!("MIR being typechecked: {printed_mir}");
+
+            if do_typecheck {
+                let typechecked =
+                    typecheck(mir, &self.type_db, &self.globals, &mut self.type_errors);
+
+                if self.type_errors.count() == 0 {
+                    self.mir.extend(typechecked.unwrap());
                 }
+            } else {
+                self.unchecked_mir.extend(mir);
             }
         }
     }
@@ -295,23 +329,27 @@ mod tests {
 
     use crate::{
         ast::lexer::Operator,
-        interner::{InternedString, self},
+        interner::{self, InternedString},
         semantic::{
             context::test_utils::{do_analysis, parse, parse_no_std},
             hir::HIRTypeDisplayer,
             hir_printer::HIRPrinter,
-            mir_printer::print_mir
-        }
+            mir_printer::print_mir,
+        },
     };
 
     use super::*;
 
     fn print_hir(hir: &[InferredTypeHIRRoot], analyzer: &Analyzer) -> String {
-        HIRPrinter::new(&analyzer.type_db).print_hir(hir)
+        HIRPrinter::new(&analyzer.type_db, false).print_hir(hir)
     }
 
     fn print_hir_mono(hir: &[MonomorphizedHIRRoot], analyzer: &Analyzer) -> String {
-        HIRPrinter::new(&analyzer.type_db).print_hir(hir)
+        HIRPrinter::new(&analyzer.type_db, false).print_hir(hir)
+    }
+
+    fn print_hir_mono_verbose(hir: &[MonomorphizedHIRRoot], analyzer: &Analyzer) -> String {
+        HIRPrinter::new(&analyzer.type_db, true).print_hir(hir)
     }
 
     #[test]
@@ -324,7 +362,7 @@ def my_function():
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let result = print_hir(analyzed.last_hir(1), &analyzed);
 
         let expected = "
 def my_function() -> Void:
@@ -347,7 +385,7 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{result}");
 
         let expected = "
@@ -383,7 +421,7 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{result}");
 
         let expected = "
@@ -403,7 +441,7 @@ def my_function(arg1: i32, arg2: i32) -> i32:
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
-        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("Result: {result} {:#?}", analyzed.hir);
 
         let expected = "
@@ -422,7 +460,7 @@ def main(args: array<str>):
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let result = print_hir(analyzed.last_hir(1), &analyzed);
 
         let expected = "
 def main(args: array<str>) -> Void:
@@ -442,7 +480,7 @@ def main(args: array<str>):
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
-        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let result = print_hir(analyzed.last_hir(1), &analyzed);
 
         let expected = "
 def main(args: array<str>) -> Void:
@@ -464,7 +502,7 @@ def main(args: array<str>):
         analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
         //println!("Here is the hir: {:#?}", analyzed.hir.last().unwrap());
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(args: array<str>) -> Void:
@@ -486,7 +524,7 @@ def my_function() -> f32:
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
 
-        let result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let result = print_hir(analyzed.last_hir(1), &analyzed);
 
         println!("Result: \n{result}\n====end result");
 
@@ -518,7 +556,7 @@ def main():
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(2), &analyzed);
         println!("{final_result}");
         let expected = "
 def sum(x: i32, y: i32) -> i32:
@@ -563,7 +601,7 @@ def main():
         analyzed.print_errors();
 
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(2), &analyzed);
         println!("{final_result}");
         let expected = "
 def id(x: i32) -> i32:
@@ -589,7 +627,7 @@ def main():
         let analyzed = do_analysis(&parsed);
 
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
 
         println!("HIR printed:\n{final_result}");
         let expected = "
@@ -612,7 +650,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
@@ -663,7 +701,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
@@ -691,7 +729,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
@@ -722,7 +760,7 @@ def main(x: i32) -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 1);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{final_result}");
         let expected = "
 def main(x: i32) -> i32:
@@ -754,7 +792,7 @@ def main() -> i32:
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{final_result}");
         let expected = "
 def main() -> i32:
@@ -797,7 +835,7 @@ def main() -> i32:
         analyzed.print_errors();
 
         assert_eq!(analyzed.type_errors.count(), 1);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{final_result}");
         let expected = "
 def main() -> i32:
@@ -864,17 +902,14 @@ def my_function():
     y = x.sizee",
         );
         let analyzed = do_analysis(&parsed);
-        let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{result}");
+       
 
         assert_eq!(analyzed.type_errors.count(), 1);
 
         assert_eq!(analyzed.type_errors.field_not_found.len(), 1);
 
         assert_eq!(
-            analyzed.type_errors.field_not_found[0]
-                .error
-                .field,
+            analyzed.type_errors.field_not_found[0].error.field,
             InternedString::new("sizee")
         );
         assert_eq!(
@@ -960,13 +995,10 @@ def my_function():
         );
 
         let analyzed = do_analysis(&parsed);
-        let result = print_hir(&analyzed.hir[0], &analyzed);
-        println!("{result}");
+       
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
-            analyzed.type_errors.field_not_found[0]
-                .error
-                .field,
+            analyzed.type_errors.field_not_found[0].error.field,
             InternedString::new("as_i32")
         );
     }
@@ -983,9 +1015,7 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
-            analyzed.type_errors.field_not_found[0]
-                .error
-                .field,
+            analyzed.type_errors.field_not_found[0].error.field,
             InternedString::new("as_i32")
         );
     }
@@ -1051,7 +1081,6 @@ def my_function():
     y = x()",
         );
         let analyzed = do_analysis(&parsed);
-        let _result = print_hir(&analyzed.hir[0], &analyzed);
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.call_non_callable.len(), 1);
 
@@ -1083,7 +1112,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
-        let final_result = print_hir(&analyzed.hir.last().unwrap(), &analyzed);
+        let final_result = print_hir(analyzed.last_hir(1), &analyzed);
         println!("{final_result}");
         let expected = "
 def main() -> Void:
@@ -1119,7 +1148,7 @@ def main():
         analyzed.print_errors();
         //assert_eq!(analyzed.type_errors.count(), 0);
         //println!("Here is the hir: {:#?}", analyzed.hir.last().unwrap());
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(2), &analyzed);
         println!("{final_result}");
         let expected = "
 def main() -> Void:
@@ -1155,7 +1184,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(2), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1214,7 +1243,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(1), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1234,7 +1263,7 @@ def main() -> Void:
             "
 struct List<T>:
     buf: ptr<T>
-    len: u32
+    len: u64
 
 def list_add<T>(list: List<T>, item: T):
     b = list.buf
@@ -1249,7 +1278,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(2), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1271,8 +1300,8 @@ def list_add_i32(list: List<i32>, item: i32) -> Void:
             "
 struct List<T>:
     buf: ptr<T>
-    len: u32
-    cap: u32
+    len: u64
+    cap: u64
 
 def list_new<T>() -> List<T>:
     list = List<T>()
@@ -1298,7 +1327,7 @@ def list_add<T>(list: List<T>, item: T):
 def reinterpret_ptr<T, U>(p: ptr<T>) -> ptr<U>:
     intrinsic
 
-def realloc(buf: ptr<u8>, size: u32) -> ptr<u8>:
+def realloc(buf: ptr<u8>, size: u64) -> ptr<u8>:
     intrinsic
 
 def main():
@@ -1310,12 +1339,12 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(6), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
         let expected = "
-def realloc(buf: ptr<u8>, size: u32) -> ptr<u8>:
+def realloc(buf: ptr<u8>, size: u64) -> ptr<u8>:
 def main() -> Void:
     new_list : List<i32> = list_new_i32<i32>()
     list_add_i32(new_list, 1)
@@ -1363,7 +1392,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(2), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1396,7 +1425,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(2), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1410,7 +1439,7 @@ def first_i32(array_ptr: ptr<array<i32>>) -> ptr<i32>:
 
         assert_eq!(expected.trim(), final_result.trim());
     }
-   
+
     #[test]
     fn nested_ptr_generics3() {
         let parsed = parse_no_std(
@@ -1435,7 +1464,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(3), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1449,7 +1478,6 @@ def list_new_i32() -> List<i32>:
 
         assert_eq!(expected.trim(), final_result.trim());
     }
-
 
     #[test]
     fn list_example() {
@@ -1479,7 +1507,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(3), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1525,7 +1553,7 @@ def main():
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         println!("Here is the hir");
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(4), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1544,7 +1572,6 @@ def list_new_i32() -> List<i32>:
 
     #[test]
     fn list_example_call_read_method_generic() {
-
         let parsed = parse_no_std(
             "
 struct List<T>:
@@ -1566,7 +1593,7 @@ def main():
 
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(3), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1593,7 +1620,7 @@ def main():
 
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(1), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -1616,7 +1643,7 @@ def main():
 
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
-        let final_result = print_hir_mono(&analyzed.hir_monomorphized.last().unwrap(), &analyzed);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(1), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(analyzed.type_errors.invalid_casts.len(), 1);
@@ -1628,4 +1655,42 @@ def main() -> Void:
 
         assert_eq!(expected.trim(), final_result.trim());
     }
+
+    #[test]
+    fn generics_work_without_function_args() {
+        let parsed = parse(
+            "
+def print_type_data<T>():
+    type_size = T.size as i32
+    print_int(type_size)
+
+def main() -> i32:
+    print_type_data<i32>()
+    return 1
+",
+        );
+
+        let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+        //let final_result = print_hir(analyzed.last_hir(1), &analyzed);
+        let final_result =
+            print_hir_mono_verbose(analyzed.last_hir_mono(2), &analyzed);
+        println!("{final_result}");
+        assert_eq!(analyzed.type_errors.count(), 0);
+        let expected = "
+def main() -> i32:
+    {print_type_data_i32: fn () -> Void}()
+    return {1: i32}
+def print_type_data_i32() -> Void:
+    type_size : i32 = {{{i32: TypeData}.size: u64} as i32: i32}
+    {print_int: fn (i32) -> Void}({type_size: i32})
+        ";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+    /*
+
+
+
+    */
 }

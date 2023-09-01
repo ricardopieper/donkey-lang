@@ -65,6 +65,9 @@ impl<'type_db> MIRPrinter<'type_db> {
             MIRExpr::RValue(MIRExprRValue::Cast(expr, ty, ..)) => {
                 format!("{expr} as {ty}", expr = self.print(expr), ty = ty.to_string(self.type_db))
             }
+            MIRExpr::RValue(MIRExprRValue::TypeVariable { type_variable, .. }) => {
+                format!("{}", type_variable.to_string(self.type_db))
+            }
         }
     }
 

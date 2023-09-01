@@ -20,7 +20,6 @@ use crate::{
 
 use super::{
     compiler_errors::CompilerError,
-    context::FileTableIndex,
     hir::{
         FunctionCall, HIRExpr, HIRExprMetadata, HIRRoot, HIRTypedBoundName, InferredTypeHIR,
         InferredTypeHIRRoot, MonomorphizedHIR, MonomorphizedHIRRoot, TypeInferenceCertainty, HIR,
@@ -41,7 +40,6 @@ pub struct Monomorphizer<'s, 'compiler_state> {
     global_definitions: HashMap<InternedString, InferredTypeHIRRoot<'s>>,
     queue: Vec<MonomorphizationQueueItem>,
     type_db: &'compiler_state mut TypeInstanceManager,
-    on_file: FileTableIndex,
     errors: &'compiler_state mut TypeErrors<'s>,
     result: Vec<(MonomorphizedHIRRoot<'s>, usize)>,
     new_top_level_decls: NameRegistry,
@@ -50,14 +48,12 @@ pub struct Monomorphizer<'s, 'compiler_state> {
 impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
     pub fn new(
         type_db: &'compiler_state mut TypeInstanceManager,
-        errors: &'compiler_state mut TypeErrors<'s>,
-        on_file: FileTableIndex,
+        errors: &'compiler_state mut TypeErrors<'s>
     ) -> Self {
         Self {
             global_definitions: HashMap::new(),
             queue: vec![],
             type_db,
-            on_file,
             errors,
             result: vec![],
             new_top_level_decls: NameRegistry::new(),
@@ -82,12 +78,14 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
 
     pub fn run(&mut self, all_roots: Vec<InferredTypeHIRRoot<'s>>) -> Result<(), CompilerError> {
         for (i, hir_def) in all_roots.into_iter().enumerate() {
+
             match hir_def {
                 HIRRoot::DeclareFunction {
                     ref function_name,
                     ref type_parameters,
                     ..
                 } => {
+                    println!("Declare function {function_name:?}");
                     if type_parameters.len() == 0 {
                         self.enqueue(MonomorphizationQueueItem {
                             polymorphic_root: *function_name,
@@ -133,15 +131,16 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
         positional_type_arguments: Vec<TypeInstanceId>,
         original_index: usize,
     ) -> Result<Option<MonomorphizedHIRRoot<'s>>, CompilerError> {
+        log!("Monomorphizing the following element {polymorphic_root}:");
+
         let hir = self
             .global_definitions
             .get(&polymorphic_root)
             .unwrap()
             .clone();
 
-        log!("Monomorphizing the following element:");
 
-        let printed = HIRPrinter::new(self.type_db).print_hir(&[hir.clone()]);
+        let printed = HIRPrinter::new(self.type_db, false).print_hir(&[hir.clone()]);
 
         log!("{printed}");
 
@@ -405,7 +404,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     rhs: rhs_type,
                     operator: op.0,
                 }
-                .at_spanned(on_function, self.on_file, meta, loc!()),
+                .at_spanned(on_function,  meta, loc!()),
             )
             .as_type_check_error()
     }
@@ -440,7 +439,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                 rhs: rhs.get_type(),
                 operator: op.0,
             }
-            .at_spanned(on_function, self.on_file, meta, loc!()),
+            .at_spanned(on_function,  meta, loc!()),
         )
     }
 
@@ -491,6 +490,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
 
                 match ty {
                     TypeInferenceResult::Monomorphic(ty) => {
+                        log!("Function is already monomorphic");
                         assert!(type_args_constructed.is_empty()); //if it's already monomorphized then no type args should have been passed
                         HIRExpr::Variable(*name, *ty, meta)
                     }
@@ -499,6 +499,8 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                             generics,
                             ..
                         }) => {
+                            log!("Function is polymorphic");
+
                             let mut call_type_args = HashMap::new();
                             for (i, type_param) in generics.iter().enumerate() {
                                 let type_arg = type_args_constructed.get(i);
@@ -682,7 +684,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             }
             HIRExpr::MemberAccess(obj, member, field_ty, meta) => {
                 let obj_type = obj.get_type();
-                let _p = hir_printer::HIRExprPrinter::new(&self.type_db);
+                let _p = hir_printer::HIRExprPrinter::new(&self.type_db, false);
                 match obj_type {
                     TypeInferenceResult::Monomorphic(_) => {
                         log!("Monomorphizing member access {mem} where obj is monomorphic, resolved type must be monomorphic too",
@@ -751,7 +753,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                                 }
                                 .at_spanned(
                                     on_function,
-                                    self.on_file,
+                                    
                                     *meta,
                                     loc!(),
                                 ),
@@ -774,6 +776,17 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     meta,
                 ))
             }
+         
+            HIRExpr::TypeName { type_variable, type_data, meta } => {
+                //type is given, still it could be parameterized...
+                let ty = self.construct_type(type_variable, typearg_map);
+                log!("Monomorphizing type name, type = {:?}", ty.print_name(&self.type_db));
+                Ok(HIRExpr::TypeName {
+                    type_variable: ty,
+                    type_data: type_data.expect_monomorphic(),
+                    meta: *meta,
+                })
+            },
         }
     }
 

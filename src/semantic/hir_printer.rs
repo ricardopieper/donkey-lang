@@ -7,15 +7,16 @@ use super::type_name_printer::TypeNamePrinter;
 
 pub struct HIRExprPrinter<'type_db> {
     type_db: &'type_db TypeInstanceManager,
+    verbose: bool,
 }
 
 impl<'type_db> HIRExprPrinter<'type_db> {
-    pub fn new(type_db: &'type_db TypeInstanceManager) -> Self {
-        HIRExprPrinter { type_db }
+    pub fn new(type_db: &'type_db TypeInstanceManager, verbose: bool) -> Self {
+        HIRExprPrinter { type_db, verbose }
     }
 
-    pub fn print(&self, expr: &HIRExpr<impl TypeNamePrinter>) -> String {
-        match expr {
+    pub fn print(&self, expr: &HIRExpr<impl TypeNamePrinter + Clone>) -> String {
+        let expr_string = match expr {
             HIRExpr::Variable(s, ..) => s.into(),
             HIRExpr::Literal(literal, ..) => self.print_literal_expr(literal),
             HIRExpr::FunctionCall(fcall) => {
@@ -96,6 +97,17 @@ impl<'type_db> HIRExprPrinter<'type_db> {
                 let struct_type_name = ty.print_name(self.type_db);
                 format!("{struct_type_name}()")
             }
+            HIRExpr::TypeName { type_variable, .. } => {
+                format!("{}", type_variable.print_name(self.type_db))
+            },
+        };
+
+        if self.verbose {
+            let ty_name = expr.get_type();
+
+            format!("{{{}: {}}}", expr_string, ty_name.print_name(self.type_db))
+        } else {
+            expr_string
         }
     }
 
@@ -114,22 +126,21 @@ impl<'type_db> HIRExprPrinter<'type_db> {
 
 pub struct HIRPrinter<'type_db> {
     type_db: &'type_db TypeInstanceManager,
-
     expr_printer: HIRExprPrinter<'type_db>,
 }
 
 impl<'type_db> HIRPrinter<'type_db> {
     #[allow(dead_code)]
-    pub fn new(type_db: &'type_db TypeInstanceManager) -> Self {
+    pub fn new(type_db: &'type_db TypeInstanceManager, verbose: bool) -> Self {
         HIRPrinter {
             type_db,
-            expr_printer: HIRExprPrinter::new(type_db),
+            expr_printer: HIRExprPrinter::new(type_db, verbose)
         }
     }
 
-    fn print_hir_body_str(
+    fn print_hir_body_str<T: TypeNamePrinter + Clone, U: TypeNamePrinter + Clone>(
         &self,
-        node: &HIR<impl TypeNamePrinter, impl TypeNamePrinter>,
+        node: &HIR<T, U>,
         indent: &str,
     ) -> String {
         match node {
@@ -225,12 +236,12 @@ impl<'type_db> HIRPrinter<'type_db> {
         }
     }
 
-    pub fn print_hir_item(
+    pub fn print_hir_item<T: TypeNamePrinter + Clone, U: TypeNamePrinter + Clone, V: TypeNamePrinter + Clone, X: TypeNamePrinter + Clone>(
         &self,
         node: &HIRRoot<
-            impl TypeNamePrinter,
-            HIR<impl TypeNamePrinter, impl TypeNamePrinter>,
-            impl TypeNamePrinter,
+            T,
+            HIR<U, V>,
+            X,
         >,
         indent: &str,
     ) -> String {
@@ -240,6 +251,7 @@ impl<'type_db> HIRPrinter<'type_db> {
                 parameters,
                 body,
                 return_type,
+                type_parameters,
                 ..
             } => {
                 let parameters = parameters
@@ -255,10 +267,22 @@ impl<'type_db> HIRPrinter<'type_db> {
                     .collect::<Vec<_>>()
                     .join(", ");
 
+                let mut args = type_parameters
+                    .iter()
+                    .map(|x| x.0.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                
+                if args.len() > 0 {
+                    args = format!("<{}>", args);
+                }
+
+
                 let mut function = format!(
-                    "{}def {}({}) -> {}:\n",
+                    "{}def {}{}({}) -> {}:\n",
                     indent,
                     function_name,
+                    args,
                     parameters,
                     return_type.print_name(self.type_db)
                 );
@@ -290,12 +314,12 @@ impl<'type_db> HIRPrinter<'type_db> {
     }
 
     #[allow(dead_code)]
-    pub fn print_hir(
+    pub fn print_hir<T: TypeNamePrinter + Clone, U: TypeNamePrinter + Clone, V: TypeNamePrinter + Clone, X: TypeNamePrinter + Clone>(
         &self,
         hir: &[HIRRoot<
-            impl TypeNamePrinter,
-            HIR<impl TypeNamePrinter, impl TypeNamePrinter>,
-            impl TypeNamePrinter,
+            T,
+            HIR<U, V>,
+            X,
         >],
     ) -> String {
         let mut buffer = String::new();

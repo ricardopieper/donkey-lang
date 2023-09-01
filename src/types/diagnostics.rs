@@ -41,7 +41,6 @@ where
 {
     pub error: T,
     pub on_element: RootElementType,
-    pub file: FileTableIndex,
     pub location: TokenSpanIndex,
     pub compiler_code_location: &'static str,
 }
@@ -52,7 +51,6 @@ pub trait ContextualizedCompilerError<T: CompilerErrorData> {
     fn at(
         self,
         on_element: RootElementType,
-        file: FileTableIndex,
         location: TokenSpanIndex,
         compiler_code_location: &'static str,
     ) -> CompilerErrorContext<T>;
@@ -60,7 +58,6 @@ pub trait ContextualizedCompilerError<T: CompilerErrorData> {
     fn at_spanned(
         self,
         on_element: RootElementType,
-        file: FileTableIndex,
         span: &impl Spanned,
         compiler_code_location: &'static str,
     ) -> CompilerErrorContext<T>;
@@ -70,14 +67,12 @@ impl<T: Sized + CompilerErrorData> ContextualizedCompilerError<T> for T {
     fn at(
         self,
         on_element: RootElementType,
-        file: FileTableIndex,
         location: TokenSpanIndex,
         compiler_code_location: &'static str,
     ) -> CompilerErrorContext<T> {
         CompilerErrorContext {
             error: self,
             on_element,
-            file,
             location,
             compiler_code_location,
         }
@@ -86,12 +81,11 @@ impl<T: Sized + CompilerErrorData> ContextualizedCompilerError<T> for T {
     fn at_spanned(
         self,
         on_element: RootElementType,
-        file: FileTableIndex,
         span: &impl Spanned,
         compiler_code_location: &'static str,
     ) -> CompilerErrorContext<T> {
         let span = span.get_span();
-        self.at(on_element, file, span.start, compiler_code_location)
+        self.at(on_element, span.start, compiler_code_location)
     }
 }
 
@@ -843,10 +837,10 @@ macro_rules! make_type_errors {
                 }
                 $(
                     for err in self.errors.$field.errors.iter() {
-                        let file = &self.file_table[err.file.0];
+                        let file = &self.file_table[err.location.file.0];
                         let file_name = &file.path;
-                        let tok = file.token_table.tokens[err.location.0];
-                        let span = file.token_table.spans[tok.span_index.0];
+                        let tok = file.token_table.tokens[err.location.index];
+                        let span = file.token_table.spans[tok.span_index.index];
                         let line = span.start.line;
                         let column = span.start.column;
                         write!(f, "{file_name}:{line}:{column}: ")?;

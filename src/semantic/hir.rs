@@ -122,6 +122,14 @@ pub enum TypeInferenceCertainty {
 pub enum HIRExpr<'source, TTypeData> {
     Literal(LiteralHIRExpr, TTypeData, HIRExprMetadata<'source>),
     Variable(InternedString, TTypeData, HIRExprMetadata<'source>),
+    
+    
+    TypeName{
+        type_variable: TTypeData, 
+        //Always TypeData
+        type_data: TTypeData,
+        meta: HIRExprMetadata<'source>
+    },
     Cast(
         Box<HIRExpr<'source, TTypeData>>,
         HIRType,
@@ -251,6 +259,7 @@ impl<'source, T: Clone> HIRExpr<'source, T> {
             | HIRExpr::Variable(.., t, _) => t.clone(),
             HIRExpr::FunctionCall(fcall) => fcall.return_type.clone(),
             HIRExpr::MethodCall(mcall) => mcall.return_type.clone(),
+            | HIRExpr::TypeName{ type_data, .. } => type_data.clone(),
         }
     }
 
@@ -283,6 +292,7 @@ impl<'source, T: Clone> HIRExpr<'source, T> {
                 obj.is_lvalue(_type_db)
             }
             HIRExpr::Array(..) => false,
+            HIRExpr::TypeName { .. } => false,
         }
     }
 }
@@ -835,8 +845,8 @@ mod tests {
 
         let file_table = &[FileTableEntry {
             ast: AST::Break(AstSpan {
-                start: TokenSpanIndex(0),
-                end: TokenSpanIndex(0),
+                start: TokenSpanIndex{file: FileTableIndex(0), index: 0},
+                end: TokenSpanIndex{file: FileTableIndex(0), index: 0},
             }),
             contents: source,
             path: "hir_test".to_string(),
@@ -850,7 +860,7 @@ mod tests {
 
     fn build_hir(parsed: AST) -> String {
         let result = hir::ast_globals_to_hir(&parsed);
-        HIRPrinter::new(&TypeInstanceManager::new()).print_hir(&result)
+        HIRPrinter::new(&TypeInstanceManager::new(), false).print_hir(&result)
     }
 
     #[test]

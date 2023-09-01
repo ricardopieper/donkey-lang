@@ -89,6 +89,6 @@ fn main() {
             }
         }
     }
-
-    generate_llvm(&ctx.type_db, &ctx.mir).unwrap();
+    ctx.ensure_instantiate_builtin_type("TypeData");
+    generate_llvm(&mut ctx.type_db, &ctx.mir).unwrap();
 }
