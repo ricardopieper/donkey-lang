@@ -3,7 +3,7 @@ Donkey lang
 
 Donkey is a Python-like statically typed programming language. It is a continuation of the work done in [my previous language called Horse](https://github.com/ricardopieper/horse) which was basically a Python clone, following Python's model almost closely. Donkey will not try to be Python, but rather a C-like Python with touches of Rust.
 
-This is more of a study on how compilers work rather than a serious programming language. This study is guided by personal interest in compiler subjects, rather than the necessities of a real production compiler. Obviously, don't use it in production. That's why the user experience is not great, errors are not reported where they happen, and the compiler offers no diagnostics. This is an interesting topic that might be revisited later.
+This is more of a study on how compilers work rather than a serious programming language. This study is guided by personal interest in compiler subjects, rather than the necessities of a real production compiler. Obviously, don't use it in production.
 
 Compiler Stages
 ---------------
