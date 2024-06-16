@@ -1,4 +1,4 @@
-use super::parser::{ASTIfStatement, Expr, SpanAST, StringSpan, AST};
+use super::parser::{ASTIfStatement, Expr, FunctionDeclaration, SpanAST, StringSpan, AST};
 
 pub fn print_expr(expr: &Expr, parenthesized: bool) -> String {
     match expr {
@@ -85,12 +85,13 @@ pub fn print_expr(expr: &Expr, parenthesized: bool) -> String {
         Expr::Cast(expr, ty, _) => {
             let expr_str = print_expr(expr, parenthesized);
             let ty_str = ty.to_string();
-            if (parenthesized) {
+            if parenthesized {
                 format!("({expr_str} as {ty_str})")
             } else {
                 format!("{expr_str} as {ty_str}")
             }
         }
+        Expr::SelfValue(_) => "self".to_string(),
     }
 }
 
@@ -211,65 +212,7 @@ fn print_ast_internal(ast: &AST, indent: &str, parenthesized: bool) -> String {
             }
             buf
         }
-        AST::DeclareFunction {
-            function_name,
-            parameters,
-            body,
-            type_parameters,
-            return_type,
-            is_varargs,
-        } => {
-            let mut buf = "".to_string();
-            let function_name = function_name.0;
-            let params = parameters
-                .iter()
-                .map(|x| {
-                    let var_name = x.name.0;
-                    let type_name = &x.name_type;
-                    format!("{var_name}: {type_name}")
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let varargs = if *is_varargs { "..." } else { "" };
-
-            let comma_if_params = if !params.is_empty() && *is_varargs {
-                ", "
-            } else {
-                ""
-            };
-
-            let generic_args = if !type_parameters.is_empty() {
-                let generic_args = join_comma_sep(type_parameters);
-                format!("<{generic_args}>")
-            } else {
-                "".to_string()
-            };
-
-            match return_type {
-                Some(x) => {
-                    let return_type = x;
-                    buf.push_str(&format!(
-                        "{indent}def {function_name}{generic_args}({params}{comma_if_params}{varargs}) -> {return_type}:"
-                    ));
-                }
-                None => {
-                    buf.push_str(&format!(
-                        "{indent}def {function_name}({params}{comma_if_params}{varargs}):"
-                    ));
-                }
-            }
-            buf.push('\n');
-            let indent_block = format!("{indent}    ");
-
-            let body = body
-                .iter()
-                .map(|x| print_ast_internal(&x.ast, &indent_block, parenthesized))
-                .collect::<Vec<_>>()
-                .join("\n");
-            buf.push_str(&body);
-            buf
-        }
+        AST::DeclareFunction(fdecl) => print_fdecl(fdecl, parenthesized, indent),
         AST::Break(_) => format!("{indent}break"),
         AST::Intrinsic(_) => format!("{indent}intrinsic"),
         AST::Return(_, ret_expr) => match ret_expr {
@@ -287,7 +230,96 @@ fn print_ast_internal(ast: &AST, indent: &str, parenthesized: bool) -> String {
                 .join("\n");
         }
         AST::External(_) => format!("{indent}external"),
+        AST::ImplDeclaration {
+            struct_name,
+            type_parameters,
+            body,
+        } => {
+            let mut buf = "".to_string();
+            let struct_name = struct_name.0;
+            if !type_parameters.is_empty() {
+                let generic_args = join_comma_sep(type_parameters);
+                buf.push_str(&format!("{indent}impl {struct_name}<{generic_args}>:"));
+            } else {
+                buf.push_str(&format!("{indent}impl {struct_name}:"));
+            }
+            buf.push('\n');
+
+            for method in body {
+                let printed_fdecl = print_fdecl(method, parenthesized, &indent_block);
+                buf.push_str(&printed_fdecl);
+                buf.push('\n');
+            }
+            return buf;
+        }
     }
+}
+
+fn print_fdecl(fdecl: &FunctionDeclaration, parenthesized: bool, indent: &str) -> String {
+    let FunctionDeclaration {
+        function_name,
+        parameters,
+        body,
+        type_parameters,
+        return_type,
+        is_varargs,
+        is_method,
+    } = fdecl;
+    let mut buf = "".to_string();
+    let function_name = function_name.0;
+    let mut params = parameters
+        .iter()
+        .map(|x| {
+            let var_name = x.name.0;
+            let type_name = &x.name_type;
+            format!("{var_name}: {type_name}")
+        })
+        .collect::<Vec<_>>();
+
+    if *is_method {
+        params.insert(0, "self".to_string())
+    }
+
+    let params = params.join(", ");
+
+    let varargs = if *is_varargs { "..." } else { "" };
+
+    let comma_if_params = if !params.is_empty() && *is_varargs {
+        ", "
+    } else {
+        ""
+    };
+
+    let generic_args = if !type_parameters.is_empty() {
+        let generic_args = join_comma_sep(type_parameters);
+        format!("<{generic_args}>")
+    } else {
+        "".to_string()
+    };
+
+    match return_type {
+        Some(x) => {
+            let return_type = x;
+            buf.push_str(&format!(
+                "{indent}def {function_name}{generic_args}({params}{comma_if_params}{varargs}) -> {return_type}:"
+            ));
+        }
+        None => {
+            buf.push_str(&format!(
+                "{indent}def {function_name}({params}{comma_if_params}{varargs}):"
+            ));
+        }
+    }
+    buf.push('\n');
+    let indent_block = format!("{indent}    ");
+
+    let body = body
+        .iter()
+        .map(|x| print_ast_internal(&x.ast, &indent_block, parenthesized))
+        .collect::<Vec<_>>()
+        .join("\n");
+    buf.push_str(&body);
+    buf
 }
 
 fn join_comma_sep(type_parameters: &[StringSpan]) -> String {

@@ -2,9 +2,11 @@ use std::collections::HashMap;
 
 use crate::interner::InternedString;
 use crate::semantic::type_name_printer::TypeNamePrinter;
-use crate::types::diagnostics::TypeErrors;
+use crate::types::diagnostics::{
+    ContextualizedCompilerError, ImplMismatchTypeArgs, TypeErrors, TypeNotFound,
+};
 use crate::types::type_constructor_db::{
-    FunctionSignature, TypeConstructParams, TypeKind, TypeSign, Variadic,
+    FunctionSignature, TypeConstructParams, TypeConstructorFunctionDeclaration, TypeKind, TypeSign, Variadic,
 };
 use crate::types::type_instance_db::TypeInstanceManager;
 
@@ -60,6 +62,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
     //register_builtins(type_db, registry);
     let mut new_hir: Vec<GlobalsInferredMIRRoot<'source>> = vec![];
 
+    let mut impls = vec![];
     //first collect all globals by navigating through all functions and assignments
     for node in hir {
         match node {
@@ -73,8 +76,8 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 is_intrinsic,
                 is_varargs,
                 is_external,
+                method_of,
             } => {
-
                 log!("Top level function: {function_name}");
 
                 let mut typer = TypeInferenceContext {
@@ -84,6 +87,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                     type_db,
                     errors,
                     decls_in_scope: registry,
+                    impl_of: None,
                 };
 
                 //convert the DeclareFunction into a HIRType::Function
@@ -99,7 +103,10 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 );
 
                 let function_type = typer.instantiate_type(&hir_type, meta)?;
-
+                let method_of = match method_of {
+                    Some(method_of) => Some(typer.instantiate_type(&method_of, meta)?),
+                    None => None,
+                };
                 let ty_name = function_type.print_name(type_db);
                 log!("Inferred function type: {ty_name}");
 
@@ -129,6 +136,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             is_intrinsic,
                             is_varargs,
                             is_external,
+                            method_of,
                         });
                     }
                     TypeInferenceResult::Polymorphic(TypeConstructParams::FunctionSignature(
@@ -156,6 +164,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             is_intrinsic,
                             is_varargs,
                             is_external,
+                            method_of,
                         });
                     }
                     _ => {
@@ -184,7 +193,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             type_db,
                             &[],
                             errors,
-                            meta
+                            meta,
                         )?;
                         type_db
                             .constructors
@@ -204,7 +213,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             type_db,
                             &type_parameters,
                             errors,
-                            meta
+                            meta,
                         )?;
                         type_db
                             .constructors
@@ -214,7 +223,148 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                     log!("Added type: {type_name}");
                 }
             }
+            impldecl @ HIRRoot::ImplDeclaration { .. } => impls.push(impldecl),
         };
     }
+
+    for node in impls {
+        match node {
+            HIRRoot::ImplDeclaration {
+                struct_name,
+                type_parameters: impl_type_parameters,
+                methods,
+                meta,
+            } => {
+                let impl_as_hir_type = if impl_type_parameters.len() > 0 {
+                    HIRType::Generic(
+                        struct_name,
+                        impl_type_parameters
+                            .iter()
+                            .map(|x| HIRType::Simple(x.0))
+                            .collect(),
+                    )
+                } else {
+                    HIRType::Simple(struct_name)
+                };
+
+                //find the basic type we just declared...
+                //cloned because otherwise this borrow lives for a long time, don't want to solve it right now...
+                let type_data = type_db.constructors.find_by_name(struct_name).cloned();
+                let type_data = match type_data {
+                    Some(type_data) => type_data,
+                    None => {
+                        return errors.type_not_found.push_inference_error(
+                            TypeNotFound {
+                                type_name: HIRType::Simple(struct_name),
+                            }
+                            .at_spanned(
+                                RootElementType::Impl(struct_name),
+                                meta,
+                                loc!(),
+                            ),
+                        )
+                    }
+                };
+                //the impl can have different type parameters than the struct, as long as they are the same amount
+                //@TODO the type params in both cases should probably be an ordered set....
+                if type_data.type_params.len() != impl_type_parameters.len() {
+                    return errors.impl_mismatch_type_args.push_inference_error(
+                        ImplMismatchTypeArgs {}.at_spanned(
+                            RootElementType::Impl(struct_name),
+                            meta,
+                            loc!(),
+                        ),
+                    );
+                }
+
+                for method in methods {
+                    match method {
+                        HIRRoot::DeclareFunction {
+                            function_name,
+                            type_parameters: function_type_parameters,
+                            parameters,
+                            body,
+                            return_type,
+                            meta,
+                            method_of,
+                            is_intrinsic,
+                            is_external,
+                            is_varargs,
+                        } => {
+                            let mut typer = TypeInferenceContext {
+                                on_function: RootElementType::Impl(function_name),
+                                //on_file: file,
+                                type_parameters: impl_type_parameters.clone(),
+                                type_db,
+                                errors,
+                                decls_in_scope: registry,
+                                impl_of: None,
+                            };
+
+                            //Here we can actually do something a little bit cheeky.
+                            //What are methods if not functions with an implicit first parameter?
+                            //That's right, we gonna merge the type parameters from the function and struct and prepend the struct type to the parameters as a pointer.
+                            //We also insert a self parameter into the parameters list.
+                            //Maybe in MIR they can float around as regular-ish functions of the type and just be marked as methods of their first parameter....
+                            let type_parameters_merged = {
+                                let mut type_parameters_merged = impl_type_parameters.clone();
+                                type_parameters_merged.extend(function_type_parameters);
+                                type_parameters_merged
+                            };
+
+                            let self_type =
+                                HIRType::Generic("ptr".into(), vec![impl_as_hir_type.clone()]);
+
+                            let mut parameters = parameters.clone();
+                            parameters.insert(
+                                0,
+                                HIRTypedBoundName {
+                                    type_data: self_type,
+                                    name: InternedString::new("self"),
+                                },
+                            );
+
+                            /*let hir_type = HIRType::Function(
+                                type_parameters_merged,
+                                parameters
+                                    .clone()
+                                    .into_iter()
+                                    .map(|x| x.type_data)
+                                    .collect(),
+                                return_type.into(),
+                                Variadic(is_varargs),
+                            );*/
+
+                            let mut params: Vec<TypeConstructParams> = vec![];
+                            for p in parameters {
+                                let p_type = typer.make_usage(&p.type_data, meta)?;
+                                params.push(p_type);
+                            }
+
+                            let return_type_usage = typer.make_usage(&return_type, meta)?.into();
+
+                            //add this function as a method of the struct
+                            type_db.constructors.add_function(
+                                type_data.id,
+                                TypeConstructorFunctionDeclaration {
+                                    name: function_name,
+                                    signature: FunctionSignature::<TypeConstructParams> {
+                                        generics: type_parameters_merged,
+                                        params,
+                                        return_type: return_type_usage,
+                                        variadic: Variadic(is_varargs),
+                                    },
+                                },
+                            )
+                        }
+                        HIRRoot::StructDeclaration { .. } => panic!("Shouldn't exist"),
+                        HIRRoot::ImplDeclaration { .. } => panic!("Shouldn't exist"),
+                    }
+                }
+            }
+            _ => {}
+        };
+    }
+
     Ok(new_hir)
 }

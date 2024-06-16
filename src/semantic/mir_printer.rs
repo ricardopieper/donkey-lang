@@ -63,7 +63,11 @@ impl<'type_db> MIRPrinter<'type_db> {
                 format!("&{}", self.print_lvalue(expr))
             }
             MIRExpr::RValue(MIRExprRValue::Cast(expr, ty, ..)) => {
-                format!("{expr} as {ty}", expr = self.print(expr), ty = ty.to_string(self.type_db))
+                format!(
+                    "{expr} as {ty}",
+                    expr = self.print(expr),
+                    ty = ty.to_string(self.type_db)
+                )
             }
             MIRExpr::RValue(MIRExprRValue::TypeVariable { type_variable, .. }) => {
                 format!("{}", type_variable.to_string(self.type_db))
@@ -196,7 +200,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> Strin
             parameters,
             return_type,
             is_varargs,
-            is_external
+            is_external,
         } => {
             let parameters = parameters
                 .iter()

@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use super::compiler_errors::CompilerError;
-use super::context::FileTableIndex;
 use super::hir::{HIRAstMetadata, HIRExprMetadata};
 
 use super::hir_type_resolution::RootElementType;
@@ -168,7 +167,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     DerefOnNonPointerError {
                         attempted_type: ptr_type.id,
                     }
-                    .at_spanned(self.on_element,  meta, loc!()),
+                    .at_spanned(self.on_element, meta, loc!()),
                 )
                 .as_type_check_error();
         }
@@ -202,7 +201,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
 
         let MIRExpr::LValue(lvalue) = typechecked else {
             return self.errors.invalid_refed_type.push_inference_error(
-                RefOnNonLValueError {}.at_spanned(self.on_element,  meta, loc!()),
+                RefOnNonLValueError {}.at_spanned(self.on_element, meta, loc!()),
             );
         };
 
@@ -295,7 +294,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     ArrayExpressionsNotAllTheSameType {
                         expected_type: all_array_exprs_checked[0].get_type(),
                     }
-                    .at_spanned(self.on_element,  meta, loc!()),
+                    .at_spanned(self.on_element, meta, loc!()),
                 )
         }
     }
@@ -321,7 +320,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         object_type: obj_type,
                         field: member,
                     }
-                    .at_spanned(self.on_element,  meta, loc!()),
+                    .at_spanned(self.on_element, meta, loc!()),
                 )
             }
         };
@@ -336,7 +335,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         checked: checked_obj.get_type(),
                         expr: checked_obj,
                     }
-                    .at_spanned(self.on_element,  meta, loc!()),
+                    .at_spanned(self.on_element, meta, loc!()),
                 );
         }
         Ok(MIRExprLValue::MemberAccess(
@@ -377,7 +376,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     rhs: checked_rhs.get_type(),
                     operator: op.0,
                 }
-                .at_spanned(self.on_element,  &op.1, loc!()),
+                .at_spanned(self.on_element, &op.1, loc!()),
             );
         }
     }
@@ -414,7 +413,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     rhs: checked_rhs.get_type(),
                     operator: op.0,
                 }
-                .at_spanned(self.on_element,  &op.1, loc!()),
+                .at_spanned(self.on_element, &op.1, loc!()),
             );
         }
     }
@@ -440,7 +439,6 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     return self.errors.unexpected_types.push_typecheck_error(
                         UnexpectedTypeFound { type_def: type_id }.at_spanned(
                             self.on_element,
-                            
                             meta,
                             loc!(),
                         ),
@@ -455,12 +453,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                             typ: type_id,
                             expr: meta,
                         }
-                        .at_spanned(
-                            self.on_element,
-                            
-                            meta,
-                            loc!(),
-                        ),
+                        .at_spanned(self.on_element, meta, loc!()),
                     );
                 }
             }
@@ -474,7 +467,6 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     return self.errors.unexpected_types.push_typecheck_error(
                         UnexpectedTypeFound { type_def: type_id }.at_spanned(
                             self.on_element,
-                            
                             meta,
                             loc!(),
                         ),
@@ -488,12 +480,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                             expr: meta,
                             typ: type_id,
                         }
-                        .at_spanned(
-                            self.on_element,
-                            
-                            meta,
-                            loc!(),
-                        ),
+                        .at_spanned(self.on_element, meta, loc!()),
                     );
                 }
             }
@@ -507,12 +494,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             )))
         } else {
             return self.errors.unexpected_types.push_typecheck_error(
-                UnexpectedTypeFound { type_def: type_id }.at_spanned(
-                    self.on_element,
-                    
-                    meta,
-                    loc!(),
-                ),
+                UnexpectedTypeFound { type_def: type_id }.at_spanned(self.on_element, meta, loc!()),
             );
         }
     }
@@ -546,7 +528,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     object_type: checked_obj.get_type(),
                     method: name,
                 }
-                .at_spanned(self.on_element,  meta, loc!()),
+                .at_spanned(self.on_element, meta, loc!()),
             );
         };
 
@@ -565,7 +547,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         expected_count: function_type.function_args.len(),
                         passed_count: checked_args.len(),
                     }
-                    .at_spanned(self.on_element,  meta, loc!()),
+                    .at_spanned(self.on_element, meta, loc!()),
                 );
         };
 
@@ -587,7 +569,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     expected: *types.0,
                     actual: types.1,
                 }
-                .at_spanned(self.on_element,  meta, loc!()),
+                .at_spanned(self.on_element, meta, loc!()),
             );
         }
         Ok((checked_obj, checked_args))
@@ -623,7 +605,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         expected_count: function_type.function_args.len(),
                         passed_count: checked_args.len(),
                     }
-                    .at_spanned(self.on_element,  meta, loc!()),
+                    .at_spanned(self.on_element, meta, loc!()),
                 );
         }
 
@@ -638,7 +620,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         expected_count: function_type.function_args.len(),
                         passed_count: checked_args.len(),
                     }
-                    .at_spanned(self.on_element,  meta, loc!()),
+                    .at_spanned(self.on_element, meta, loc!()),
                 );
         }
 
@@ -657,7 +639,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         expected: *expected,
                         actual,
                     }
-                    .at_spanned(self.on_element,  meta, loc!()),
+                    .at_spanned(self.on_element, meta, loc!()),
                 );
                 if first_type_mismatch_err.is_none() {
                     first_type_mismatch_err = Some(err);
@@ -702,7 +684,6 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                             }
                             .at_spanned(
                                 self.on_element,
-                                
                                 ast_meta,
                                 loc!(),
                             ),
@@ -721,7 +702,6 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                             }
                             .at_spanned(
                                 self.on_element,
-                                
                                 ast_meta,
                                 loc!(),
                             ),
@@ -808,7 +788,6 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                                 }
                                 .at_spanned(
                                     self.on_element,
-                                    
                                     meta_ast,
                                     loc!(),
                                 ),
@@ -845,7 +824,6 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                                 }
                                 .at_spanned(
                                     self.on_element,
-                                    
                                     meta_ast,
                                     loc!(),
                                 ),
@@ -877,7 +855,6 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                                 }
                                 .at_spanned(
                                     self.on_element,
-                                    
                                     meta_ast,
                                     loc!(),
                                 ),
@@ -990,7 +967,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     IfStatementNotBoolean {
                         actual_type: expr_type,
                     }
-                    .at_spanned(self.on_element,  ast, loc!()),
+                    .at_spanned(self.on_element, ast, loc!()),
                 );
         })
     }
@@ -1017,7 +994,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                     expr: cast_expr_checked,
                     cast_to,
                 }
-                .at_spanned(self.on_element,  meta, loc!()),
+                .at_spanned(self.on_element, meta, loc!()),
             );
         }
     }

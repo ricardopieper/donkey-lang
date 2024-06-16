@@ -3,12 +3,11 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-
-
 #[derive(Hash, Eq, PartialEq, Clone, Copy)]
-pub struct InternedString{ 
-    pub index: usize, 
-    #[cfg(test)] pub str_interned: &'static str
+pub struct InternedString {
+    pub index: usize,
+    #[cfg(test)]
+    pub str_interned: &'static str,
 }
 
 static GLOBAL_INTERNER: OnceLock<StringInterner> = OnceLock::new();
@@ -22,16 +21,13 @@ pub struct StringInterner {
     state: Mutex<StringInternerState>,
 }
 
-
 impl StringInterner {
     pub fn get() -> &'static StringInterner {
-        GLOBAL_INTERNER.get_or_init(|| {
-            StringInterner {
-                state: Mutex::new(StringInternerState {
-                    strings: Vec::new(),
-                    table: BTreeMap::new(),
-                }),
-            }
+        GLOBAL_INTERNER.get_or_init(|| StringInterner {
+            state: Mutex::new(StringInternerState {
+                strings: Vec::new(),
+                table: BTreeMap::new(),
+            }),
         })
     }
 
@@ -40,14 +36,15 @@ impl StringInterner {
         if let Some(v) = state.table.get(string) {
             return *v;
         }
-     
+
         let index = state.strings.len();
         state.strings.push(string.to_string());
         let last = state.strings.last().unwrap();
         let unsafe_str_key = unsafe { std::mem::transmute::<&str, &'static str>(last) };
         let interned = InternedString {
             index,
-            #[cfg(test)] str_interned: unsafe_str_key,
+            #[cfg(test)]
+            str_interned: unsafe_str_key,
         };
         state.table.insert(unsafe_str_key, interned);
         interned
@@ -100,7 +97,6 @@ impl Into<InternedString> for &str {
         StringInterner::get().intern(self)
     }
 }
-
 
 impl Into<InternedString> for String {
     fn into(self) -> InternedString {

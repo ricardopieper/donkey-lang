@@ -2,6 +2,15 @@ struct str:
     buf: ptr<u8>
     len: u64
 
+impl str:
+    def to_i32() -> i32:
+        intrinsic
+
+    def to_i64() -> i64:
+        intrinsic
+
+
+
 def str_to_int(s: str) -> i32:
     return atoi(s.buf)
 

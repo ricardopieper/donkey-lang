@@ -1,8 +1,6 @@
 use core::panic;
-use std::borrow::BorrowMut;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
-use std::ptr;
 
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -12,10 +10,10 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
-use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType};
+use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue,
-    IntValue, PointerValue, StructValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue,
+    GlobalValue, IntMathValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, OptimizationLevel};
 
@@ -201,7 +199,6 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
     ) -> PointerValue<'ctx> {
         //we create a new builder here because we want to ensure we create the variables in the very beginning
         let builder = self.context.create_builder();
-
         let first_block = function
             .get_first_basic_block()
             .expect("Function has no entry basic block");

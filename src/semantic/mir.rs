@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 
 use super::compiler_errors::CompilerError;
-use super::context::FileTableIndex;
 use super::hir::{
     FunctionCall, HIRAstMetadata, HIRExpr, HIRRoot, HIRTypedBoundName, LiteralHIRExpr, MethodCall,
     MonomorphizedHIR, MonomorphizedHIRRoot, HIR,
@@ -12,7 +11,6 @@ use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 
 use crate::types::diagnostics::{ContextualizedCompilerError, DerefOnNonPointerError, TypeErrors};
-use crate::types::type_constructor_db::TypeParameter;
 use crate::{
     ast::parser::{Expr, AST},
     types::type_instance_db::TypeInstanceId,
@@ -348,18 +346,20 @@ fn simplify_expression(expr: HIRExpr<'_, TypeInstanceId>) -> (HIRExpr<'_, TypeIn
                 simplified,
             )
         }
-        HIRExpr::Deref(derefed_expr, ty, meta) => match *derefed_expr {
-            HIRExpr::Ref(refed_expr, _, _) => {
-                //we can remove the deref and the ref
-                let (refed_expr, simplified) = simplify_expression(*refed_expr);
-                //we might lose some metadata here but it's okay I guess
-                (refed_expr, simplified)
+        HIRExpr::Deref(derefed_expr, ty, meta) => {
+            match *derefed_expr {
+                HIRExpr::Ref(refed_expr, _, _) => {
+                    //we can remove the deref and the ref
+                    let (refed_expr, simplified) = simplify_expression(*refed_expr);
+                    //we might lose some metadata here but it's okay I guess
+                    (refed_expr, simplified)
+                }
+                _ => {
+                    let (derefed_expr, simplified) = simplify_expression(*derefed_expr);
+                    (HIRExpr::Deref(Box::new(derefed_expr), ty, meta), simplified)
+                }
             }
-            _ => {
-                let (derefed_expr, simplified) = simplify_expression(*derefed_expr);
-                (HIRExpr::Deref(Box::new(derefed_expr), ty, meta), simplified)
-            }
-        },
+        }
         HIRExpr::Ref(refed_expr, ty, meta) => match *refed_expr {
             //do the inverse as the code above
             HIRExpr::Deref(derefed_expr, _, _) => {
@@ -405,6 +405,7 @@ fn simplify_expression(expr: HIRExpr<'_, TypeInstanceId>) -> (HIRExpr<'_, TypeIn
             },
             false,
         ),
+        HIRExpr::SelfValue(ty, meta) => (HIRExpr::SelfValue(ty, meta), false),
     }
 }
 
@@ -580,6 +581,11 @@ fn convert_expr_to_mir<'a>(
             type_data,
             meta,
         })),
+        HIRExpr::SelfValue(ty_id, meta) => Ok(MIRExpr::LValue(MIRExprLValue::Variable(
+            "self".into(),
+            ty_id,
+            meta,
+        ))),
     }
 }
 
@@ -1068,6 +1074,7 @@ pub fn hir_to_mir<'source>(
                 is_intrinsic,
                 is_varargs,
                 is_external,
+                method_of,
             } => {
                 let mir_parameters = parameters
                     .iter()
@@ -1108,6 +1115,14 @@ pub fn hir_to_mir<'source>(
                 meta: _,
             } => {
                 //ignored, useless in MIR because the type db should be used instead
+            }
+            HIRRoot::ImplDeclaration {
+                struct_name,
+                type_parameters,
+                methods,
+                meta,
+            } => {
+                todo!()
             }
         }
     }

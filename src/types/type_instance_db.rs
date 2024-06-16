@@ -31,7 +31,11 @@ impl TypeInstanceId {
 
     pub fn is_integer(self, type_db: &TypeInstanceManager) -> bool {
         let types = &type_db.common_types;
-        self == types.i32 || self == types.i64 || self == types.u32 || self == types.u64 || self == types.u8
+        self == types.i32
+            || self == types.i64
+            || self == types.u32
+            || self == types.u64
+            || self == types.u8
     }
 
     pub fn is_float(self, type_db: &TypeInstanceManager) -> bool {
@@ -61,7 +65,7 @@ pub struct TypeInstanceStructField {
     pub field_type: TypeInstanceId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeInstance {
     pub id: TypeInstanceId,
     pub base: TypeConstructorId,
@@ -245,20 +249,6 @@ impl TypeInstanceManager {
     ) -> Result<TypeInstanceId, TypeConstructionError> {
         self.construct_usage_generic(usage, &HashMap::new())
     }
-    /*
-
-    struct ptr<TPtr>:
-        intrinsic
-
-    struct array<TItem>:
-        data: ptr<TItem>
-        length: u32
-
-    impl array<TItem>:
-        def __index__(i: u32): TItem
-        def __index_ptr__(i: u32): ptr<TItem>
-
-    */
 
     fn print_type_args_pretty(&self, type_args: &HashMap<TypeParameter, TypeInstanceId>) -> String {
         let mut type_args_str = String::new();
@@ -338,7 +328,6 @@ impl TypeInstanceManager {
                 return_type,
                 variadic,
             }) => {
-
                 if generics.len() > 0 && type_args.len() == 0 {
                     log!("Insufficient information because it's generic");
                     return Err(TypeConstructionError::InsufficientInformation);
@@ -372,22 +361,22 @@ impl TypeInstanceManager {
         constructor_id: TypeConstructorId,
         positional_args: &[TypeInstanceId],
     ) -> Result<TypeInstanceId, TypeConstructionError> {
-        log!("Construct_type called with parameters {constructor_id:?} {positional_args:?}");
+        //log!("Construct_type called with parameters {constructor_id:?} {positional_args:?}");
 
         let c = self.constructors.find(constructor_id);
 
         for existing_type in &self.types {
             if existing_type.base == constructor_id && existing_type.type_args == positional_args {
-                log!(
+                /*log!(
                     "Returning cached type id {existing_type_id:?} {name}",
                     existing_type_id = existing_type.id,
                     name = existing_type.name
-                );
+                );*/
                 return Ok(existing_type.id);
             }
         }
 
-        log!("Type not yet cached, will construct");
+        log!("Type not yet cached, will construct {constructor_id:?} {positional_args:?}");
 
         let id = TypeInstanceId(self.types.len());
         self.types.push(make_base_instance(id, c, positional_args));
@@ -534,11 +523,11 @@ impl TypeInstanceManager {
             let constructor = self.constructors.find(constructor_id);
 
             let mut result = vec![];
-            let methods = constructor.methods.clone();
+            let methods = constructor.functions.clone();
             for method_decl in methods {
                 let args = {
                     let mut args = vec![];
-                    for arg in &method_decl.args {
+                    for arg in &method_decl.signature.params {
                         let arg_constructed = self.construct_usage_generic(arg, type_args)?;
                         args.push(arg_constructed);
                     }
@@ -546,10 +535,10 @@ impl TypeInstanceManager {
                 };
 
                 let return_type =
-                    self.construct_usage_generic(&method_decl.return_type, type_args)?;
+                    self.construct_usage_generic(&method_decl.signature.return_type, type_args)?;
 
                 let method_type_id =
-                    self.construct_method(id, &args, return_type, method_decl.is_variadic);
+                    self.construct_method(id, &args, return_type, method_decl.signature.variadic.0);
 
                 result.push(TypeInstanceStructMethod {
                     name: method_decl.name,

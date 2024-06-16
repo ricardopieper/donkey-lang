@@ -2,7 +2,6 @@ use core::panic;
 use std::fs;
 
 use super::hir::{ast_globals_to_hir, InferredTypeHIRRoot, MonomorphizedHIRRoot};
-use super::hir_printer::HIRPrinter;
 use super::mir::{hir_to_mir, MIRTopLevelNode};
 use super::monomorph::Monomorphizer;
 use super::struct_instantiations;
@@ -13,7 +12,6 @@ use crate::ast::lexer::{TokenSpanIndex, TokenTable};
 use crate::ast::parser::{print_errors, AstSpan, Parser};
 use crate::ast::{lexer, parser};
 use crate::interner::InternedString;
-use crate::semantic::hir::HIRRoot;
 use crate::semantic::{first_assignments, mir_printer, top_level_decls, type_inference};
 use crate::types::diagnostics::TypeErrorPrinter;
 use crate::types::type_instance_db::TypeInstanceManager;
@@ -22,6 +20,7 @@ use crate::{ast::parser::AST, types::diagnostics::TypeErrors};
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
 pub struct FileTableIndex(pub usize);
 
+#[derive(Debug)]
 pub struct FileTableEntry {
     pub path: String,
     pub index: FileTableIndex,
@@ -30,6 +29,7 @@ pub struct FileTableEntry {
     pub token_table: TokenTable,
 }
 
+#[derive(Debug)]
 pub struct Source {
     pub file_table: Vec<FileTableEntry>,
 }
@@ -329,7 +329,7 @@ mod tests {
 
     use crate::{
         ast::lexer::Operator,
-        interner::{self, InternedString},
+        interner::{InternedString},
         semantic::{
             context::test_utils::{do_analysis, parse, parse_no_std},
             hir::HIRTypeDisplayer,
@@ -359,6 +359,9 @@ mod tests {
 def my_function():
     x = 1",
         );
+
+        println!("Parsed: {parsed:?}");
+
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 0);
 
@@ -902,7 +905,6 @@ def my_function():
     y = x.sizee",
         );
         let analyzed = do_analysis(&parsed);
-       
 
         assert_eq!(analyzed.type_errors.count(), 1);
 
@@ -995,7 +997,7 @@ def my_function():
         );
 
         let analyzed = do_analysis(&parsed);
-       
+
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
             analyzed.type_errors.field_not_found[0].error.field,
@@ -1595,7 +1597,6 @@ def main():
         analyzed.print_errors();
         let final_result = print_hir_mono(analyzed.last_hir_mono(3), &analyzed);
         println!("{final_result}");
-        assert_eq!(analyzed.type_errors.count(), 0);
 
         let expected = "
 def main() -> Void:
@@ -1607,6 +1608,8 @@ def list_new_i32() -> List<i32>:
         ";
 
         assert_eq!(expected.trim(), final_result.trim());
+        assert_eq!(analyzed.type_errors.count(), 0);
+
     }
 
     #[test]
@@ -1673,8 +1676,7 @@ def main() -> i32:
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
         //let final_result = print_hir(analyzed.last_hir(1), &analyzed);
-        let final_result =
-            print_hir_mono_verbose(analyzed.last_hir_mono(2), &analyzed);
+        let final_result = print_hir_mono_verbose(analyzed.last_hir_mono(2), &analyzed);
         println!("{final_result}");
         assert_eq!(analyzed.type_errors.count(), 0);
         let expected = "

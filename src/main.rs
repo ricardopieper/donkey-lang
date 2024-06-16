@@ -8,6 +8,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(never_type)]
 #![feature(try_trait_v2)]
+#![feature(iter_collect_into)]
 
 #[macro_use]
 mod interner;
@@ -38,7 +39,6 @@ use std::env;
 
 use crate::semantic::mir_printer;
 
-
 //use compiler::donkey_backend::DonkeyEmitter;
 //use donkey_vm::asm::assembler::DonkeyProgram;
 //use donkey_vm::vm::runner::DonkeyVMRunner;
@@ -46,7 +46,6 @@ use llvm::llvm_backend::generate_llvm;
 use semantic::context::Source;
 
 fn main() {
-
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {

@@ -1,12 +1,10 @@
-use super::context::FileTableIndex;
 use super::{compiler_errors::CompilerError, hir::HIRType};
 use crate::ast::parser::Spanned;
 use crate::interner::InternedString;
+use crate::types::diagnostics::{ContextualizedCompilerError, TypeErrors};
 use crate::types::type_constructor_db::{FunctionSignature, TypeParameter};
-use crate::types::diagnostics::ContextualizedCompilerError;
 use crate::types::{
-    type_constructor_db::TypeConstructParams,
-    diagnostics::{TypeErrors, TypeNotFound},
+    diagnostics::TypeNotFound, type_constructor_db::TypeConstructParams,
     type_instance_db::TypeInstanceManager,
 };
 
@@ -14,6 +12,8 @@ use crate::types::{
 pub enum RootElementType {
     Struct(InternedString),
     Function(InternedString),
+    Impl(InternedString),
+    ImplMethod(InternedString, InternedString),
 }
 
 impl RootElementType {
@@ -21,6 +21,8 @@ impl RootElementType {
     pub fn get_name(&self) -> String {
         match self {
             RootElementType::Struct(s) | RootElementType::Function(s) => s.into(),
+            RootElementType::Impl(s) => s.into(),
+            RootElementType::ImplMethod(i, m) => format!("{}:{}", i, m),
         }
     }
 
@@ -28,6 +30,8 @@ impl RootElementType {
         match self {
             RootElementType::Struct(s) => format!("In struct {}", s),
             RootElementType::Function(s) => format!("In function {}", s),
+            RootElementType::Impl(s) => format!("In impl {}", s),
+            RootElementType::ImplMethod(i, m) => format!("In method {m} of impl {i}"),
         }
     }
 }
@@ -38,7 +42,7 @@ pub fn hir_type_to_usage(
     type_db: &TypeInstanceManager,
     type_parameters: &[TypeParameter],
     errors: &mut TypeErrors,
-    location: &impl Spanned
+    location: &impl Spanned,
 ) -> Result<TypeConstructParams, CompilerError> {
     match typedef {
         HIRType::Simple(name) => {
@@ -62,6 +66,7 @@ pub fn hir_type_to_usage(
                 )
                 .as_type_inference_error();
         }
+
         HIRType::Function(generics, params, return_type, variadic) => {
             let resolved_args = params
                 .iter()
@@ -72,7 +77,7 @@ pub fn hir_type_to_usage(
                         type_db,
                         type_parameters,
                         errors,
-                        location
+                        location,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;

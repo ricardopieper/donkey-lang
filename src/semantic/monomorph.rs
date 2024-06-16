@@ -9,11 +9,11 @@ use crate::{
         type_name_printer::TypeNamePrinter,
     },
     types::{
-        type_constructor_db::{FunctionSignature, TypeConstructParams, TypeParameter},
         diagnostics::{
-            BinaryOperatorNotFound, ContextualizedCompilerError, TypeErrors,
-            UnaryOperatorNotFound, FieldNotFound,
+            BinaryOperatorNotFound, ContextualizedCompilerError, FieldNotFound, TypeErrors,
+            UnaryOperatorNotFound,
         },
+        type_constructor_db::{FunctionSignature, TypeConstructParams, TypeParameter},
         type_instance_db::{TypeInstanceId, TypeInstanceManager},
     },
 };
@@ -48,7 +48,7 @@ pub struct Monomorphizer<'s, 'compiler_state> {
 impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
     pub fn new(
         type_db: &'compiler_state mut TypeInstanceManager,
-        errors: &'compiler_state mut TypeErrors<'s>
+        errors: &'compiler_state mut TypeErrors<'s>,
     ) -> Self {
         Self {
             global_definitions: HashMap::new(),
@@ -78,7 +78,6 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
 
     pub fn run(&mut self, all_roots: Vec<InferredTypeHIRRoot<'s>>) -> Result<(), CompilerError> {
         for (i, hir_def) in all_roots.into_iter().enumerate() {
-
             match hir_def {
                 HIRRoot::DeclareFunction {
                     ref function_name,
@@ -139,7 +138,6 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             .unwrap()
             .clone();
 
-
         let printed = HIRPrinter::new(self.type_db, false).print_hir(&[hir.clone()]);
 
         log!("{printed}");
@@ -153,7 +151,8 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             meta,
             is_intrinsic,
             is_varargs,
-            is_external
+            is_external,
+            method_of,
         } = hir
         else {
             return Ok(None);
@@ -182,6 +181,8 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
         let new_return_type = self.construct_type(&return_type, &typearg_map);
         log!("Return type monomorphized");
 
+        let self_type_method_of = method_of.map(|x| self.construct_type(&x, &typearg_map));
+
         if positional_type_arguments.len() > 0 {
             let new_function_name_suffix = positional_type_arguments
                 .iter()
@@ -200,7 +201,8 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                 meta,
                 is_intrinsic,
                 is_varargs,
-                is_external
+                is_external,
+                method_of: self_type_method_of,
             }))
         } else {
             Ok(Some(HIRRoot::DeclareFunction {
@@ -212,7 +214,8 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                 meta,
                 is_intrinsic,
                 is_varargs,
-                is_external
+                is_external,
+                method_of: self_type_method_of,
             }))
         }
     }
@@ -404,7 +407,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     rhs: rhs_type,
                     operator: op.0,
                 }
-                .at_spanned(on_function,  meta, loc!()),
+                .at_spanned(on_function, meta, loc!()),
             )
             .as_type_check_error()
     }
@@ -439,7 +442,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                 rhs: rhs.get_type(),
                 operator: op.0,
             }
-            .at_spanned(on_function,  meta, loc!()),
+            .at_spanned(on_function, meta, loc!()),
         )
     }
 
@@ -561,7 +564,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
         typearg_map: &HashMap<TypeParameter, TypeInstanceId>,
         original_index: usize,
     ) -> Result<HIRExpr<'s, TypeInstanceId>, CompilerError> {
-        match expr {
+        let hirexpr = match expr {
             HIRExpr::Literal(literal, ty, meta) => {
                 log!("Monomorphizing literal, should be no-op");
                 match ty {
@@ -580,7 +583,8 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                 Ok(HIRExpr::Variable(var_name.clone(), constructed_type, meta))
             }
             HIRExpr::Cast(expr, user_type, poly_ty, meta) => {
-                let mono_expr = self.monomorphize_expr(on_function, expr, typearg_map, original_index)?;
+                let mono_expr =
+                    self.monomorphize_expr(on_function, expr, typearg_map, original_index)?;
                 let casted_type = self.construct_type(poly_ty, typearg_map);
                 Ok(HIRExpr::Cast(
                     mono_expr.into(),
@@ -588,7 +592,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     casted_type,
                     meta,
                 ))
-            },
+            }
             HIRExpr::BinaryOperation(lhs, op, rhs, ty, type_inference_certainty, meta) => {
                 log!("Monomorphizing binop");
                 let mono_lhs =
@@ -753,7 +757,6 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                                 }
                                 .at_spanned(
                                     on_function,
-                                    
                                     *meta,
                                     loc!(),
                                 ),
@@ -776,18 +779,33 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     meta,
                 ))
             }
-         
-            HIRExpr::TypeName { type_variable, type_data, meta } => {
+
+            HIRExpr::TypeName {
+                type_variable,
+                type_data,
+                meta,
+            } => {
                 //type is given, still it could be parameterized...
                 let ty = self.construct_type(type_variable, typearg_map);
-                log!("Monomorphizing type name, type = {:?}", ty.print_name(&self.type_db));
+                log!(
+                    "Monomorphizing type name, type = {:?}",
+                    ty.print_name(&self.type_db)
+                );
                 Ok(HIRExpr::TypeName {
                     type_variable: ty,
                     type_data: type_data.expect_monomorphic(),
                     meta: *meta,
                 })
-            },
-        }
+            }
+            HIRExpr::SelfValue(ty, meta) => {
+                log!("Monomorphizing self value");
+                Ok(HIRExpr::SelfValue(
+                    self.construct_type(ty, typearg_map),
+                    meta,
+                ))
+            }
+        };
+        hirexpr
     }
 
     fn monomorphize_mcall(

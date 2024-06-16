@@ -5,6 +5,7 @@ use std::ops::Deref;
 
 use crate::ast::lexer::Operator;
 use crate::ast::parser::ASTIfStatement;
+use crate::ast::parser::FunctionDeclaration;
 use crate::ast::parser::SpanAST;
 use crate::ast::parser::SpannedOperator;
 use crate::ast::parser::StringSpan;
@@ -122,13 +123,12 @@ pub enum TypeInferenceCertainty {
 pub enum HIRExpr<'source, TTypeData> {
     Literal(LiteralHIRExpr, TTypeData, HIRExprMetadata<'source>),
     Variable(InternedString, TTypeData, HIRExprMetadata<'source>),
-    
-    
-    TypeName{
-        type_variable: TTypeData, 
+
+    TypeName {
+        type_variable: TTypeData,
         //Always TypeData
         type_data: TTypeData,
-        meta: HIRExprMetadata<'source>
+        meta: HIRExprMetadata<'source>,
     },
     Cast(
         Box<HIRExpr<'source, TTypeData>>,
@@ -136,6 +136,7 @@ pub enum HIRExpr<'source, TTypeData> {
         TTypeData,
         HIRExprMetadata<'source>,
     ),
+    SelfValue(TTypeData, HIRExprMetadata<'source>),
     BinaryOperation(
         Box<HIRExpr<'source, TTypeData>>,
         SpannedOperator,
@@ -259,7 +260,8 @@ impl<'source, T: Clone> HIRExpr<'source, T> {
             | HIRExpr::Variable(.., t, _) => t.clone(),
             HIRExpr::FunctionCall(fcall) => fcall.return_type.clone(),
             HIRExpr::MethodCall(mcall) => mcall.return_type.clone(),
-            | HIRExpr::TypeName{ type_data, .. } => type_data.clone(),
+            HIRExpr::TypeName { type_data, .. } => type_data.clone(),
+            HIRExpr::SelfValue(t, _) => t.clone(),
         }
     }
 
@@ -293,6 +295,7 @@ impl<'source, T: Clone> HIRExpr<'source, T> {
             }
             HIRExpr::Array(..) => false,
             HIRExpr::TypeName { .. } => false,
+            HIRExpr::SelfValue(_, _) => false,
         }
     }
 }
@@ -315,6 +318,7 @@ pub enum HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType> {
         body: Vec<TBodyType>,
         return_type: TGlobalTypes,
         meta: HIRAstMetadata<'source>,
+        method_of: Option<TGlobalTypes>,
         is_intrinsic: bool,
         is_external: bool,
         is_varargs: bool,
@@ -323,6 +327,12 @@ pub enum HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType> {
         struct_name: InternedString,
         type_parameters: Vec<TypeParameter>,
         fields: Vec<HIRTypedBoundName<TStructFieldsType>>,
+        meta: HIRAstMetadata<'source>,
+    },
+    ImplDeclaration {
+        struct_name: InternedString,
+        type_parameters: Vec<TypeParameter>,
+        methods: Vec<HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType>>,
         meta: HIRAstMetadata<'source>,
     },
 }
@@ -474,7 +484,8 @@ fn expr_to_hir<'source>(expr: &'source Expr, _is_in_assignment_lhs: bool) -> HIR
             let ty: HIRType = ty.into();
             let casted_expr = Box::new(expr_to_hir(casted_expr, false));
             HIRExpr::Cast(casted_expr, ty, (), expr)
-        },
+        }
+        Expr::SelfValue(_) => HIRExpr::SelfValue((), expr),
     }
 }
 
@@ -563,6 +574,7 @@ fn ast_to_hir<'source>(ast: &'source SpanAST, accum: &mut Vec<UninferredHIR<'sou
             ast_while_to_hir(&expression.expr, accum, body, ast);
         }
         AST::Intrinsic(_) => panic!("Cannot use intrinsic keyword"),
+
         ast => todo!("Not implemented HIR for {ast:?}"),
     }
 }
@@ -575,6 +587,7 @@ fn ast_decl_function_to_hir<'source>(
     return_type: &Option<ASTType>,
     is_varargs: bool,
     ast: &'source AST,
+    is_method_of: Option<InternedString>,
     accum: &mut Vec<StartingHIRRoot<'source>>,
 ) {
     if body.len() == 1 {
@@ -592,6 +605,7 @@ fn ast_decl_function_to_hir<'source>(
                     None => HIRType::Simple(InternedString::new("Void")),
                 },
                 meta: ast,
+                method_of: None,
             });
             return;
         }
@@ -610,6 +624,7 @@ fn ast_decl_function_to_hir<'source>(
                     None => HIRType::Simple(InternedString::new("Void")),
                 },
                 meta: ast,
+                method_of: None,
             });
             return;
         }
@@ -633,10 +648,9 @@ fn ast_decl_function_to_hir<'source>(
             None => HIRType::Simple(InternedString::new("Void")),
         },
         meta: ast,
+        method_of: None,
     };
     accum.push(decl_hir);
-    //yes, each function declaration created the intermediares for their body to work, but they don't
-    //escape the scope of the function!
 }
 
 fn create_type_bound_names(parameters: &[TypeBoundName]) -> Vec<HIRTypedBoundName<HIRType>> {
@@ -777,17 +791,48 @@ fn ast_while_to_hir<'source>(
     accum.push(HIR::While(expr, true_body_hir, ast))
 }
 
+fn ast_impl_to_hir<'source>(
+    body: &'source [FunctionDeclaration],
+    struct_name: InternedString,
+    type_parameters: &'source [StringSpan],
+    ast: &'source AST,
+    accum: &mut Vec<StartingHIRRoot<'source>>,
+) {
+    let mut functions = vec![];
+    for node in body {
+        ast_decl_function_to_hir(
+            &node.body,
+            node.function_name.0,
+            type_parameters,
+            &node.parameters,
+            &node.return_type,
+            node.is_varargs,
+            ast,
+            Some(struct_name),
+            &mut functions,
+        );
+    }
+
+    accum.push(HIRRoot::ImplDeclaration {
+        struct_name,
+        type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
+        methods: functions,
+        meta: ast,
+    });
+}
+
 pub fn ast_globals_to_hir<'source>(ast: &'source AST) -> Vec<StartingHIRRoot<'source>> {
     let mut accum = vec![];
     match ast {
-        AST::DeclareFunction {
+        AST::DeclareFunction(FunctionDeclaration {
             function_name,
             parameters,
             body,
             type_parameters,
             return_type,
             is_varargs,
-        } => {
+            ..
+        }) => {
             ast_decl_function_to_hir(
                 body,
                 function_name.0,
@@ -796,6 +841,7 @@ pub fn ast_globals_to_hir<'source>(ast: &'source AST) -> Vec<StartingHIRRoot<'so
                 return_type,
                 *is_varargs,
                 ast,
+                None,
                 &mut accum,
             );
         }
@@ -803,6 +849,13 @@ pub fn ast_globals_to_hir<'source>(ast: &'source AST) -> Vec<StartingHIRRoot<'so
             for node in ast_nodes {
                 accum.extend(ast_globals_to_hir(&node.ast));
             }
+        }
+        AST::ImplDeclaration {
+            struct_name,
+            type_parameters,
+            body,
+        } => {
+            ast_impl_to_hir(body, struct_name.0, type_parameters, ast, &mut accum);
         }
         AST::StructDeclaration {
             struct_name,
@@ -845,8 +898,14 @@ mod tests {
 
         let file_table = &[FileTableEntry {
             ast: AST::Break(AstSpan {
-                start: TokenSpanIndex{file: FileTableIndex(0), index: 0},
-                end: TokenSpanIndex{file: FileTableIndex(0), index: 0},
+                start: TokenSpanIndex {
+                    file: FileTableIndex(0),
+                    index: 0,
+                },
+                end: TokenSpanIndex {
+                    file: FileTableIndex(0),
+                    index: 0,
+                },
             }),
             contents: source,
             path: "hir_test".to_string(),

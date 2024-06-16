@@ -18,17 +18,16 @@ fn construct_struct_instantiations_in_expression<'source>(
             match &call.function {
                 HIRExpr::Variable(var_name, .., meta) => {
                     let type_data = type_db.constructors.find_by_name(*var_name);
-                    if let Some(type_data) = type_data && type_data.kind == TypeKind::Struct {
+                    if let Some(type_data) = type_data
+                        && type_data.kind == TypeKind::Struct
+                    {
                         //construct the type
-                        let type_args = call.type_args
+                        let type_args = call
+                            .type_args
                             .into_iter()
-                            .map(|x|x.user_given_type.unwrap()).collect();
-                        HIRExpr::StructInstantiate(
-                            *var_name,
-                            type_args,
-                            (),
-                            meta
-                        )
+                            .map(|x| x.user_given_type.unwrap())
+                            .collect();
+                        HIRExpr::StructInstantiate(*var_name, type_args, (), meta)
                     } else {
                         HIRExpr::FunctionCall(call)
                     }
@@ -146,6 +145,8 @@ fn construct_struct_instantiations_in_function<'source>(
     construct_struct_instantiations_in_body(body, type_db)
 }
 
+// Structs are instantiated like function calls, like List(), which look like a function call.
+// The parser can't differentiate between a function call and a struct instantiation, so we need to do it here.
 pub fn construct_struct_instantiations<'a>(
     mir: Vec<FirstAssignmentsDeclaredHIRRoot<'a>>,
     type_db: &mut TypeInstanceManager,
@@ -163,7 +164,8 @@ pub fn construct_struct_instantiations<'a>(
                 meta,
                 is_intrinsic,
                 is_varargs,
-                is_external
+                is_external,
+                method_of: _,
             } => {
                 let new_body = construct_struct_instantiations_in_function(type_db, body);
                 HIRRoot::DeclareFunction {
@@ -175,7 +177,8 @@ pub fn construct_struct_instantiations<'a>(
                     meta,
                     is_intrinsic,
                     is_varargs,
-                    is_external
+                    is_external,
+                    method_of: None,
                 }
             }
             HIRRoot::StructDeclaration {
@@ -187,6 +190,17 @@ pub fn construct_struct_instantiations<'a>(
                 struct_name,
                 type_parameters,
                 fields,
+                meta,
+            },
+            HIRRoot::ImplDeclaration {
+                struct_name,
+                type_parameters,
+                methods,
+                meta,
+            } => HIRRoot::ImplDeclaration {
+                struct_name,
+                type_parameters,
+                methods,
                 meta,
             },
         };

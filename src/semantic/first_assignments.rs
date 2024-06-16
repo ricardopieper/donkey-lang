@@ -167,7 +167,8 @@ pub fn transform_first_assignment_into_declaration(
                 meta,
                 is_intrinsic,
                 is_varargs,
-                is_external
+                is_external,
+                method_of,
             } => {
                 let new_body = make_assignments_into_declarations_in_function(&parameters, body);
                 HIRRoot::DeclareFunction {
@@ -179,7 +180,8 @@ pub fn transform_first_assignment_into_declaration(
                     meta,
                     is_intrinsic,
                     is_varargs,
-                    is_external
+                    is_external,
+                    method_of, //we expect this to be None here...
                 }
             }
             HIRRoot::StructDeclaration {
@@ -193,6 +195,20 @@ pub fn transform_first_assignment_into_declaration(
                 fields,
                 meta,
             },
+            HIRRoot::ImplDeclaration {
+                struct_name,
+                type_parameters,
+                methods,
+                meta,
+            } => {
+                let methods = transform_first_assignment_into_declaration(methods);
+                HIRRoot::ImplDeclaration {
+                    struct_name,
+                    type_parameters,
+                    methods,
+                    meta,
+                }
+            }
         };
         new_hir.push(result);
     }

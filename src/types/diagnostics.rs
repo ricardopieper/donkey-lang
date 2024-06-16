@@ -2,7 +2,7 @@ use crate::ast::lexer::TokenSpanIndex;
 use crate::ast::parser::Spanned;
 use crate::interner::InternedString;
 use crate::semantic::compiler_errors::CompilerError;
-use crate::semantic::context::{FileTableEntry, FileTableIndex};
+use crate::semantic::context::FileTableEntry;
 
 use crate::semantic::mir::{MIRExpr, MIRExprLValue};
 use crate::semantic::mir_printer::MIRPrinter;
@@ -16,7 +16,7 @@ use crate::{
 };
 use std::fmt::Display;
 
-use super::type_constructor_db::{TypeConstructorId, TypeConstructParams};
+use super::type_constructor_db::{TypeConstructParams, TypeConstructorId};
 use super::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
 
 pub trait ErrorReporter {
@@ -428,7 +428,6 @@ impl CompilerErrorDisplay for CompilerErrorContext<FieldNotFound> {
     }
 }
 
-
 pub struct MethodNotFound {
     pub object_type: TypeInstanceId,
     pub method: InternedString,
@@ -713,7 +712,24 @@ impl CompilerErrorDisplay for CompilerErrorContext<VarargsNotSupported> {
     ) -> std::fmt::Result {
         write!(
             f,
-            "{on_element}, varargs not supported on non-intrinsic functions",
+            "{on_element}, varargs not supported on non-intrinsic or external functions",
+            on_element = self.on_element.diag_name(),
+        )
+    }
+}
+
+pub struct ImplMismatchTypeArgs {}
+impl CompilerErrorData for ImplMismatchTypeArgs {}
+
+impl CompilerErrorDisplay for CompilerErrorContext<ImplMismatchTypeArgs> {
+    fn fmt_err(
+        &self,
+        _type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, amount of type parameters is not the same as the struct. Check the struct type arguments and the impl type arguments, and make sure they have the same amount.",
             on_element = self.on_element.diag_name(),
         )
     }
@@ -803,7 +819,6 @@ where
         return &self.errors[index];
     }
 }
-
 
 macro_rules! make_type_errors {
     ($($field:ident = $typename:ty), *) => {
@@ -906,5 +921,6 @@ make_type_errors!(
     invalid_derefed_type_unconstructed = DerefOnNonPointerErrorUnconstructed,
     invalid_refed_type = RefOnNonLValueError,
     varargs_not_supported = VarargsNotSupported,
-    internal_error = InternalError
+    internal_error = InternalError,
+    impl_mismatch_type_args = ImplMismatchTypeArgs
 );

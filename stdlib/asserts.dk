@@ -9,7 +9,6 @@ def assert_i32_equals(a: i32, b: i32):
         printf("assertion failed: %d != %d\n".buf, a, b)
         exit(1)
 
-
 def assert_eq<T>(a: T, b: T):
     if a != b:
         printf("assertion failed: %d != %d\n".buf, a, b)

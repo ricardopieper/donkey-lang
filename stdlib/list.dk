@@ -3,6 +3,7 @@ struct List<T>:
     len: u64
     cap: u64
 
+# Creates a new list
 def list_new<T>() -> List<T>:
     list = List<T>()
     list.len = 0
@@ -10,6 +11,9 @@ def list_new<T>() -> List<T>:
 
     return list
 
+
+
+# Adds an item to the list
 def list_add<T>(list: ptr<List<T>>, item: T):
     len = (*list).len
     cap = (*list).cap
@@ -34,15 +38,3 @@ def list_add<T>(list: ptr<List<T>>, item: T):
 
 def list_get<T>(list: ptr<List<T>>, index: u64) -> T:
     return (*list).buf[index]
-
-def main():
-    new_list = list_new<i32>()
-    items = 0
-    while items <= 10:
-        list_add<i32>(&new_list, items)
-        items = items + 1
-
-    i: u64 = 0
-    while i < new_list.len:
-        print_int(list_get<i32>(&new_list, i))
-        i = i + 1

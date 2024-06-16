@@ -1,9 +1,17 @@
+use std::{
+    error::Error,
+    ops::{ControlFlow, FromResidual, Try},
+};
+
 use crate::{
     commons::float::FloatLiteral, interner::InternedString, semantic::context::FileTableIndex,
 };
 
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
-pub struct TokenSpanIndex { pub index: usize, pub file: FileTableIndex }
+pub struct TokenSpanIndex {
+    pub index: usize,
+    pub file: FileTableIndex,
+}
 
 #[derive(Eq, PartialEq, Debug, Clone, Copy)]
 pub struct TokenData {
@@ -23,6 +31,7 @@ pub struct TokenSpan {
     pub end: SourceLocation,
 }
 
+#[derive(Debug)]
 pub struct TokenTable {
     pub tokens: Vec<TokenData>,
     pub spans: Vec<TokenSpan>,
@@ -44,9 +53,12 @@ impl TokenTable {
         end: SourceLocation,
     ) {
         let cur_len = self.spans.len();
-        self.spans.push(TokenSpan {  start, end });
+        self.spans.push(TokenSpan { start, end });
         self.tokens.push(TokenData {
-            span_index: TokenSpanIndex { index: cur_len, file },
+            span_index: TokenSpanIndex {
+                index: cur_len,
+                file,
+            },
             token,
         });
     }
@@ -93,7 +105,7 @@ impl ToString for Operator {
             Operator::Not => "not".into(),
             Operator::BitShiftLeft => "<<".into(),
             Operator::BitShiftRight => ">>".into(),
-            _ => "operator_str doesn't implement this operator".into(),
+            Operator::Xor => "^".into(),
         }
     }
 }
@@ -126,6 +138,9 @@ pub enum Token {
     ElifKeyword,
     ElseKeyword,
     DefKeyword,
+    ImplKeyword,
+    SelfKeyword,
+    DoubleColon, // ::
     OpenParen,
     CloseParen,
     Ellipsis,
@@ -147,7 +162,8 @@ impl Token {
             Token::Identifier(_) => "identifier",
             Token::NewLine => "new line",
             Token::Assign => "assign = ",
-            Token::True | Token::False => "boolean literal",
+            Token::True => "boolean literal true",
+            Token::False => "boolean literal false",
             Token::None => "None",
             Token::Comma => "comma ,",
             Token::Colon => "colon :",
@@ -161,9 +177,11 @@ impl Token {
             Token::InKeyword => "in keyword",
             Token::WhileKeyword => "while keyword",
             Token::BreakKeyword => "break keyword",
+            Token::ImplKeyword => "impl keyword",
             Token::ElifKeyword => "elif keyword",
             Token::ElseKeyword => "else keyword",
             Token::DefKeyword => "def keyword",
+            Token::DoubleColon => "double colon ::",
             Token::OpenParen => "open parenthesis (",
             Token::CloseParen => "close parenthesis )",
             Token::OpenArrayBracket => "open bracket [",
@@ -172,68 +190,7 @@ impl Token {
             Token::ArrowRight => "arrow right (->)",
             Token::Indentation => "indentation",
             Token::AsKeyword => "as keyword (cast)",
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum PartialToken {
-    UndefinedOrWhitespace,
-    Operator(String),
-    Identifier(String),
-}
-
-impl PartialToken {
-    fn to_token(&self) -> Token {
-        match self {
-            Self::UndefinedOrWhitespace => {
-                panic!("Unexpected undefined token. This is a tokenizer bug.")
-            }
-            Self::Identifier(s) => match s.as_ref() {
-                "None" => Token::None,
-                "as" => Token::AsKeyword,
-                "not" => Token::Operator(Operator::Not),
-                "True" => Token::True,
-                "False" => Token::False,
-                "and" => Token::Operator(Operator::And),
-                "or" => Token::Operator(Operator::Or),
-                "if" => Token::IfKeyword,
-                "elif" => Token::ElifKeyword,
-                "else" => Token::ElseKeyword,
-                "for" => Token::ForKeyword,
-                "def" => Token::DefKeyword,
-                "intrinsic" => Token::IntrinsicKeyword,
-                "external" => Token::ExternalKeyword,
-                "return" => Token::ReturnKeyword,
-                "in" => Token::InKeyword,
-                "while" => Token::WhileKeyword,
-                "break" => Token::BreakKeyword,
-                "struct" => Token::StructDef,
-                _ => Token::Identifier(InternedString::new(s)),
-            },
-            Self::Operator(s) => match s.as_ref() {
-                "+" => Token::Operator(Operator::Plus),
-                "-" => Token::Operator(Operator::Minus),
-                "*" => Token::Operator(Operator::Multiply),
-                "%" => Token::Operator(Operator::Mod),
-                "/" => Token::Operator(Operator::Divide),
-                "^" => Token::Operator(Operator::Xor),
-                "<<" => Token::Operator(Operator::BitShiftLeft),
-                //">>" => Token::Operator(Operator::BitShiftRight),
-                "==" => Token::Operator(Operator::Equals),
-                "->" => Token::ArrowRight,
-                "=" => Token::Assign,
-                "&" => Token::Operator(Operator::Ampersand),
-                "!=" => Token::Operator(Operator::NotEquals),
-                "(" => Token::OpenParen,
-                ")" => Token::CloseParen,
-                ">" => Token::Operator(Operator::Greater),
-                "<" => Token::Operator(Operator::Less),
-                ">=" => Token::Operator(Operator::GreaterEquals),
-                "<=" => Token::Operator(Operator::LessEquals),
-                "..." => Token::Ellipsis,
-                _ => panic!("Unimplemented operator {s}"),
-            },
+            Token::SelfKeyword => "self keyword",
         }
     }
 }
@@ -248,20 +205,119 @@ pub struct LineIndex {
     line: u32,
 }
 
-pub struct Tokenizer {
+pub struct Lexer {
     index: usize,
     file: FileTableIndex,
     source: String,
     chars: Vec<char>,
-    cur_partial_token: PartialToken,
-    eater_buf: String,
     line_indices: Vec<LineIndex>,
-    start_token: SourceLocation,
-    end_token: SourceLocation,
 }
 
-impl Tokenizer {
-    pub fn new(file: FileTableIndex, source: String) -> Tokenizer {
+pub enum LexerResult<T> {
+    Ok(T),
+    NoMatch,
+    EndOfInput,
+    Error(String),
+}
+
+impl<T> FromResidual<LexerResult<!>> for LexerResult<T> {
+    fn from_residual(residual: LexerResult<!>) -> Self {
+        match residual {
+            LexerResult::Ok(val) => val, //val is never, so it typechecks
+            LexerResult::EndOfInput => LexerResult::EndOfInput,
+            LexerResult::NoMatch => LexerResult::NoMatch,
+            LexerResult::Error(e) => LexerResult::Error(e),
+        }
+    }
+}
+
+impl<T> Try for LexerResult<T> {
+    type Output = T;
+
+    type Residual = LexerResult<!>;
+
+    fn from_output(output: Self::Output) -> Self {
+        LexerResult::Ok(output)
+    }
+
+    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
+        match self {
+            LexerResult::Ok(val) => ControlFlow::Continue(val),
+            LexerResult::EndOfInput => ControlFlow::Break(LexerResult::EndOfInput),
+            LexerResult::NoMatch => ControlFlow::Break(LexerResult::NoMatch),
+            LexerResult::Error(e) => ControlFlow::Break(LexerResult::Error(e)),
+        }
+    }
+}
+
+impl<T, E: Error> Into<LexerResult<T>> for Result<T, E> {
+    fn into(self) -> LexerResult<T> {
+        match self {
+            Ok(v) => LexerResult::Ok(v),
+            Err(e) => LexerResult::Error(e.to_string()),
+        }
+    }
+}
+
+impl<T> LexerResult<T> {
+    pub fn unwrap(self) -> T {
+        match self {
+            LexerResult::Ok(v) => v,
+            LexerResult::NoMatch => panic!("Unwrap on lexer result error: No match"),
+            LexerResult::EndOfInput => panic!("Unwrap on lexer result error: End of input"),
+            LexerResult::Error(e) => panic!("Unwrap on lexer result error: {e}"),
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        match self {
+            LexerResult::Ok(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_no_match(&self) -> bool {
+        match self {
+            LexerResult::NoMatch => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_eof(&self) -> bool {
+        match self {
+            LexerResult::EndOfInput => true,
+            _ => false,
+        }
+    }
+
+    pub fn map<F, U>(self, f: F) -> LexerResult<U>
+    where
+        F: Fn(T) -> U,
+    {
+        match self {
+            LexerResult::Ok(v) => LexerResult::Ok(f(v)),
+            LexerResult::NoMatch => LexerResult::NoMatch,
+            LexerResult::EndOfInput => LexerResult::EndOfInput,
+            LexerResult::Error(e) => LexerResult::Error(e),
+        }
+    }
+}
+
+impl Iterator for Lexer {
+    type Item = char;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.chars.len() {
+            return None;
+        }
+        let ch = self.chars[self.index];
+        self.index += 1;
+        Some(ch)
+    }
+}
+
+impl Lexer {
+    pub fn new(file: FileTableIndex, source: String) -> Lexer {
         let chars = source.chars().collect::<Vec<_>>();
         //add a new line always so that the loop finds a newline in the end
 
@@ -293,17 +349,18 @@ impl Tokenizer {
             line_indices.push(line);
         }
 
-        Tokenizer {
+        Lexer {
             index: 0,
             file,
             source,
             chars,
-            cur_partial_token: PartialToken::UndefinedOrWhitespace,
-            eater_buf: String::new(),
+            //eater_buf: String::new(),
             line_indices,
-            start_token: SourceLocation { line: 0, column: 0 },
-            end_token: SourceLocation { line: 0, column: 0 },
         }
+    }
+
+    fn get_cur_location(&self) -> SourceLocation {
+        self.get_location(self.index)
     }
 
     fn get_location(&self, index: usize) -> SourceLocation {
@@ -324,17 +381,9 @@ impl Tokenizer {
         }
     }
 
-    fn start_token(&mut self) {
-        self.start_token = self.get_location(self.index);
-    }
-
-    fn end_token(&mut self) {
-        self.end_token = self.get_location(self.index);
-    }
-
-    fn reset_eater_buffer(&mut self) {
-        self.eater_buf.clear();
-    }
+    //fn reset_eater_buffer(&mut self) {
+    //    self.eater_buf.clear();
+    //}
 
     fn next(&mut self) {
         self.advance(1);
@@ -344,53 +393,57 @@ impl Tokenizer {
         self.index += offset;
     }
 
-    fn cur(&self) -> char {
+    fn peek(&self) -> LexerResult<char> {
         self.cur_offset(0)
     }
 
-    fn cur_offset(&self, offset: isize) -> char {
-        self.chars[(self.index as isize + offset) as usize]
-    }
-
-    fn can_go(&self) -> bool {
-        self.index < self.chars.len()
-    }
-
-    fn eat_numbers(&mut self) -> bool {
-        let mut ate = false;
-        while self.can_go() && self.cur().is_numeric() {
-            self.eater_buf.push(self.cur());
-            self.next();
-            ate = true;
-        }
-        ate
-    }
-
-    fn eat_identifier(&mut self) -> Option<&str> {
-        let start = self.index;
-        self.start_token();
-        let first_char_is_valid_identifier =
-            self.can_go() && self.cur().is_ascii_alphabetic() || self.cur() == '_';
-
-        if first_char_is_valid_identifier {
-            self.eater_buf.push(self.cur());
-            self.next();
+    fn cur_offset(&self, offset: isize) -> LexerResult<char> {
+        if (self.index as isize + offset) as usize >= self.chars.len() {
+            return LexerResult::EndOfInput;
         } else {
-            return None;
+            return LexerResult::Ok(self.chars[(self.index as isize + offset) as usize]);
+        }
+    }
+
+    fn next_while<F>(&mut self, pred: F) -> usize
+    where
+        F: Fn(char) -> bool,
+    {
+        let mut count = 0;
+        while let LexerResult::Ok(ch) = self.peek()
+            && pred(ch)
+        {
+            self.next();
+            count += 1;
+        }
+        count
+    }
+
+    fn eat_identifier(&mut self) -> LexerResult<(&str, SourceLocation, SourceLocation)> {
+        let start = self.index;
+        let start_loc = self.get_cur_location();
+
+        //notice the ALPHABETIC here, not ALPHANUMERIC
+        if let LexerResult::Ok(ch) = self.peek()
+            && !ch.is_ascii_alphabetic()
+            && ch != '_'
+        {
+            return LexerResult::NoMatch;
         }
 
-        while self.can_go() && (self.cur().is_ascii_alphanumeric() || self.cur() == '_') {
-            self.eater_buf.push(self.cur());
-            self.next();
-        }
+        self.next();
+
+        self.next_while(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+
         let end = self.index;
-        self.end_token();
-        Some(&self.source[start..end])
+        let end_loc = self.get_cur_location();
+        LexerResult::Ok((&self.source[start..end], start_loc, end_loc))
     }
 
     fn eat_char(&mut self, char_to_eat: char) -> bool {
-        if self.can_go() && self.cur() == char_to_eat {
-            self.eater_buf.push(self.cur());
+        if let LexerResult::Ok(c) = self.peek()
+            && c == char_to_eat
+        {
             self.next();
             true
         } else {
@@ -398,19 +451,19 @@ impl Tokenizer {
         }
     }
 
-    fn eat_char_literal(&mut self) -> (bool, char) {
-        let stop = self.cur();
+    fn eat_char_literal(&mut self) -> LexerResult<char> {
+        let stop = self.peek()?;
         if stop != '\'' {
-            return (false, '\0');
+            return LexerResult::NoMatch;
         }
         self.next();
         //@TODO maybe there's a char ascii math trick to escape this without a match and produce the escaped char from it's representation
         //@TODO support for unicode chars?
-        let cur = self.cur();
+        let cur = self.peek()?;
         let is_escaping = cur == '\\';
-        if is_escaping {
+        let char = if is_escaping {
             self.next();
-            let cur = self.cur();
+            let cur = self.peek()?;
 
             let escaped_char = match cur {
                 '\\' => '\\',
@@ -419,39 +472,34 @@ impl Tokenizer {
                 'n' => '\n',
                 't' => '\t',
                 'r' => '\r',
-                _ => panic!("cannot escape char {cur}"),
+                _ => return LexerResult::Error(format!("Cannot escape char {cur}")),
             };
 
-            self.next();
-
-            if self.cur() != '\'' {
-                panic!("expected \\' after char, instead found {}. Char literals can only be 1 char long, or must be escaped", self.cur());
-            }
-            self.next();
-
-            return (true, escaped_char);
+            escaped_char
         } else {
-            let ch = cur;
-            self.next();
-            if self.cur() != '\'' {
-                panic!("expected \\' after char, instead found {}. Char literals can only be 1 char long, or must be escaped", self.cur());
-            }
-            self.next();
-            return (true, ch);
-        }
-    }
+            cur
+        };
 
-    fn eat_string_literal(&mut self) -> bool {
-        //@TODO use the same logic as eat_char_literal?
-        let stop = self.cur();
-        if stop != '"' {
-            return false;
+        self.next();
+        let ch = self.peek()?;
+        if ch != '\'' {
+            return LexerResult::Error(format!("expected \\' after char, instead found {}. Char literals can only be 1 char long, or must be escaped", ch));
         }
         self.next();
+
+        return LexerResult::Ok(char);
+    }
+
+    fn eat_string_literal(&mut self) -> LexerResult<String> {
+        let double_quote = self.peek()?;
+        if double_quote != '"' {
+            return LexerResult::NoMatch;
+        }
+        //This needs a separate buffer because we need to unescape the string
+        let mut buf = String::new();
+        self.next();
         let mut is_escaping = false;
-        let mut finished = false;
-        while self.can_go() {
-            let cur = self.cur();
+        while let LexerResult::Ok(cur) = self.peek() {
             //start a escape sequence
             if cur == '\\' && !is_escaping {
                 is_escaping = true;
@@ -464,196 +512,235 @@ impl Tokenizer {
                 let resulting_chars = ['\\', '"', '\0', '\n', '\t', '\r'];
                 let pos = escapable_chars.iter().position(|x| *x == cur);
                 if let Some(pos) = pos {
-                    self.eater_buf.push(resulting_chars[pos]);
+                    buf.push(resulting_chars[pos]);
                 } else {
-                    panic!("cannot escape char {cur}");
+                    return LexerResult::Error(format!("Cannot escape char {cur}"));
                 }
                 is_escaping = false;
+
                 self.next();
                 continue;
             }
             if cur == '"' {
-                finished = true;
-                break;
+                return LexerResult::Ok(buf);
             }
-            self.eater_buf.push(cur);
+            buf.push(cur);
             self.next();
         }
-        finished
+        LexerResult::NoMatch
     }
 
-    fn commit_current_token(&mut self, table: &mut TokenTable) {
-        if let PartialToken::UndefinedOrWhitespace = self.cur_partial_token {
-            return;
-        }
-
-        let cur_token = std::mem::replace(
-            &mut self.cur_partial_token,
-            PartialToken::UndefinedOrWhitespace,
-        );
-
-        let as_token = cur_token.to_token();
-        table.add(as_token, self.file, self.start_token, self.end_token);
-    }
-
-    fn match_partial(&mut self, query: &str) -> (bool, usize) {
+    fn match_partial(&mut self, query: &str) -> LexerResult<usize> {
         let mut matched_chars = 0;
         for (i, item) in query.chars().enumerate() {
-            if self.cur_offset(i as isize) != item {
-                return (false, 0);
+            match self.cur_offset(i as isize) {
+                LexerResult::Ok(c) if c == item => {
+                    matched_chars += 1;
+                }
+                _ => {
+                    return LexerResult::NoMatch;
+                }
             }
-            matched_chars += 1;
         }
-        (true, matched_chars)
+        LexerResult::Ok(matched_chars)
     }
 
-    fn match_first_and_advance<'a>(&mut self, query: &'a [&'a str]) -> Option<&str> {
-        self.start_token();
+    fn match_first_and_advance<'a>(
+        &mut self,
+        query: &'a [&'a str],
+    ) -> LexerResult<(&str, SourceLocation, SourceLocation)> {
+        let start = self.get_cur_location();
         for q in query {
             let cur_idx = self.index;
-            let (success, len) = self.match_partial(q);
-            if success {
-                self.advance(len);
+
+            if let LexerResult::Ok(matched_chars) = self.match_partial(q) {
+                self.advance(matched_chars);
                 let new_idx = self.index;
-                return Some(&self.source[cur_idx..new_idx]);
+                let end = self.get_cur_location();
+                return LexerResult::Ok((&self.source[cur_idx..new_idx], start, end));
             }
         }
-        self.end_token();
-        None
+        return LexerResult::NoMatch;
     }
 
-    pub fn tokenize(mut self) -> Result<TokenTable, String> {
-        let mut token_table = TokenTable::new();
+    fn tokenize_number_literal(&mut self) -> LexerResult<(Token, SourceLocation, SourceLocation)> {
+        let start = self.get_cur_location();
+        let start_index = self.index;
 
-        let operators = &[
-            "+", "->", "-", "*", "%", "/", "<<", "<=", ">=", ">", "<", "!=", "==", "=", "^", "(",
-            ")", "&", "...",
-        ];
-        while self.can_go() {
-            self.commit_current_token(&mut token_table);
-            if self.cur().is_numeric() {
-                self.reset_eater_buffer();
+        self.next_while(|ch| ch.is_numeric());
 
-                self.start_token();
-                self.eat_numbers();
-                self.eat_char('.');
-                self.eat_numbers();
-                self.eat_char('e');
-                self.eat_char('-');
-                self.eat_numbers();
+        let mut is_float = self.eat_char('.');
 
-                self.end_token();
+        self.next_while(|ch| ch.is_numeric());
 
-                let token = if self.eater_buf.contains('.') || self.eater_buf.contains('e') {
-                    self.eater_buf
-                        .parse::<f64>()
-                        .map_err(|_| "Error parsing float value")
-                        .map(|f| Token::LiteralFloat(f.into()))
-                } else {
-                    self.eater_buf
-                        .parse::<i128>()
-                        .map_err(|_| "Error parsing integer value")
-                        .map(Token::LiteralInteger)
-                }?;
+        if self.eat_char('e') {
+            is_float = true;
+            self.eat_char('-');
 
-                token_table.add(token, self.file, self.start_token, self.end_token);
-            } else if self.index > 0 && self.cur_offset(-1) == '\n' && self.cur() == ' ' {
-                let mut current = self.get_location(self.index);
-
-                let mut current_spaces = 0;
-                while self.can_go() && self.cur() == ' ' {
-                    current_spaces += 1;
-                    self.next();
-                }
-
-                let location = self.get_location(self.index);
-                assert!(
-                    current_spaces % 4 == 0,
-                    "Indentation must be a multiple of 4, found {current_spaces} at {location:?}"
-                );
-                let indents = current_spaces / 4;
-
-                for i in 0..indents {
-                    let location = self.get_location(self.index + (4 * i));
-                    token_table.add(Token::Indentation, self.file, current, location);
-                    current = location;
-                }
-            } else if self.cur() == '\n' {
-                self.start_token();
-                self.end_token();
-                token_table.add(Token::NewLine, self.file, self.start_token, self.end_token);
-                self.next();
-            } else if self.cur().is_whitespace() {
-                //if it's whitespace and there's a pending token, add it
-                self.next();
-            } else if let Some(s) = self.match_first_and_advance(operators) {
-                self.cur_partial_token = PartialToken::Operator(s.to_string());
-            } else if self.cur().is_ascii_alphabetic() || self.cur() == '_' {
-                self.reset_eater_buffer();
-                let identifier = self.eat_identifier().unwrap();
-                self.cur_partial_token = PartialToken::Identifier(identifier.to_string());
-            } else if self.cur() == '"' {
-                self.reset_eater_buffer();
-
-                self.start_token();
-                self.eat_string_literal();
-                self.end_token();
-
-                let interned = InternedString::new(&self.eater_buf);
-
-                token_table.add(
-                    Token::LiteralString(interned),
-                    self.file,
-                    self.start_token,
-                    self.end_token,
-                );
-
-                self.next();
-            } else if self.cur() == '\'' {
-                self.reset_eater_buffer();
-                self.start_token();
-
-                let (success, char) = self.eat_char_literal();
-                if !success {
-                    return Err("Error parsing char literal".to_string());
-                }
-                self.end_token();
-
-                token_table.add(
-                    Token::LiteralChar(char),
-                    self.file,
-                    self.start_token,
-                    self.end_token,
-                );
-            } else {
-                self.start_token();
-                //@TODO maybe this should be together with the operators?
-                let token = match self.cur() {
-                    ',' => Some(Token::Comma),
-                    ':' => Some(Token::Colon),
-                    '[' => Some(Token::OpenArrayBracket),
-                    ']' => Some(Token::CloseArrayBracket),
-                    '.' => Some(Token::MemberAccessor),
-                    _ => None,
-                };
-
-                if let Some(t) = token {
-                    self.next();
-                    self.end_token();
-                    token_table.add(t, self.file, self.start_token, self.end_token)
-                } else {
-                    return Err(format!("Unrecognized token {}", self.cur()));
-                }
+            if self.next_while(|ch| ch.is_numeric()) == 0 {
+                return LexerResult::Error("Expected number after e".to_string());
             }
         }
-        self.commit_current_token(&mut token_table);
+        let end = self.get_cur_location();
+        let end_index = self.index;
 
-        Ok(token_table)
+        let span = &self.source[start_index..end_index];
+        let token: LexerResult<Token> = if is_float {
+            span.parse::<f64>()
+                .map(|f| Token::LiteralFloat(f.into()))
+                .into()
+        } else {
+            span.parse::<i128>().map(Token::LiteralInteger).into()
+        };
+
+        LexerResult::Ok((token?, start, end))
+    }
+
+    pub fn tokenize(mut self) -> LexerResult<TokenTable> {
+        let mut token_table = TokenTable::new();
+
+        let symbols = &[
+            "+", "->", "-", "*", "%", "/", "<<", "<=", ">=", ">", "<", "!=", "==", "=", "^", "(",
+            ")", "&", "...", ",", "[", "]", ".", "::", ":",
+        ];
+
+        while let LexerResult::Ok(ch) = self.peek() {
+            if ch.is_numeric() {
+                let (token, start, end) = self.tokenize_number_literal()?;
+                token_table.add(token, self.file, start, end);
+            } else if ch == ' ' && self.index > 0 && self.cur_offset(-1)? == '\n' {
+                //parse indentation, I feel like this should be moved to parser instead of lexer
+                let mut current_location = self.get_cur_location();
+                let amount_of_spaces = self.skip_spaces();
+                let indents = amount_of_spaces / 4;
+                for i in 0..indents {
+                    let location = self.get_location(self.index + (4 * i));
+                    token_table.add(Token::Indentation, self.file, current_location, location);
+                    current_location = location;
+                }
+            } else if ch == '#' {
+                //skip until new line
+                while let LexerResult::Ok(ch) = self.peek()
+                    && ch != '\n'
+                {
+                    self.next();
+                }
+                self.next();
+            } else if ch == '\n' {
+                let (start, end) = (self.get_cur_location(), self.get_cur_location());
+                token_table.add(Token::NewLine, self.file, start, end);
+                self.next();
+            } else if ch.is_whitespace() {
+                //if it's whitespace and there's a pending token, add it
+                self.next();
+            } else if let LexerResult::Ok((s, start, end)) = self.match_first_and_advance(symbols) {
+                let token = Lexer::symbol_to_token(s)?;
+                token_table.add(token, self.file, start, end);
+            } else if ch.is_ascii_alphabetic() || ch == '_' {
+                let (identifier, start, end) = self.eat_identifier()?;
+                let token = Lexer::identifier_to_token(identifier);
+                token_table.add(token, self.file, start, end);
+            } else if ch == '"' {
+                let start = self.get_cur_location();
+                let id = self.eat_string_literal()?;
+                let end = self.get_cur_location();
+
+                let interned = InternedString::new(&id);
+
+                token_table.add(Token::LiteralString(interned), self.file, start, end);
+
+                self.next();
+            } else if ch == '\'' {
+                let start = self.get_cur_location();
+                let char = self.eat_char_literal()?;
+                let end = self.get_cur_location();
+
+                token_table.add(Token::LiteralChar(char), self.file, start, end);
+            } else {
+                return LexerResult::Error(format!("Unrecognized token {ch}"));
+            }
+        }
+
+        LexerResult::Ok(token_table)
+    }
+
+    fn skip_spaces(&mut self) -> usize {
+        let mut current_spaces = 0;
+        while let LexerResult::Ok(' ') = self.peek() {
+            current_spaces += 1;
+            self.next();
+        }
+
+        let location = self.get_cur_location();
+        assert!(
+            current_spaces % 4 == 0,
+            "Indentation must be a multiple of 4, found {current_spaces} at {location:?}"
+        );
+        current_spaces
+    }
+
+    fn symbol_to_token(identifier: &str) -> LexerResult<Token> {
+        LexerResult::Ok(match identifier.as_ref() {
+            "+" => Token::Operator(Operator::Plus),
+            "," => Token::Comma,
+            "[" => Token::OpenArrayBracket,
+            "]" => Token::CloseArrayBracket,
+            "." => Token::MemberAccessor,
+            "-" => Token::Operator(Operator::Minus),
+            "*" => Token::Operator(Operator::Multiply),
+            "%" => Token::Operator(Operator::Mod),
+            "/" => Token::Operator(Operator::Divide),
+            "^" => Token::Operator(Operator::Xor),
+            "<<" => Token::Operator(Operator::BitShiftLeft),
+            //">>" => Token::Operator(Operator::BitShiftRight), //this is a problem because of generics, solved in parser instead
+            "==" => Token::Operator(Operator::Equals),
+            "->" => Token::ArrowRight,
+            "=" => Token::Assign,
+            "&" => Token::Operator(Operator::Ampersand),
+            "!=" => Token::Operator(Operator::NotEquals),
+            "(" => Token::OpenParen,
+            ")" => Token::CloseParen,
+            ":" => Token::Colon,
+            "::" => Token::DoubleColon,
+            ">" => Token::Operator(Operator::Greater),
+            "<" => Token::Operator(Operator::Less),
+            ">=" => Token::Operator(Operator::GreaterEquals),
+            "<=" => Token::Operator(Operator::LessEquals),
+            "..." => Token::Ellipsis,
+            _ => return LexerResult::Error(format!("Unimplemented operator {identifier}")),
+        })
+    }
+
+    fn identifier_to_token(identifier: &str) -> Token {
+        match identifier.as_ref() {
+            "None" => Token::None,
+            "as" => Token::AsKeyword,
+            "not" => Token::Operator(Operator::Not),
+            "True" => Token::True,
+            "False" => Token::False,
+            "and" => Token::Operator(Operator::And),
+            "or" => Token::Operator(Operator::Or),
+            "if" => Token::IfKeyword,
+            "elif" => Token::ElifKeyword,
+            "else" => Token::ElseKeyword,
+            "for" => Token::ForKeyword,
+            "def" => Token::DefKeyword,
+            "impl" => Token::ImplKeyword,
+            "intrinsic" => Token::IntrinsicKeyword,
+            "external" => Token::ExternalKeyword,
+            "return" => Token::ReturnKeyword,
+            "in" => Token::InKeyword,
+            "while" => Token::WhileKeyword,
+            "break" => Token::BreakKeyword,
+            "struct" => Token::StructDef,
+            "self" => Token::SelfKeyword,
+            _ => Token::Identifier(InternedString::new(identifier)),
+        }
     }
 }
 
-pub fn tokenize(file: FileTableIndex, source: &str) -> Result<TokenTable, String> {
-    Tokenizer::new(file, source.to_string()).tokenize()
+pub fn tokenize(file: FileTableIndex, source: &str) -> LexerResult<TokenTable> {
+    Lexer::new(file, source.to_string()).tokenize()
 }
 
 #[cfg(test)]
@@ -663,13 +750,13 @@ mod tests {
     use super::*;
 
     fn tokenize(str: &str) -> Result<Vec<Token>, String> {
-        crate::ast::lexer::tokenize(FileTableIndex(0), str).map(|table| {
-            table
-                .tokens
-                .into_iter()
-                .map(|x| x.token)
-                .collect::<Vec<_>>()
-        })
+        let tokenized = crate::ast::lexer::tokenize(FileTableIndex(0), str);
+        match tokenized {
+            LexerResult::Ok(table) => Ok(table.tokens.into_iter().map(|x| x.token).collect()),
+            LexerResult::NoMatch => Err("No match".to_string()),
+            LexerResult::EndOfInput => Err("End of input".to_string()),
+            LexerResult::Error(e) => Err(e),
+        }
     }
 
     #[test]
@@ -684,6 +771,7 @@ mod tests {
         assert_eq!(result, [Token::LiteralInteger(22)]);
         Ok(())
     }
+
     #[test]
     fn tokenizer_decimal_number() -> Result<(), String> {
         let result = tokenize("22.321")?;
@@ -692,11 +780,28 @@ mod tests {
     }
 
     #[test]
+    fn fail_tokenization_nothing_after_e_number() -> Result<(), String> {
+        let result = tokenize("22.1e");
+        match result {
+            Ok(_) => Err("Should not be able to parse 22.1e".to_string()),
+            Err(_) => Ok(()),
+        }
+    }
+
+    #[test]
     fn tokenizer_decimal_exponent_number() -> Result<(), String> {
         let result = tokenize("22.22e2")?;
         assert_eq!(result, [Token::LiteralFloat(22.22e2.into())]);
         Ok(())
     }
+
+    #[test]
+    fn tokenizer_decimal_exponent_number_without_dot() -> Result<(), String> {
+        let result = tokenize("22e2")?;
+        assert_eq!(result, [Token::LiteralFloat(22e2.into())]);
+        Ok(())
+    }
+
     #[test]
     fn tokenizer_operator() -> Result<(), String> {
         let result = tokenize("+")?;
@@ -744,9 +849,10 @@ mod tests {
 
     #[test]
     fn tokenizer_unrecognized_token() -> Result<(), &'static str> {
-        let result = tokenize("10 # 12");
+        let result = tokenize("10 ?? 12");
+        println!("{:?}", result);
         match result {
-            Ok(_) => Err("Operator # doesnt exist and shouldn't be tokenized"),
+            Ok(_) => Err("Operator ?? doesnt exist and shouldn't be tokenized"),
             Err(_) => Ok(()),
         }
     }
@@ -1128,7 +1234,7 @@ mod tests {
     }
 
     #[test]
-    fn class_def() -> Result<(), String> {
+    fn struct_def() -> Result<(), String> {
         let result = tokenize("struct Test:")?;
         assert_eq!(
             result,
@@ -1152,6 +1258,83 @@ mod tests {
     fn as_cast() -> Result<(), String> {
         let result = tokenize("as")?;
         assert_eq!(result, [Token::AsKeyword]);
+        Ok(())
+    }
+
+    #[test]
+    fn impl_keywprd() -> Result<(), String> {
+        let result = tokenize("impl")?;
+        assert_eq!(result, [Token::ImplKeyword]);
+        Ok(())
+    }
+
+    #[test]
+    fn self_keyword_in_method() -> Result<(), String> {
+        let result = tokenize("def method(self)")?;
+        assert_eq!(
+            result,
+            [
+                Token::DefKeyword,
+                Token::Identifier(istr("method")),
+                Token::OpenParen,
+                Token::SelfKeyword,
+                Token::CloseParen
+            ]
+        );
+        Ok(())
+    }
+
+    //
+    #[test]
+    fn member_compare() -> Result<(), String> {
+        let result = tokenize("self.current >= self.max")?;
+        assert_eq!(
+            result,
+            [
+                Token::SelfKeyword,
+                Token::MemberAccessor,
+                Token::Identifier(istr("current")),
+                Token::Operator(Operator::GreaterEquals),
+                Token::SelfKeyword,
+                Token::MemberAccessor,
+                Token::Identifier(istr("max")),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn double_colon() -> Result<(), String> {
+        let result = tokenize("::")?;
+        assert_eq!(result, [Token::DoubleColon]);
+        Ok(())
+    }
+
+    #[test]
+    fn double_colon_in_context() -> Result<(), String> {
+        let result = tokenize("SomeType::some_function")?;
+        assert_eq!(
+            result,
+            [
+                Token::Identifier(istr("SomeType")),
+                Token::DoubleColon,
+                Token::Identifier(istr("some_function"))
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn colon() -> Result<(), String> {
+        let result = tokenize(":")?;
+        assert_eq!(result, [Token::Colon]);
+        Ok(())
+    }
+
+    #[test]
+    fn comment() -> Result<(), String> {
+        let result = tokenize("#some comment")?;
+        assert_eq!(result, []);
         Ok(())
     }
 }

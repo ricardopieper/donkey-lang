@@ -37,7 +37,7 @@ After discovering pony already existed, I asked a friend of mine to give me an a
 Standard library
 ----------------
 
-In Horse, the stdlib was being written in Horse, which was cool. Maybe I'll do the same here. Types like `str` could be implemented using lower-level keywords yet to be desgiend.
+In Horse, the stdlib was being written in Horse, which was cool. Maybe I'll do the same here. Types like `str` could be implemented using lower-level keywords yet to be designed.
 
 Struct declarations
 -------------------
@@ -57,122 +57,26 @@ struct SomeStructGeneric<T>:
 
 ```
 
-Traits and implementations
---------------------------
+Implementations
+---------------
 
-This could be the implementation of a jet fighter game, like Ace combat:
-
+Impls look like this:
 
 ```
-trait Aircraft:
-    def name() -> str
-    def throttle_up(rate: f32)
-    def throttle_down(rate: f32)
+impl SomeStruct:
 
-trait FighterJet: Aircraft:
-    def lock_missile(radar_lock_id: i32) -> bool
-
-struct Su27Flanker:
-    max_speed: f32
-    current_speed: f32
-    current_acceleration: f32
-    current_missiles: i32
-    radar: Radar
-
-struct Boeing777:
-    max_speed: f32
-    current_speed: f32
-    current_acceleration: f32
-    passengers: u32
-
-impl Su27Flanker:
-
-    def init(radar: Radar) -> Su27Flanker:
-    
-        #Dictionary initialization, compiler will complain if you don't pass anything. 
-        #You can only pass None (nullptr) to traits.
-        return Su27Flanker(
-            max_speed = 2000,
-            current_speed = 0
-            current_acceleration = 0
-            current_missiles = 96
-            radar = radar)
-
-    def reduce_missile(): 
-        self.current_missiles = self.current_missiles - 1;
-
-impl Aircraft for Su27Flanker:
-
-    def name(self) -> str:
-        return "Su-27 Flanker" 
-
-    def throttle_up(self, rate: f32):
-        self.current_acceleration = self.current_acceleration + rate
-
-    def throttle_up(self, rate: f32):
-        self.current_acceleration = self.current_acceleration - rate
-
-impl FighterJet for Su27Flanker
-
-    def lock_missile(self, radar_target_id: i32) -> bool:
-        
-        #Here, type inference will be used, suppose get_entity_id returns i32
-        entity_id = self.radar.get_entity_id(radar_target_id)
-
-        #Explicitly define type, suppose GetEntity returns an Optional<Aircraft>.
-        target: Optional<Aircraft> = EntityManager.GetEntity(entity_id)
-  
-        #We will allow static calls globals
-        SoundManager.Play("assets/sounds/sidewinder-growl-tone.wav")
-       
-        #Match on trait types
-        if target.is_some() && target.get() is FighterJet: # cannot check for concrete type here.
-            UIManager.ChangeRadarLockColor(radar_target_id, 255, 0, 0)
-        else:
-            UIManager.ShowMessage("Warning: Civilian aircraft locked on radar, do not fire")
-            UIManager.ChangeRadarLockColor(radar_target_id, 255, 255, 0)
-
-impl Aircraft for Boeing777:
-
-    def name(self) -> str:
-        return "Boeing 777" 
-
-    def throttle_up(self, rate: f32):
-        self.current_acceleration = self.current_acceleration + rate
-
-    def throttle_up(self, rate: f32):
-        self.current_acceleration = self.current_acceleration - rate
-
+    def some_method(self, param: u32) -> u32:
+        ...
 
 ```
 
-Random notes / Idea dump
-------------
-
-How are we going to do dynamic dispatch and be able to check if a value implements a type?
-
-For every interface impl we will generate a vtable for that type, and use fat pointers. When we need to pass a value using a trait object, we will pack the data into a fat pointer containing a pointer to the data, and a pointer to the required interface.
-
-For instance, a method receiving an Aircraft would actually receive:
-
-    -   Pointer to the instance data, that could be either stack or heap allocated
-    -   Pointer to the vtable
-
-If we pass a `Su27Flanker` instance, we will pass the pointer to it, and the pointer to the `Su27Flanker`'s specific `Aircraft` vtable pointer. The compiler will know the specific address to pass, and the code will know the offsets of the functions to be called. Notice that in this case the method won't be able to call the `init` function, the typechecker will prevent it.
-
-
-To generate the code for the Su27Flanker methods, first we find all implementations and generate code for them separately, but try to put them as close as possible, so that we don't have too long jumps. Code implemented separately that calls onto the base might take a longer jump, but that's ok.
-
-If we just receive the struct directly, then the compiler just won't resort to the vtable, it will resolve the call at compile time.
-
-The `is` keyword is only able to check if a type has a trait by checking if has a vtable for 
-that type. Casting to the type should be possible but syntax is yet to be defined. I like Jai's syntax for casting, where the cast seems to be an unary operator, like `cast(u8) expr`. Casting to a derived type is not allowed, as that would need to keep type information on the executable itself, and I don't want that for now.
+In this case, self is ptr<SomeStruct>, automatically inferred.
 
 
 Pending features:
 
+ - impl
  - low-level memory management functions
- - sizeof<T> function or operator (or T.size() or something)
  - array methods
  - string methods (based on libc, can be done in stdlib)
  - import statements, prelude
