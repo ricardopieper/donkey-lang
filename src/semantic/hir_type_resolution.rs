@@ -1,7 +1,7 @@
 use super::{compiler_errors::CompilerError, hir::HIRType};
 use crate::ast::parser::Spanned;
 use crate::interner::InternedString;
-use crate::types::diagnostics::{ContextualizedCompilerError, TypeErrors};
+use crate::types::diagnostics::{ContextualizedCompilerError, InternalError, TypeErrors};
 use crate::types::type_constructor_db::{FunctionSignature, TypeParameter};
 use crate::types::{
     diagnostics::TypeNotFound, type_constructor_db::TypeConstructParams,
@@ -51,7 +51,7 @@ pub fn hir_type_to_usage(
                 return Ok(TypeConstructParams::Generic(generic.clone()));
             }
             if let Some(type_id) = type_db.constructors.find_by_name(*name) {
-                return Ok(TypeConstructParams::Given(type_id.id));
+                return Ok(TypeConstructParams::simple(type_id.id));
             }
 
             //we tried so hard and got so far
@@ -67,8 +67,8 @@ pub fn hir_type_to_usage(
                 .as_type_inference_error();
         }
 
-        HIRType::Function(generics, params, return_type, variadic) => {
-            let resolved_args = params
+        /*HIRType::Function(generics, params, return_type, variadic) => {
+            let resolved_args: Vec<TypeConstructParams> = params
                 .iter()
                 .map(|arg| {
                     hir_type_to_usage(
@@ -82,7 +82,7 @@ pub fn hir_type_to_usage(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let resolved_return_type = hir_type_to_usage(
+            let resolved_return_type: TypeConstructParams = hir_type_to_usage(
                 on_code_element,
                 return_type,
                 type_db,
@@ -91,13 +91,15 @@ pub fn hir_type_to_usage(
                 location,
             )?;
 
+
+
             Ok(TypeConstructParams::FunctionSignature(FunctionSignature {
                 generics: generics.clone(),
                 params: resolved_args,
                 return_type: Box::new(resolved_return_type),
                 variadic: *variadic,
             }))
-        }
+        }*/,
         HIRType::Generic(base, args) if args.is_empty() => {
             //this case reduces to the simple case
             //convenient for compiler code :)
@@ -127,16 +129,27 @@ pub fn hir_type_to_usage(
                 .collect::<Result<Vec<_>, _>>()?;
 
             if let Some(generic) = type_parameters.iter().find(|g| g.0 == *base) {
-                return Ok(TypeConstructParams::Parameterized(
+                /*return Ok(TypeConstructParams::Parameterized(
                     TypeConstructParams::Generic(generic.clone()).into(),
                     resolved_generics,
-                ));
+                ));*/
+                return 
+                    errors
+                        .internal_error
+                        .push(
+                            InternalError {
+                                error: format!("Generic parameter {} can't be a base type of a composite type", generic.0),
+                            }
+                            .at_spanned(on_code_element, location, loc!()),
+                        )
+                        .as_type_inference_error()
+                
             }
 
             if let Some(type_id) = type_db.constructors.find_by_name(*base) {
                 let base_id = type_id.id;
                 return Ok(TypeConstructParams::Parameterized(
-                    TypeConstructParams::Given(base_id).into(),
+                    base_id,
                     resolved_generics,
                 ));
             }

@@ -262,7 +262,7 @@ pub struct FunctionDeclaration {
     pub type_parameters: Vec<StringSpan>,
     pub body: Vec<SpanAST>,
     pub return_type: Option<ASTType>,
-    pub is_method: bool,
+    pub is_bound_to_self: bool,
     pub is_varargs: bool,
 }
 
@@ -1307,7 +1307,7 @@ impl<'tok> Parser<'tok> {
                 body: ast,
                 return_type,
                 is_varargs,
-                is_method: has_self,
+                is_bound_to_self: has_self,
             }
         }))
     }

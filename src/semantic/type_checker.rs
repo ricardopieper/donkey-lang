@@ -5,7 +5,6 @@ use super::hir::{HIRAstMetadata, HIRExprMetadata};
 
 use super::hir_type_resolution::RootElementType;
 use super::mir_printer::{self, MIRPrinter};
-
 use crate::ast::parser::{Expr, SpannedOperator};
 use crate::interner::InternedString;
 use crate::types::diagnostics::{
@@ -18,6 +17,7 @@ use crate::types::diagnostics::{
     BinaryOperatorNotFound, FieldNotFound, IfStatementNotBoolean, OutOfTypeBounds,
     UnexpectedTypeFound,
 };
+use crate::types::type_constructor_db::TypeConstructParams;
 use crate::types::type_instance_db::{
     CommonTypeInstances, StructMember, TypeInstanceId, TypeInstanceManager,
 };
@@ -48,7 +48,7 @@ pub enum FunctionName {
 }
 
 pub struct TypeCheckContext<'compiler_context, 'source> {
-    top_level_decls: &'compiler_context NameRegistry,
+    top_level_decls: &'compiler_context NameRegistry<TypeInstanceId>,
     type_db: &'compiler_context TypeInstanceManager,
     errors: &'compiler_context mut TypeErrors<'source>,
     on_element: RootElementType,
@@ -935,17 +935,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         }
 
         //at this point all top_level_decls should be inferred
-        match self.top_level_decls.get(&name) {
-            Some(super::type_inference::TypeInferenceResult::Monomorphic(type_instance)) => {
-                *type_instance
-            }
-            Some(super::type_inference::TypeInferenceResult::Polymorphic(_)) => {
-                panic!("Unmonomorphized type in top level declaration")
-            }
-            _ => {
-                panic!("Not found: {}", name)
-            }
-        }
+        self.top_level_decls.get(&name).cloned().expect("Variable not found")
     }
 
     fn check_if_statement_expression(
@@ -1017,7 +1007,7 @@ fn make_method_name_or_index(
 pub fn typecheck<'source>(
     top_nodes: Vec<MIRTopLevelNode<'source>>,
     type_db: &TypeInstanceManager,
-    names: &NameRegistry,
+    names: &NameRegistry<TypeInstanceId>,
     errors: &mut TypeErrors<'source>,
 ) -> Result<Vec<MIRTopLevelNode<'source>>, CompilerError> {
     let mut new_mir = vec![];

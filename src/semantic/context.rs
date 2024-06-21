@@ -14,6 +14,7 @@ use crate::ast::{lexer, parser};
 use crate::interner::InternedString;
 use crate::semantic::{first_assignments, mir_printer, top_level_decls, type_inference};
 use crate::types::diagnostics::TypeErrorPrinter;
+use crate::types::type_constructor_db::TypeConstructParams;
 use crate::types::type_instance_db::TypeInstanceManager;
 use crate::{ast::parser::AST, types::diagnostics::TypeErrors};
 
@@ -107,7 +108,7 @@ pub struct Analyzer<'source> {
     pub mir: Vec<MIRTopLevelNode<'source>>,
     pub unchecked_mir: Vec<MIRTopLevelNode<'source>>,
     pub type_db: TypeInstanceManager,
-    pub globals: NameRegistry,
+    pub globals: NameRegistry<TypeConstructParams>,
     pub type_errors: TypeErrors<'source>,
     pub hir: Vec<InferredTypeHIRRoot<'source>>,
     pub hir_monomorphized: Vec<MonomorphizedHIRRoot<'source>>,
@@ -227,10 +228,6 @@ impl<'source> Analyzer<'source> {
             }
         };
 
-        //let printed_inferred = HIRPrinter::new(&self.type_db).print_hir(&type_inferred_hir);
-
-        //println!("Inferred HIR: \n{}\n", printed_inferred);
-
         self.hir = type_inferred_hir.clone();
 
         let mut monomorphizer = Monomorphizer::new(&mut self.type_db, &mut self.type_errors);
@@ -250,7 +247,7 @@ impl<'source> Analyzer<'source> {
 
         let (monomorphized_hir, new_top_level_decls) = monomorphizer.get_result();
 
-        self.globals.include(&new_top_level_decls);
+       
 
         self.hir_monomorphized = monomorphized_hir.clone();
 
@@ -262,7 +259,7 @@ impl<'source> Analyzer<'source> {
 
             if do_typecheck {
                 let typechecked =
-                    typecheck(mir, &self.type_db, &self.globals, &mut self.type_errors);
+                    typecheck(mir, &self.type_db, &new_top_level_decls, &mut self.type_errors);
 
                 if self.type_errors.count() == 0 {
                     self.mir.extend(typechecked.unwrap());
@@ -354,7 +351,7 @@ mod tests {
 
     #[test]
     fn simple_assign_decl() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
 def my_function():
     x = 1",
@@ -618,8 +615,11 @@ def main() -> Void:
 
     #[test]
     fn access_property_of_struct_and_infer_type() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
+def print_uint(x: u32):
+    intrinsic
+
 def main():
     my_array = [1, 2, 3]
     my_array_length = my_array.length
@@ -1098,7 +1098,7 @@ def my_function():
 
     #[test]
     fn instantiate_struct_and_assign_variables() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
 struct Point2D:
     x: i32
@@ -1128,8 +1128,37 @@ def main() -> Void:
     }
 
     #[test]
+    fn mono_test_2() {
+        let parsed = parse_no_std(
+            "
+struct MyAmazingItem<T>:
+    item: T
+
+def main():
+    amazing_item = MyAmazingItem<i32>()
+",
+        );
+
+        let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+       // println!("PRINTING HIR");
+       // println!("{}", print_hir(&analyzed.hir, &analyzed));
+       // println!("Here is the hir: {:#?}", analyzed.hir);
+
+        assert_eq!(analyzed.type_errors.count(), 0);
+        let final_result = print_hir_mono(analyzed.last_hir_mono(1), &analyzed);
+        println!("{final_result}");
+        let expected = "
+def main() -> Void:
+    amazing_item : MyAmazingItem<i32> = MyAmazingItem<i32>()
+    ";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+    #[test]
     fn mono_test() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
 struct MyAmazingItem<T>:
     item: T

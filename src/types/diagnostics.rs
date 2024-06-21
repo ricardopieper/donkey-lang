@@ -276,7 +276,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeNotFound> {
 }
 
 pub struct TypePromotionFailure {
-    pub target_type: TypeInstanceId,
+    pub target_type: TypeConstructParams,
 }
 impl CompilerErrorData for TypePromotionFailure {}
 
@@ -290,7 +290,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypePromotionFailure> {
             f,
             "{on_element}, type promotion failure: Cannot promote an integer literal to type: {target_type_name}",
             on_element = self.on_element.diag_name(),
-            target_type_name = self.error.target_type.to_string(type_db),
+            target_type_name = self.error.target_type.to_string(&type_db.constructors),
         )
     }
 }
@@ -314,6 +314,30 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnexpectedTypeFound> {
         )
     }
 }
+
+
+pub struct OutOfTypeBoundsTypeConstructor<'source> {
+    pub typ: TypeConstructParams,
+    pub expr: HIRExprMetadata<'source>,
+}
+impl CompilerErrorData for OutOfTypeBoundsTypeConstructor<'_> {}
+
+impl<'source> CompilerErrorDisplay for CompilerErrorContext<OutOfTypeBoundsTypeConstructor<'source>> {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, literal value {expr:?} is out of bounds for type {type}. You can try extracting this value to a different variable and assign a larger type.",
+            on_element = self.on_element.diag_name(),
+            expr = self.error.expr,
+            type = self.error.typ.to_string(&type_db.constructors),
+        )
+    }
+}
+
 
 pub struct OutOfTypeBounds<'source> {
     pub typ: TypeInstanceId,
@@ -380,6 +404,31 @@ impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFound> {
             operator = self.error.operator.to_string(),
             lhs_type = self.error.lhs.to_string(type_db),
             rhs_type = self.error.rhs.to_string(type_db)
+        )
+    }
+}
+
+
+pub struct BinaryOperatorNotFoundForTypeConstructor {
+    pub lhs: TypeConstructParams,
+    pub rhs: TypeConstructParams,
+    pub operator: Operator,
+}
+impl CompilerErrorData for BinaryOperatorNotFoundForTypeConstructor {}
+
+impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFoundForTypeConstructor> {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, binary operator {operator} not found for types: {lhs_type} {operator} {rhs_type}",
+            on_element = self.on_element.diag_name(),
+            operator = self.error.operator.to_string(),
+            lhs_type = self.error.lhs.to_string(&type_db.constructors),
+            rhs_type = self.error.rhs.to_string(&type_db.constructors)
         )
     }
 }
@@ -892,7 +941,7 @@ macro_rules! make_type_errors {
     }
 }
 
-pub const REPORT_COMPILER_ERR_LOCATION: bool = false;
+pub const REPORT_COMPILER_ERR_LOCATION: bool = true;
 
 make_type_errors!(
     assign_mismatches = TypeMismatch<AssignContext<'source>>,
@@ -905,6 +954,7 @@ make_type_errors!(
     variable_not_found = VariableNotFound,
     unexpected_types = UnexpectedTypeFound,
     binary_op_not_found = BinaryOperatorNotFound,
+    binary_op_not_found_tc = BinaryOperatorNotFoundForTypeConstructor,
     unary_op_not_found = UnaryOperatorNotFound,
     field_not_found = FieldNotFound,
     method_not_found = MethodNotFound,
@@ -915,6 +965,7 @@ make_type_errors!(
     type_inference_failure = TypeInferenceFailure,
     type_construction_failure = TypeConstructionFailure,
     out_of_bounds = OutOfTypeBounds<'source>,
+    out_of_bounds_constructor = OutOfTypeBoundsTypeConstructor<'source>,
     invalid_casts = InvalidCast<'source>,
     type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>,
     invalid_derefed_type = DerefOnNonPointerError,

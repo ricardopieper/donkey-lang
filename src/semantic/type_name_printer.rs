@@ -1,7 +1,7 @@
 use crate::{
     semantic::hir::HIRType,
     types::{
-        type_constructor_db::TypeConstructParams,
+        type_constructor_db::{TypeConstructParams, TypeKind},
         type_instance_db::{TypeInstanceId, TypeInstanceManager},
     },
 };
@@ -18,50 +18,35 @@ impl TypeNamePrinter for TypeInstanceId {
 impl TypeNamePrinter for TypeConstructParams {
     fn print_name(&self, type_db: &TypeInstanceManager) -> String {
         match self {
-            TypeConstructParams::Given(id) => type_db.constructors.get_name(*id),
             TypeConstructParams::Generic(parameter) => parameter.0.to_string(),
             TypeConstructParams::Parameterized(constructor, parameters) => {
-                let base_name = constructor.print_name(type_db);
 
-                let params = parameters
-                    .iter()
-                    .map(|x| x.print_name(type_db))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let ty = type_db.constructors.find(*constructor);
+               
+                if ty.kind == TypeKind::Function {
+                    let params_names = ty.function_params
+                        .iter()
+                        .map(|x| x.to_string(&type_db.constructors))
+                        .collect::<Vec<_>>()
+                        .join(", ");
 
-                format!("{base_name}<{params}>")
-            }
-            TypeConstructParams::FunctionSignature(call) => {
-                let params = call
-                    .params
-                    .iter()
-                    .map(|x| x.print_name(type_db))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                    let return_type = ty.function_return_type.as_ref().unwrap().print_name(type_db);
 
-                let generic = call
-                    .generics
-                    .iter()
-                    .map(|x| x.0.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                let variadic_str = if call.variadic.0 { "..." } else { "" };
-                let variadic_str = if params.is_empty() {
-                    variadic_str.to_string()
+                    return format!("fn({params_names}) -> {return_type}");
                 } else {
-                    format!(", {}", variadic_str)
-                };
+                    if parameters.len() == 0 {
+                        return constructor.to_string(&type_db.constructors);
+                    }
 
-                let type_args_str = if generic.is_empty() {
-                    String::new()
-                } else {
-                    format!("<{generic}>")
-                };
+                    let params_names = parameters
+                        .iter()
+                        .map(|x| x.print_name(type_db))
+                        .collect::<Vec<_>>()
+                        .join(", ");
 
-                let return_type = call.return_type.print_name(type_db);
-
-                format!("fn {type_args_str}({params}{variadic_str}) -> {return_type}")
+                    let base_name = constructor.to_string(&type_db.constructors);
+                    format!("{base_name}<{params_names}>")
+                }
             }
         }
     }
@@ -87,24 +72,6 @@ impl TypeNamePrinter for HIRType {
             HIRType::Simple(s) => format!("UNRESOLVED! {}", s),
             HIRType::Generic(s, g) => {
                 format!("UNRESOLVED {}<{}>", s, slice_types_str(g, type_db))
-            }
-            HIRType::Function(type_args, params, return_type, variadic) => {
-                let type_args_str = type_args
-                    .iter()
-                    .map(|x| x.0.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let params_str = slice_types_str(params, type_db);
-                let return_type_str = return_type.print_name(type_db);
-                let variadic_str = if variadic.0 { "..." } else { "" };
-                let type_args_str = if type_args_str.is_empty() {
-                    String::new()
-                } else {
-                    format!("<{type_args_str}>")
-                };
-                format!(
-                    "UNRESOLVED fn <{type_args_str}>({params_str} {variadic_str}) -> {return_type_str}"
-                )
             }
         }
     }

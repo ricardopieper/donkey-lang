@@ -263,7 +263,7 @@ fn print_fdecl(fdecl: &FunctionDeclaration, parenthesized: bool, indent: &str) -
         type_parameters,
         return_type,
         is_varargs,
-        is_method,
+        is_bound_to_self: is_method,
     } = fdecl;
     let mut buf = "".to_string();
     let function_name = function_name.0;
