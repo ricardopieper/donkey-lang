@@ -1,15 +1,14 @@
 use crate::{
     interner::InternedString,
-    semantic::hir::{HIRTypedBoundName, HIR}, types::type_constructor_db::TypeConstructParams,
+    semantic::hir::{HIRTypedBoundName, HIR},
+    types::type_constructor_db::TypeConstructParams,
 };
 
 use std::collections::HashSet;
 
-use super::{
-    hir::{
-        FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, FunctionCall,
-        GlobalsInferredHIRRoot, HIRExpr, HIRRoot, HIRTypeDef, MethodCall, UninferredHIR,
-    }
+use super::hir::{
+    FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, FunctionCall,
+    GlobalsInferredHIRRoot, HIRExpr, HIRRoot, HIRTypeDef, MethodCall, UninferredHIR,
 };
 
 fn make_first_assignments_in_body<'source>(

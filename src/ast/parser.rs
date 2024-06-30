@@ -390,11 +390,7 @@ impl Spanned for AST {
                 let last = r.last().unwrap().span;
                 first.range(&last)
             }
-            AST::ImplDeclaration {
-                struct_name,
-                type_parameters,
-                body,
-            } => struct_name.get_span(),
+            AST::ImplDeclaration { struct_name, .. } => struct_name.get_span(),
         }
     }
 }
@@ -988,7 +984,7 @@ impl<'tok> Parser<'tok> {
                     }
                     ParsingEvent::TryAnotherGrammarRule => {
                         break;
-                    },
+                    }
                     ParsingEvent::GrammarRuleFail(details, token) => {
                         return ParsingEvent::GrammarRuleFail(details, token)
                     }
@@ -2397,7 +2393,7 @@ impl SomeStruct:
 
 def not_method():
     print(1)
-    "
+    ",
         );
     }
 
@@ -2411,14 +2407,14 @@ impl SomeStruct:
 def not_method():
     print(1)
     ",
-    "
+            "
 impl SomeStruct:
     def method(self):
         print(self)
 
 def not_method():
     print(1)    
-    "
+    ",
         );
     }
 

@@ -1,17 +1,21 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::parser::SpannedOperator, interner::*, report, semantic::{
+    ast::parser::SpannedOperator,
+    interner::*,
+    semantic::{
         hir::{HIRUserTypeInfo, MethodCall},
         hir_printer::{self, HIRPrinter},
         type_name_printer::TypeNamePrinter,
-    }, types::{
+    },
+    types::{
         diagnostics::{
-            BinaryOperatorNotFound, CompilerErrorContext, ContextualizedCompilerError, FieldNotFound, TypeConstructionFailure, TypeErrors, TypeNotFound, UnaryOperatorNotFound
+            BinaryOperatorNotFound, ContextualizedCompilerError, FieldNotFound,
+            TypeConstructionFailure, TypeErrors, UnaryOperatorNotFound,
         },
-        type_constructor_db::{FunctionSignature, TypeConstructParams, TypeKind, TypeParameter},
-        type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager},
-    }
+        type_constructor_db::{TypeConstructParams, TypeParameter},
+        type_instance_db::{TypeInstanceId, TypeInstanceManager},
+    },
 };
 
 use super::{
@@ -173,10 +177,10 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
         let new_body = self.monomorphize_body(function_name, body, &typearg_map, original_index)?;
 
         log!("Starting monomorphization of return type");
-        let new_return_type = self.construct_type(&return_type, vec![],&typearg_map);
+        let new_return_type = self.construct_type(&return_type, vec![], &typearg_map);
         log!("Return type monomorphized");
 
-        let self_type_method_of = method_of.map(|x| self.construct_type(&x, vec![],&typearg_map));
+        let self_type_method_of = method_of.map(|x| self.construct_type(&x, vec![], &typearg_map));
 
         if positional_type_arguments.len() > 0 {
             let new_function_name_suffix = positional_type_arguments
@@ -259,7 +263,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     synthetic,
                 } => {
                     log!("Monomorphizing declaration of variable {}", var);
-                   
+
                     if synthetic {
                         log!("Declaration of var {} is synthetic (compiler-generated during analysis of first declarations of variables), therefore the compiler will re-infer the type", var);
                         let mono_expr = self.monomorphize_expr(
@@ -280,7 +284,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                             synthetic: true,
                         });
                     } else {
-                        let mono_typedef = self.construct_type(&typedef, vec![],&typearg_map);
+                        let mono_typedef = self.construct_type(&typedef, vec![], &typearg_map);
                         let mono_expr = self.monomorphize_expr(
                             RootElementType::Function(function_name),
                             &expression,
@@ -445,7 +449,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
         on_function: RootElementType,
         call: &FunctionCall<'s, TypeConstructParams>,
         monomorphization_type_map: &HashMap<TypeParameter, TypeInstanceId>, //these are the parameters of the monomorphization, a function call could be passing type arguments
-        original_index: usize,                                //that are completely different.
+        original_index: usize, //that are completely different.
     ) -> Result<FunctionCall<'s, TypeInstanceId>, CompilerError> {
         let FunctionCall {
             function,
@@ -463,7 +467,11 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
         let type_args_constructed = type_args
             .iter()
             .map(|arg| HIRUserTypeInfo {
-                resolved_type: self.construct_type(&arg.resolved_type, vec![], monomorphization_type_map),
+                resolved_type: self.construct_type(
+                    &arg.resolved_type,
+                    vec![],
+                    monomorphization_type_map,
+                ),
                 user_given_type: arg.user_given_type.clone(),
             })
             .collect::<Vec<_>>();
@@ -498,7 +506,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                         //params will always be empty, function definitions don't carry type parameters because they are just definitions
                         let function_type_data = self.type_db.constructors.find(*base);
                         let generics = function_type_data.type_params.clone();
-                        
+
                         //suppose we have foo<T>(x: T) and we are calling foo<i32>(5), then we need to construct a type map that maps T to i32
                         let mut call_type_args = HashMap::new();
                         for (i, type_param) in generics.iter().enumerate() {
@@ -508,23 +516,24 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                                 type_arg.expect("not enough type parameters").resolved_type,
                             );
                         }
-                        /*let function_type = self(ty,  
-                            type_args_constructed.iter().map(|arg| arg.resolved_type).collect::<Vec<_>>(),
-                            &call_type_args);*/
+                        /*let function_type = self(ty,
+                        type_args_constructed.iter().map(|arg| arg.resolved_type).collect::<Vec<_>>(),
+                        &call_type_args);*/
                         //generate a new function name that contains the type names suffixed
 
                         let function_type = self.type_db.construct_type(
-                            *base, 
-                            &type_args_constructed.iter().map(|arg| arg.resolved_type).collect::<Vec<_>>()
+                            *base,
+                            &type_args_constructed
+                                .iter()
+                                .map(|arg| arg.resolved_type)
+                                .collect::<Vec<_>>(),
                         );
 
                         let function_type = match function_type {
                             Ok(function_type) => function_type,
                             Err(e) => {
                                 return self.errors.type_construction_failure.push_inference_error(
-                                    TypeConstructionFailure {
-                                        error: e
-                                    }.at_spanned(
+                                    TypeConstructionFailure { error: e }.at_spanned(
                                         on_function,
                                         *meta,
                                         loc!(),
@@ -548,18 +557,24 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
 
                         let interned = InternedString::new(&new_name);
 
-                        self.new_top_level_decls
-                            .insert(interned, function_type);
+                        self.new_top_level_decls.insert(interned, function_type);
 
                         HIRExpr::Variable(interned, function_type, meta)
-                    },
+                    }
                 }
             }
-            _ => self.monomorphize_expr(on_function, function, monomorphization_type_map, original_index)?,
+            _ => self.monomorphize_expr(
+                on_function,
+                function,
+                monomorphization_type_map,
+                original_index,
+            )?,
         };
         let args_monomorphized = args
             .iter()
-            .map(|arg| self.monomorphize_expr(on_function, arg, monomorphization_type_map, original_index))
+            .map(|arg| {
+                self.monomorphize_expr(on_function, arg, monomorphization_type_map, original_index)
+            })
             .collect::<Result<Vec<_>, _>>();
 
         let type_instance = self.type_db.get_instance(function_monomorphized.get_type());
@@ -569,7 +584,9 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             args: args_monomorphized?,
             type_args: type_args_constructed,
             meta_ast: *meta_ast,
-            return_type: type_instance.function_return_type.expect("Expected return type to exist on function type"),
+            return_type: type_instance
+                .function_return_type
+                .expect("Expected return type to exist on function type"),
             meta_expr: *meta_expr,
         })
     }
@@ -585,7 +602,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
         let hirexpr = match expr {
             HIRExpr::Literal(literal, ty, meta) => {
                 log!("Monomorphizing literal, should be no-op");
-                
+
                 match ty {
                     TypeConstructParams::Generic(_) => panic!("Literals should not have generic type, this is a type inference bug detected in monomorphization"),
                     TypeConstructParams::Parameterized(_, args) if args.len() > 0 => panic!("Literals should not have type parameters, this is a type inference bug detected in monomorphization"),
@@ -598,7 +615,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             HIRExpr::Variable(var_name, ty, meta) => {
                 log!("monomorphizing variable {}", var_name.to_string());
                 //TODO store the type of the variable somewhere else. Only the name matters here.
-                let constructed_type = self.construct_type(ty,  vec![], typearg_map);
+                let constructed_type = self.construct_type(ty, vec![], typearg_map);
                 log!(
                     "monomorphizing variable {} result type = {}",
                     var_name.to_string(),
@@ -609,7 +626,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             HIRExpr::Cast(expr, user_type, poly_ty, meta) => {
                 let mono_expr =
                     self.monomorphize_expr(on_function, expr, typearg_map, original_index)?;
-                let casted_type = self.construct_type(poly_ty,  vec![], typearg_map);
+                let casted_type = self.construct_type(poly_ty, vec![], typearg_map);
                 Ok(HIRExpr::Cast(
                     mono_expr.into(),
                     user_type.clone(),
@@ -625,7 +642,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     self.monomorphize_expr(on_function, rhs, typearg_map, original_index)?;
 
                 if let TypeInferenceCertainty::Certain = type_inference_certainty {
-                    let constructed_type = self.construct_type(ty,  vec![], typearg_map);
+                    let constructed_type = self.construct_type(ty, vec![], typearg_map);
                     Ok(HIRExpr::BinaryOperation(
                         mono_lhs.into(),
                         *op,
@@ -657,7 +674,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                 Ok(HIRExpr::StructInstantiate(
                     *name,
                     hir_type.clone(),
-                    self.construct_type(ty,  vec![], typearg_map),
+                    self.construct_type(ty, vec![], typearg_map),
                     meta,
                 ))
             }
@@ -671,7 +688,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                         original_index,
                     )?
                     .into(),
-                    self.construct_type(ty,  vec![], typearg_map),
+                    self.construct_type(ty, vec![], typearg_map),
                     meta,
                 ))
             }
@@ -685,7 +702,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                         original_index,
                     )?
                     .into(),
-                    self.construct_type(ty,  vec![], typearg_map),
+                    self.construct_type(ty, vec![], typearg_map),
                     meta,
                 ))
             }
@@ -695,7 +712,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     self.monomorphize_expr(on_function, expr, typearg_map, original_index)?;
 
                 if let TypeInferenceCertainty::Certain = type_inference_certainty {
-                    let constructed_type = self.construct_type(ty,  vec![], typearg_map);
+                    let constructed_type = self.construct_type(ty, vec![], typearg_map);
                     Ok(HIRExpr::UnaryExpression(
                         *op,
                         mono_rhs.into(),
@@ -710,15 +727,16 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     self.infer_unary_monomorphized(mono_rhs, meta, *op, on_function)
                 }
             }
-            HIRExpr::MemberAccess(obj, member, field_ty, meta) => {
-   
+            HIRExpr::MemberAccess(obj, member, _field_ty, meta) => {
                 let p = hir_printer::HIRExprPrinter::new(&self.type_db, false);
 
-                log!("Monomorphizing member access on {}, member {member}, obj data {obj:#?}", 
+                log!(
+                    "Monomorphizing member access on {}, member {member}, obj data {obj:#?}",
                     p.print(obj)
                 );
 
-                let object = self.monomorphize_expr(on_function, obj, typearg_map, original_index)?;
+                let object =
+                    self.monomorphize_expr(on_function, obj, typearg_map, original_index)?;
 
                 let object_type = object.get_type();
                 let type_data = self.type_db.get_instance(object_type);
@@ -745,11 +763,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                             object_type,
                             field: *member,
                         }
-                        .at_spanned(
-                            on_function,
-                            *meta,
-                            loc!(),
-                        ),
+                        .at_spanned(on_function, *meta, loc!()),
                     )
                 }
             }
@@ -763,7 +777,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(HIRExpr::Array(
                     items,
-                    self.construct_type(expr_type,  vec![], typearg_map),
+                    self.construct_type(expr_type, vec![], typearg_map),
                     meta,
                 ))
             }
@@ -774,8 +788,8 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                 meta,
             } => {
                 //type is given, still it could be parameterized...
-                let ty = self.construct_type(type_variable,  vec![], typearg_map);
-                let typedata_type = self.construct_type(type_data,  vec![], typearg_map);
+                let ty = self.construct_type(type_variable, vec![], typearg_map);
+                let typedata_type = self.construct_type(type_data, vec![], typearg_map);
                 log!(
                     "Monomorphizing type name, type = {:?}",
                     ty.print_name(&self.type_db)
@@ -789,7 +803,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             HIRExpr::SelfValue(ty, meta) => {
                 log!("Monomorphizing self value");
                 Ok(HIRExpr::SelfValue(
-                    self.construct_type(ty,  vec![], typearg_map),
+                    self.construct_type(ty, vec![], typearg_map),
                     meta,
                 ))
             }
@@ -826,7 +840,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             .map(|arg| self.monomorphize_expr(on_function, arg, typearg_map, original_index))
             .collect::<_>();
 
-        let constructed_type = self.construct_type(return_type,  vec![], typearg_map);
+        let constructed_type = self.construct_type(return_type, vec![], typearg_map);
 
         Ok(MethodCall {
             object: obj_replaced.into(),
@@ -843,23 +857,19 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
         positional_type_arguments: Vec<TypeInstanceId>,
         monomorphization_type_map: &HashMap<TypeParameter, TypeInstanceId>,
     ) -> TypeInstanceId {
-        
         let type_name = ty.to_string(&self.type_db.constructors);
 
-        log!(
-            "Constructing type: {}, {:?}",
-            type_name,
-            ty
-        );
+        log!("Constructing type: {}, {:?}", type_name, ty);
 
-        match self.type_db
-            .construct_usage_generic(ty,  &positional_type_arguments, monomorphization_type_map) {
-                Ok(type_instance) => type_instance,
-                Err(e) => {
-                    panic!("Unexpected error while constructing generic type: {:?}", e);
-                }
+        match self.type_db.construct_usage_generic(
+            ty,
+            &positional_type_arguments,
+            monomorphization_type_map,
+        ) {
+            Ok(type_instance) => type_instance,
+            Err(e) => {
+                panic!("Unexpected error while constructing generic type: {:?}", e);
             }
-            
-    
+        }
     }
 }

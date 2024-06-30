@@ -316,14 +316,15 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnexpectedTypeFound> {
     }
 }
 
-
 pub struct OutOfTypeBoundsTypeConstructor<'source> {
     pub typ: TypeConstructParams,
     pub expr: HIRExprMetadata<'source>,
 }
 impl CompilerErrorData for OutOfTypeBoundsTypeConstructor<'_> {}
 
-impl<'source> CompilerErrorDisplay for CompilerErrorContext<OutOfTypeBoundsTypeConstructor<'source>> {
+impl<'source> CompilerErrorDisplay
+    for CompilerErrorContext<OutOfTypeBoundsTypeConstructor<'source>>
+{
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager,
@@ -338,7 +339,6 @@ impl<'source> CompilerErrorDisplay for CompilerErrorContext<OutOfTypeBoundsTypeC
         )
     }
 }
-
 
 pub struct OutOfTypeBounds<'source> {
     pub typ: TypeInstanceId,
@@ -409,7 +409,6 @@ impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFound> {
     }
 }
 
-
 pub struct BinaryOperatorNotFoundForTypeConstructor {
     pub lhs: TypeConstructParams,
     pub rhs: TypeConstructParams,
@@ -460,7 +459,7 @@ pub struct FieldNotFound<T> {
     pub object_type: T,
     pub field: InternedString,
 }
-impl<T: TypeNamePrinter> CompilerErrorData for FieldNotFound<T>  {}
+impl<T: TypeNamePrinter> CompilerErrorData for FieldNotFound<T> {}
 
 impl<T: TypeNamePrinter> CompilerErrorDisplay for CompilerErrorContext<FieldNotFound<T>> {
     fn fmt_err(
@@ -661,13 +660,10 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeConstructionFailure> {
             "{on_element}, type construction failed: {variable}",
             on_element = self.on_element.diag_name(),
             variable = match self.error.error {
-                TypeConstructionError::TypeNotFound { name } => format!("Type not found: {}", name),
                 TypeConstructionError::IncorrectNumberOfArgs { expected, received } =>
                     format!("Incorrect number of args: expected {expected}, received {received}"),
                 TypeConstructionError::InsufficientInformation =>
                     "Insufficient information to construct type".into(),
-                TypeConstructionError::InvalidTypeConstructionArguments =>
-                    "Invalid type construction arguments".into(),
             }
         )
     }

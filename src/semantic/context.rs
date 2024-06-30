@@ -246,8 +246,6 @@ impl<'source> Analyzer<'source> {
 
         let (monomorphized_hir, new_top_level_decls) = monomorphizer.get_result();
 
-
-
         self.hir_monomorphized = monomorphized_hir.clone();
 
         let mir = hir_to_mir(monomorphized_hir, &mut self.type_errors);
@@ -259,7 +257,6 @@ impl<'source> Analyzer<'source> {
         for (k, v) in globals.names.iter() {
             match v {
                 TypeConstructParams::Parameterized(tc, args) if args.len() == 0 => {
-
                     let type_data = self.type_db.constructors.find(*tc);
 
                     if type_data.kind == TypeKind::Function && type_data.type_params.len() > 0 {
@@ -271,7 +268,7 @@ impl<'source> Analyzer<'source> {
                         .construct_type(*tc, &[])
                         .expect(&format!("Failed to construct type for name {}", k));
                     top_level_decls_instantiated.insert(k.clone(), instance);
-                },
+                }
                 _ => {}
             }
         }
@@ -282,8 +279,12 @@ impl<'source> Analyzer<'source> {
             new_top_level_decls.print(&self.type_db);
 
             if do_typecheck {
-                let typechecked =
-                    typecheck(mir, &self.type_db, &top_level_decls_instantiated, &mut self.type_errors);
+                let typechecked = typecheck(
+                    mir,
+                    &self.type_db,
+                    &top_level_decls_instantiated,
+                    &mut self.type_errors,
+                );
 
                 if self.type_errors.count() == 0 {
                     self.mir.extend(typechecked.unwrap());
@@ -355,7 +356,8 @@ mod tests {
             context::test_utils::{do_analysis, parse, parse_no_std},
             hir::HIRTypeDisplayer,
             hir_printer::HIRPrinter,
-            mir_printer::print_mir, type_name_printer::TypeNamePrinter,
+            mir_printer::print_mir,
+            type_name_printer::TypeNamePrinter,
         },
     };
 
@@ -916,7 +918,9 @@ def my_function():
         );
 
         assert_eq!(
-            analyzed.type_errors.binary_op_not_found_tc[0].error.operator,
+            analyzed.type_errors.binary_op_not_found_tc[0]
+                .error
+                .operator,
             Operator::Plus
         );
     }
@@ -1167,9 +1171,9 @@ def main():
 
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
-       // println!("PRINTING HIR");
-       // println!("{}", print_hir(&analyzed.hir, &analyzed));
-       // println!("Here is the hir: {:#?}", analyzed.hir);
+        // println!("PRINTING HIR");
+        // println!("{}", print_hir(&analyzed.hir, &analyzed));
+        // println!("Here is the hir: {:#?}", analyzed.hir);
 
         assert_eq!(analyzed.type_errors.count(), 0);
         let final_result = print_hir_mono(analyzed.last_hir_mono(1), &analyzed);
@@ -1664,7 +1668,6 @@ def list_new_i32() -> List<i32>:
 
         assert_eq!(expected.trim(), final_result.trim());
         assert_eq!(analyzed.type_errors.count(), 0);
-
     }
 
     #[test]
@@ -1745,7 +1748,6 @@ def print_type_data_i32() -> Void:
 
         assert_eq!(expected.trim(), final_result.trim());
     }
-
 
     #[test]
     fn zero_arguments_bug() {

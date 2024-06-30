@@ -20,17 +20,21 @@ impl TypeNamePrinter for TypeConstructParams {
         match self {
             TypeConstructParams::Generic(parameter) => parameter.0.to_string(),
             TypeConstructParams::Parameterized(constructor, parameters) => {
-
                 let ty = type_db.constructors.find(*constructor);
-               
+
                 if ty.kind == TypeKind::Function {
-                    let params_names = ty.function_params
+                    let params_names = ty
+                        .function_params
                         .iter()
                         .map(|x| x.to_string(&type_db.constructors))
                         .collect::<Vec<_>>()
                         .join(", ");
 
-                    let return_type = ty.function_return_type.as_ref().unwrap().print_name(type_db);
+                    let return_type = ty
+                        .function_return_type
+                        .as_ref()
+                        .unwrap()
+                        .print_name(type_db);
 
                     return format!("fn({params_names}) -> {return_type}");
                 } else {

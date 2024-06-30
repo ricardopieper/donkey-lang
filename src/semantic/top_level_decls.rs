@@ -1,24 +1,23 @@
 use std::collections::HashMap;
 
 use crate::interner::InternedString;
-use crate::semantic::hir;
 use crate::semantic::type_name_printer::TypeNamePrinter;
 use crate::types::diagnostics::{
     ContextualizedCompilerError, ImplMismatchTypeArgs, TypeErrors, TypeNotFound,
 };
 use crate::types::type_constructor_db::{
-    FunctionSignature, TypeConstructParams, TypeConstructorFunctionDeclaration, TypeKind, TypeSign, Variadic,
+    FunctionSignature, TypeConstructParams, TypeKind, TypeSign, Variadic,
 };
 use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::compiler_errors::CompilerError;
 use super::hir::{GlobalsInferredHIRRoot, HIRRoot, HIRType, HIRTypedBoundName, StartingHIRRoot};
 use super::hir_type_resolution::{hir_type_to_usage, RootElementType};
-use super::type_inference::{TypeInferenceContext};
+use super::type_inference::TypeInferenceContext;
 
 #[derive(Clone)]
 pub struct NameRegistry<T> {
-    pub names: HashMap<InternedString, T>
+    pub names: HashMap<InternedString, T>,
 }
 
 impl<T: Clone> NameRegistry<T> {
@@ -84,16 +83,18 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
 
                 let params_usage = parameters
                     .iter()
-                    .map(|x| hir_type_to_usage(
-                        RootElementType::Function(function_name),
-                        &x.type_data,
-                        type_db,
-                        &type_parameters,
-                        errors,
-                        meta,
-                    ))
+                    .map(|x| {
+                        hir_type_to_usage(
+                            RootElementType::Function(function_name),
+                            &x.type_data,
+                            type_db,
+                            &type_parameters,
+                            errors,
+                            meta,
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
-            
+
                 let return_type_usage = hir_type_to_usage(
                     RootElementType::Function(function_name),
                     &return_type,
@@ -103,14 +104,14 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                     meta,
                 )?;
 
-                let type_id = type_db.constructors.add_function_signature(
-                    FunctionSignature {
+                let type_id = type_db
+                    .constructors
+                    .add_function_signature(FunctionSignature {
                         type_parameters: type_parameters.clone(),
                         params: params_usage.clone(),
                         return_type: return_type_usage.clone(),
                         variadic: Variadic(is_varargs),
-                    },
-                );
+                    });
 
                 let mut typer = TypeInferenceContext {
                     on_function: RootElementType::Function(function_name),
@@ -122,19 +123,18 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                     impl_of: None,
                 };
 
-              
                 let method_of = match method_of {
                     Some(method_of) => Some(typer.make_usage(&method_of, meta)?),
                     None => None,
                 };
 
-             
                 registry.insert(function_name, TypeConstructParams::simple(type_id));
 
                 new_hir.push(GlobalsInferredHIRRoot::DeclareFunction {
                     function_name,
                     type_parameters,
-                    parameters: params_usage.clone()
+                    parameters: params_usage
+                        .clone()
                         .into_iter()
                         .zip(parameters.into_iter().map(|x| x.name))
                         .map(|(type_usage, name)| HIRTypedBoundName {
@@ -150,8 +150,6 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                     is_external,
                     method_of,
                 });
-            
-                
             }
             HIRRoot::StructDeclaration {
                 struct_name,
@@ -184,7 +182,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                     let type_id = type_db.constructors.add_generic(
                         TypeKind::Struct,
                         struct_name,
-                        type_parameters.clone()
+                        type_parameters.clone(),
                     );
                     for field in fields.iter() {
                         let type_usage = hir_type_to_usage(
@@ -263,12 +261,12 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                             function_name,
                             type_parameters: function_type_parameters,
                             parameters,
-                            body,
+                            body: _,
                             return_type,
-                            meta,
-                            method_of,
-                            is_intrinsic,
-                            is_external,
+                            meta: _,
+                            method_of: _,
+                            is_intrinsic: _,
+                            is_external: _,
                             is_varargs,
                         } => {
                             let mut typer = TypeInferenceContext {
@@ -332,7 +330,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                                     params,
                                     return_type: return_type_usage,
                                     variadic: Variadic(is_varargs),
-                                }
+                                },
                             );
                         }
                         HIRRoot::StructDeclaration { .. } => panic!("Shouldn't exist"),

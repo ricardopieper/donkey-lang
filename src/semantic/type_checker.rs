@@ -536,8 +536,12 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             .map(|arg| self.typecheck(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let skip_self = function_type.function_args
-            .iter().skip(1).map(|x|*x).collect::<Vec<TypeInstanceId>>();
+        let skip_self = function_type
+            .function_args
+            .iter()
+            .skip(1)
+            .map(|x| *x)
+            .collect::<Vec<TypeInstanceId>>();
 
         //-1 por que é metodo e o primeiro é self...
         if skip_self.len() != checked_args.len() {
@@ -937,7 +941,10 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         }
 
         //at this point all top_level_decls should be inferred
-        self.top_level_decls.get(&name).cloned().expect(&format!("Variable not found: {}", name))
+        self.top_level_decls
+            .get(&name)
+            .cloned()
+            .expect(&format!("Variable not found: {}", name))
     }
 
     fn check_if_statement_expression(

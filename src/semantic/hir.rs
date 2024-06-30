@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Write;
 use std::ops::Deref;
@@ -234,10 +233,9 @@ impl<'source> Display for HIRTypeDisplayer<'source> {
                 f.write_char('<')?;
                 f.write_str(&comma_sep)?;
                 f.write_char('>')
-            }
-            //HIRType::Function(_, _, _, _) => {
-            //    f.write_str("Must implement display for HIRType::Function")
-            //}
+            } //HIRType::Function(_, _, _, _) => {
+              //    f.write_str("Must implement display for HIRType::Function")
+              //}
         }
     }
 }
@@ -332,12 +330,6 @@ pub enum HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType> {
         methods: Vec<HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType>>,
         meta: HIRAstMetadata<'source>,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HIRScope<'source, TUserSpecifiedTypeData, TInferredTypeData> {
-    statements: Vec<HIR<'source, TUserSpecifiedTypeData, TInferredTypeData>>,
-    declared_variables: HashMap<InternedString, TUserSpecifiedTypeData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -584,7 +576,6 @@ fn ast_decl_function_to_hir<'source>(
     return_type: &Option<ASTType>,
     is_varargs: bool,
     ast: &'source AST,
-    is_method_of: Option<InternedString>,
     accum: &mut Vec<StartingHIRRoot<'source>>,
 ) {
     if body.len() == 1 {
@@ -805,7 +796,6 @@ fn ast_impl_to_hir<'source>(
             &node.return_type,
             node.is_varargs,
             ast,
-            if node.is_bound_to_self { Some(struct_name) } else {None},
             &mut functions,
         );
     }
@@ -838,7 +828,6 @@ pub fn ast_globals_to_hir<'source>(ast: &'source AST) -> Vec<StartingHIRRoot<'so
                 return_type,
                 *is_varargs,
                 ast,
-                None,
                 &mut accum,
             );
         }

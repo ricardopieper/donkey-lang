@@ -2,7 +2,7 @@ use super::{compiler_errors::CompilerError, hir::HIRType};
 use crate::ast::parser::Spanned;
 use crate::interner::InternedString;
 use crate::types::diagnostics::{ContextualizedCompilerError, InternalError, TypeErrors};
-use crate::types::type_constructor_db::{FunctionSignature, TypeParameter};
+use crate::types::type_constructor_db::TypeParameter;
 use crate::types::{
     diagnostics::TypeNotFound, type_constructor_db::TypeConstructParams,
     type_instance_db::TypeInstanceManager,
@@ -133,17 +133,18 @@ pub fn hir_type_to_usage(
                     TypeConstructParams::Generic(generic.clone()).into(),
                     resolved_generics,
                 ));*/
-                return 
-                    errors
-                        .internal_error
-                        .push(
-                            InternalError {
-                                error: format!("Generic parameter {} can't be a base type of a composite type", generic.0),
-                            }
-                            .at_spanned(on_code_element, location, loc!()),
-                        )
-                        .as_type_inference_error()
-                
+                return errors
+                    .internal_error
+                    .push(
+                        InternalError {
+                            error: format!(
+                                "Generic parameter {} can't be a base type of a composite type",
+                                generic.0
+                            ),
+                        }
+                        .at_spanned(on_code_element, location, loc!()),
+                    )
+                    .as_type_inference_error();
             }
 
             if let Some(type_id) = type_db.constructors.find_by_name(*base) {

@@ -11,11 +11,8 @@ use super::type_constructor_db::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeConstructionError {
-    TypeNotFound { name: InternedString },
-    //GenericArgumentNotFound { name: String },
     IncorrectNumberOfArgs { expected: usize, received: usize },
     InsufficientInformation,
-    InvalidTypeConstructionArguments,
 }
 
 impl TypeNamePrinter for TypeConstructorId {

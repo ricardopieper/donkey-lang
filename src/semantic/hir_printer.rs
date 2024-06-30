@@ -109,7 +109,11 @@ impl<'type_db> HIRExprPrinter<'type_db> {
 
         if self.verbose {
             let ty_name = expr.get_type();
-            println!("PRINTING CALL: {}: {}", expr_string, ty_name.print_name(self.type_db));
+            println!(
+                "PRINTING CALL: {}: {}",
+                expr_string,
+                ty_name.print_name(self.type_db)
+            );
             format!("{{{}: {}}}", expr_string, ty_name.print_name(self.type_db))
         } else {
             expr_string
@@ -328,7 +332,7 @@ impl<'type_db> HIRPrinter<'type_db> {
                 struct_name,
                 type_parameters,
                 methods,
-                meta,
+                ..
             } => {
                 let mut impldecl = format!(
                     "{}impl {}{}:\n",

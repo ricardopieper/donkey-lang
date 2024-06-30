@@ -1,16 +1,14 @@
-use crate::semantic::type_name_printer::TypeNamePrinter;
 use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
 use crate::interner::InternedString;
 
-#[cfg(not(test))] 
+#[cfg(not(test))]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TypeConstructorId(pub usize);
 
-#[cfg(test)] 
+#[cfg(test)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TypeConstructorId(pub usize, pub InternedString);
-
 
 impl TypeConstructorId {
     pub fn to_string(&self, constructor_db: &TypeConstructorDatabase) -> String {
@@ -23,7 +21,7 @@ impl TypeConstructorId {
 pub enum TypeKind {
     Primitive { size: Bytes },
     Struct,
-    Function
+    Function,
 }
 
 impl Default for TypeKind {
@@ -76,7 +74,6 @@ pub enum TypeConstructParams {
 }
 
 impl TypeConstructParams {
-
     pub fn simple(type_constructor_id: TypeConstructorId) -> Self {
         TypeConstructParams::Parameterized(type_constructor_id, vec![])
     }
@@ -110,7 +107,6 @@ impl TypeConstructParams {
     pub fn args_and_return(&self) -> (Vec<TypeConstructParams>, TypeConstructParams) {
         match self {
             TypeConstructParams::Parameterized(_, args) => {
-
                 if args.len() < 2 {
                     return (vec![], args.first().unwrap().clone());
                 }
@@ -120,8 +116,6 @@ impl TypeConstructParams {
             _ => panic!("Not a Parameterized type, cannot be a function"),
         }
     }
-
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,10 +137,10 @@ pub struct TypeConstructor {
     //method (name, args (if includes self then it's a method), return type)
     pub functions: Vec<TypeConstructorFunctionDeclaration>,
     //The return type of this function, if it's a function.
-    pub function_return_type: Option<TypeConstructParams>, 
+    pub function_return_type: Option<TypeConstructParams>,
     pub function_params: Vec<TypeConstructParams>,
     pub function_variadic: Variadic,
-    pub is_intrinsic: bool
+    pub is_intrinsic: bool,
 }
 
 impl TypeConstructor {
@@ -163,7 +157,7 @@ impl TypeConstructor {
         for p in self.function_params.iter() {
             parameters.push(p.clone());
         }
-        
+
         parameters.push(self.function_return_type.clone().unwrap());
 
         return TypeConstructParams::Parameterized(self.id, parameters);
@@ -186,7 +180,6 @@ pub struct CommonTypeConstructors {
     pub function: TypeConstructorId,
     pub ptr: TypeConstructorId,
     pub str: TypeConstructorId,
-
 }
 
 pub struct TypeConstructorDatabase {
@@ -196,11 +189,11 @@ pub struct TypeConstructorDatabase {
 
 impl TypeConstructorDatabase {
     pub fn new() -> Self {
-        let default_type_constructor_id =  {
+        let default_type_constructor_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
             #[cfg(test)]
             {
-                TypeConstructorId(0,  InternedString::new("NONE"))
+                TypeConstructorId(0, InternedString::new("NONE"))
             }
             #[cfg(not(test))]
             {
@@ -225,7 +218,7 @@ impl TypeConstructorDatabase {
                 function: default_type_constructor_id.clone(),
                 ptr: default_type_constructor_id.clone(),
                 str: default_type_constructor_id.clone(),
-            }
+            },
         };
         item.init_builtin();
         item
@@ -237,7 +230,7 @@ impl TypeConstructorDatabase {
         sign: TypeSign,
         name: InternedString,
     ) -> TypeConstructorId {
-        let next_id ={
+        let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
             #[cfg(test)]
             {
@@ -286,7 +279,7 @@ impl TypeConstructorDatabase {
         name: InternedString,
         type_args: Vec<TypeParameter>,
     ) -> TypeConstructorId {
-        let next_id ={
+        let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
             #[cfg(test)]
             {
@@ -316,11 +309,8 @@ impl TypeConstructorDatabase {
         next_id
     }
 
-    pub fn add_function_signature(
-        &mut self,
-        signature: FunctionSignature,
-    ) -> TypeConstructorId {
-        let next_id ={
+    pub fn add_function_signature(&mut self, signature: FunctionSignature) -> TypeConstructorId {
+        let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
             #[cfg(test)]
             {
@@ -428,40 +418,44 @@ impl TypeConstructorDatabase {
             type_id,
             Operator::Equals,
             TypeConstructParams::simple(type_id),
-            TypeConstructParams::simple(bool_id)
+            TypeConstructParams::simple(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::NotEquals,
             TypeConstructParams::simple(type_id),
-            TypeConstructParams::simple(bool_id)
+            TypeConstructParams::simple(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::Less,
             TypeConstructParams::simple(type_id),
-            TypeConstructParams::simple(bool_id)
+            TypeConstructParams::simple(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::LessEquals,
             TypeConstructParams::simple(type_id),
-            TypeConstructParams::simple(bool_id)
+            TypeConstructParams::simple(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::Greater,
             TypeConstructParams::simple(type_id),
-            TypeConstructParams::simple(bool_id)
+            TypeConstructParams::simple(bool_id),
         );
         self.add_binary_operator(
             type_id,
             Operator::GreaterEquals,
             TypeConstructParams::simple(type_id),
-            TypeConstructParams::simple(bool_id)
+            TypeConstructParams::simple(bool_id),
         );
 
-        self.add_unary_operator(type_id, Operator::Plus, TypeConstructParams::simple(type_id));
+        self.add_unary_operator(
+            type_id,
+            Operator::Plus,
+            TypeConstructParams::simple(type_id),
+        );
         self.add_unary_operator(
             type_id,
             Operator::Minus,
@@ -470,7 +464,6 @@ impl TypeConstructorDatabase {
 
         type_id
     }
-
 
     pub fn add_function_to_type(
         &mut self,
@@ -483,7 +476,7 @@ impl TypeConstructorDatabase {
         let found = self.try_find_function_by_signature(&signature);
 
         let function_type_id = if let None = found {
-            let next_id ={
+            let next_id = {
                 //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
                 #[cfg(test)]
                 {
@@ -527,17 +520,22 @@ impl TypeConstructorDatabase {
 
     //This function can be smarter by reworking the signature into a strict naming convention for type parameters,
     //or by using unification (maybe).
-    fn try_find_function_by_signature(&mut self, signature: &FunctionSignature) -> Option<TypeConstructorId> {
+    fn try_find_function_by_signature(
+        &mut self,
+        signature: &FunctionSignature,
+    ) -> Option<TypeConstructorId> {
         let mut found = None;
         for ty in self.types.iter() {
             if ty.kind != TypeKind::Function {
                 continue;
             }
 
-            if let Some(f) = &ty.function_return_type && f != &signature.return_type {
+            if let Some(f) = &ty.function_return_type
+                && f != &signature.return_type
+            {
                 continue;
             }
-    
+
             if ty.function_params != signature.params {
                 continue;
             }
@@ -545,7 +543,7 @@ impl TypeConstructorDatabase {
             if ty.type_params != signature.type_parameters {
                 continue;
             }
-          
+
             if ty.function_variadic != signature.variadic {
                 continue;
             }
@@ -554,7 +552,7 @@ impl TypeConstructorDatabase {
         }
         found
     }
-    
+
     pub fn add_simple_field(
         &mut self,
         type_id: TypeConstructorId,
@@ -648,7 +646,7 @@ impl TypeConstructorDatabase {
                 size: Bytes::size_of::<usize>(),
             },
             istr("ptr"),
-            vec![TypeParameter(istr("TPtr"))]
+            vec![TypeParameter(istr("TPtr"))],
         );
         self.add_function_to_type(
             ptr_type,
@@ -665,41 +663,42 @@ impl TypeConstructorDatabase {
                 ],
                 return_type: TypeConstructParams::simple(void_type),
                 variadic: Variadic(false),
-            
             },
         );
         self.add_function_to_type(
             ptr_type,
             istr("read"),
             FunctionSignature {
-                    type_parameters: vec![],
-                    params: vec![
-                        TypeConstructParams::Parameterized(
-                            ptr_type,
-                            vec![TypeConstructParams::Generic(TypeParameter(istr("TPtr")))],
-                        ), //self
-                        TypeConstructParams::simple(self.common_types.u64)],/* offset * sizeof(TPtr) */
-                    return_type: TypeConstructParams::Generic(TypeParameter(istr("TPtr"))).into(),
-                    variadic: Variadic(false),
-                
+                type_parameters: vec![],
+                params: vec![
+                    TypeConstructParams::Parameterized(
+                        ptr_type,
+                        vec![TypeConstructParams::Generic(TypeParameter(istr("TPtr")))],
+                    ), //self
+                    TypeConstructParams::simple(self.common_types.u64),
+                ], /* offset * sizeof(TPtr) */
+                return_type: TypeConstructParams::Generic(TypeParameter(istr("TPtr"))).into(),
+                variadic: Variadic(false),
             },
         );
         self.add_function_to_type(
             ptr_type,
             istr("__index_ptr__"),
             FunctionSignature {
-                    params: vec![
-                        TypeConstructParams::Parameterized(
-                            ptr_type,
-                            vec![TypeConstructParams::Generic(TypeParameter(istr("TPtr")))],
-                        ), //self
-                        TypeConstructParams::simple(self.common_types.u64)],/* offset * sizeof(TPtr) */
-                    return_type: TypeConstructParams::Parameterized(
+                params: vec![
+                    TypeConstructParams::Parameterized(
                         ptr_type,
                         vec![TypeConstructParams::Generic(TypeParameter(istr("TPtr")))],
-                    ).into(),
-                    variadic: Variadic(false),
-                    type_parameters: vec![]
+                    ), //self
+                    TypeConstructParams::simple(self.common_types.u64),
+                ], /* offset * sizeof(TPtr) */
+                return_type: TypeConstructParams::Parameterized(
+                    ptr_type,
+                    vec![TypeConstructParams::Generic(TypeParameter(istr("TPtr")))],
+                )
+                .into(),
+                variadic: Variadic(false),
+                type_parameters: vec![],
             },
         );
         self.mark_as_intrisic(ptr_type);
@@ -709,7 +708,7 @@ impl TypeConstructorDatabase {
         let arr_type = self.add_generic(
             TypeKind::Struct,
             istr("array"),
-            vec![TypeParameter(istr("TItem"))]
+            vec![TypeParameter(istr("TItem"))],
         );
 
         self.common_types.function = self.add(
@@ -723,25 +722,23 @@ impl TypeConstructorDatabase {
         self.add_function_to_type(
             arr_type,
             istr("__index_ptr__"),
-             FunctionSignature {
-                    params: vec![
-                        TypeConstructParams::Parameterized(
-                            arr_type,
-                            vec![TypeConstructParams::Generic(TypeParameter(istr("TItem")))],
-                        ), //self
-                        TypeConstructParams::simple(u32_type)
-                    ],
-                    return_type: TypeConstructParams::Parameterized(
-                        ptr_type,
+            FunctionSignature {
+                params: vec![
+                    TypeConstructParams::Parameterized(
+                        arr_type,
                         vec![TypeConstructParams::Generic(TypeParameter(istr("TItem")))],
-                    )
-                    .into(),
-                    variadic: Variadic(false),
-                    type_parameters: vec![],
+                    ), //self
+                    TypeConstructParams::simple(u32_type),
+                ],
+                return_type: TypeConstructParams::Parameterized(
+                    ptr_type,
+                    vec![TypeConstructParams::Generic(TypeParameter(istr("TItem")))],
+                )
+                .into(),
+                variadic: Variadic(false),
+                type_parameters: vec![],
             },
         );
-
-
 
         //u32_type
         self.add_simple_field(arr_type, istr("length"), u32_type);
