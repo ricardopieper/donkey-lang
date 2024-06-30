@@ -1,5 +1,5 @@
 New Type Inference Algorithm
-############################
+============================
 
 
 The file `type_inference.rs` right now contains 1.6k lines of code, and after I got away from this project for almost 10 months, I can't undertand it anymore.
@@ -71,7 +71,7 @@ pub enum TypeConstructParams {
 Since the monomorphizer is currently able to deal with all of this, it should be lots of busy work but overall possible.
 
 `TypeInferenceResult`
-#####################
+=====================
 
 There is an issue. The `TypeInferenceResult` enum is used in a lot of places, including the environment (i.e. which variables exist, what functions are in scope),
 so there isn't a really good way to change it. I need to go with a hammer and destroy everything that uses it.
