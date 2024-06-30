@@ -151,17 +151,6 @@ impl TypeConstructor {
     pub fn find_field(&self, name: InternedString) -> Option<&TypeConstructorFieldDeclaration> {
         self.fields.iter().find(|m| m.name == name)
     }
-
-    /*pub fn as_function_type_construct_params(&self) -> TypeConstructParams {
-        let mut parameters = vec![];
-        for p in self.function_params.iter() {
-            parameters.push(p.clone());
-        }
-
-        parameters.push(self.function_return_type.clone().unwrap());
-
-        return TypeConstructParams::Parameterized(self.id, parameters);
-    }*/
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

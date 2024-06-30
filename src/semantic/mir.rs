@@ -1155,7 +1155,6 @@ def main() -> i32:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-    /* */
     #[test]
     fn set_variable() {
         let src = parse_no_std(

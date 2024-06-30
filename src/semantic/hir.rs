@@ -233,9 +233,7 @@ impl<'source> Display for HIRTypeDisplayer<'source> {
                 f.write_char('<')?;
                 f.write_str(&comma_sep)?;
                 f.write_char('>')
-            } //HIRType::Function(_, _, _, _) => {
-              //    f.write_str("Must implement display for HIRType::Function")
-              //}
+            }
         }
     }
 }

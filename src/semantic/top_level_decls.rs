@@ -302,17 +302,6 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                                 },
                             );
 
-                            /*let hir_type = HIRType::Function(
-                                type_parameters_merged,
-                                parameters
-                                    .clone()
-                                    .into_iter()
-                                    .map(|x| x.type_data)
-                                    .collect(),
-                                return_type.into(),
-                                Variadic(is_varargs),
-                            );*/
-
                             let mut params: Vec<TypeConstructParams> = vec![];
                             for p in parameters {
                                 let p_type = typer.make_usage(&p.type_data, meta)?;

@@ -66,40 +66,6 @@ pub fn hir_type_to_usage(
                 )
                 .as_type_inference_error();
         }
-
-        /*HIRType::Function(generics, params, return_type, variadic) => {
-            let resolved_args: Vec<TypeConstructParams> = params
-                .iter()
-                .map(|arg| {
-                    hir_type_to_usage(
-                        on_code_element,
-                        arg,
-                        type_db,
-                        type_parameters,
-                        errors,
-                        location,
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let resolved_return_type: TypeConstructParams = hir_type_to_usage(
-                on_code_element,
-                return_type,
-                type_db,
-                type_parameters,
-                errors,
-                location,
-            )?;
-
-
-
-            Ok(TypeConstructParams::FunctionSignature(FunctionSignature {
-                generics: generics.clone(),
-                params: resolved_args,
-                return_type: Box::new(resolved_return_type),
-                variadic: *variadic,
-            }))
-        }*/,
         HIRType::Generic(base, args) if args.is_empty() => {
             //this case reduces to the simple case
             //convenient for compiler code :)
@@ -129,10 +95,6 @@ pub fn hir_type_to_usage(
                 .collect::<Result<Vec<_>, _>>()?;
 
             if let Some(generic) = type_parameters.iter().find(|g| g.0 == *base) {
-                /*return Ok(TypeConstructParams::Parameterized(
-                    TypeConstructParams::Generic(generic.clone()).into(),
-                    resolved_generics,
-                ));*/
                 return errors
                     .internal_error
                     .push(

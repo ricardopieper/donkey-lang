@@ -516,10 +516,6 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                                 type_arg.expect("not enough type parameters").resolved_type,
                             );
                         }
-                        /*let function_type = self(ty,
-                        type_args_constructed.iter().map(|arg| arg.resolved_type).collect::<Vec<_>>(),
-                        &call_type_args);*/
-                        //generate a new function name that contains the type names suffixed
 
                         let function_type = self.type_db.construct_type(
                             *base,
