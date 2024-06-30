@@ -1074,7 +1074,7 @@ pub fn hir_to_mir<'source>(
                 is_intrinsic,
                 is_varargs,
                 is_external,
-                method_of,
+                method_of: _,
             } => {
                 let mir_parameters = parameters
                     .iter()
@@ -1116,12 +1116,7 @@ pub fn hir_to_mir<'source>(
             } => {
                 //ignored, useless in MIR because the type db should be used instead
             }
-            HIRRoot::ImplDeclaration {
-                struct_name,
-                type_parameters,
-                methods,
-                meta,
-            } => {
+            HIRRoot::ImplDeclaration { .. } => {
                 todo!()
             }
         }
@@ -1160,7 +1155,6 @@ def main() -> i32:
         assert_eq!(expected.trim(), final_result.trim());
     }
 
-    /* */
     #[test]
     fn set_variable() {
         let src = parse_no_std(

@@ -262,7 +262,7 @@ pub struct FunctionDeclaration {
     pub type_parameters: Vec<StringSpan>,
     pub body: Vec<SpanAST>,
     pub return_type: Option<ASTType>,
-    pub is_method: bool,
+    pub is_bound_to_self: bool,
     pub is_varargs: bool,
 }
 
@@ -390,11 +390,7 @@ impl Spanned for AST {
                 let last = r.last().unwrap().span;
                 first.range(&last)
             }
-            AST::ImplDeclaration {
-                struct_name,
-                type_parameters,
-                body,
-            } => struct_name.get_span(),
+            AST::ImplDeclaration { struct_name, .. } => struct_name.get_span(),
         }
     }
 }
@@ -988,7 +984,7 @@ impl<'tok> Parser<'tok> {
                     }
                     ParsingEvent::TryAnotherGrammarRule => {
                         break;
-                    },
+                    }
                     ParsingEvent::GrammarRuleFail(details, token) => {
                         return ParsingEvent::GrammarRuleFail(details, token)
                     }
@@ -1307,7 +1303,7 @@ impl<'tok> Parser<'tok> {
                 body: ast,
                 return_type,
                 is_varargs,
-                is_method: has_self,
+                is_bound_to_self: has_self,
             }
         }))
     }
@@ -2397,7 +2393,7 @@ impl SomeStruct:
 
 def not_method():
     print(1)
-    "
+    ",
         );
     }
 
@@ -2411,14 +2407,14 @@ impl SomeStruct:
 def not_method():
     print(1)
     ",
-    "
+            "
 impl SomeStruct:
     def method(self):
         print(self)
 
 def not_method():
     print(1)    
-    "
+    ",
         );
     }
 
@@ -3102,7 +3098,6 @@ print(x)"
     }
 
     #[test]
-    #[ignore] //Cannot parse self yet
     fn member_compare() {
         parse_and_print_back_to_original("self.current >= self.max");
     }

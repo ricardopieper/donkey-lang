@@ -1,16 +1,14 @@
 use crate::{
     interner::InternedString,
     semantic::hir::{HIRTypedBoundName, HIR},
+    types::type_constructor_db::TypeConstructParams,
 };
 
 use std::collections::HashSet;
 
-use super::{
-    hir::{
-        FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, FunctionCall,
-        GlobalsInferredMIRRoot, HIRExpr, HIRRoot, HIRTypeDef, MethodCall, UninferredHIR,
-    },
-    type_inference::TypeInferenceResult,
+use super::hir::{
+    FirstAssignmentsDeclaredHIR, FirstAssignmentsDeclaredHIRRoot, FunctionCall,
+    GlobalsInferredHIRRoot, HIRExpr, HIRRoot, HIRTypeDef, MethodCall, UninferredHIR,
 };
 
 fn make_first_assignments_in_body<'source>(
@@ -129,7 +127,7 @@ fn make_first_assignments_in_body<'source>(
 }
 
 fn make_assignments_into_declarations_in_function<'source>(
-    parameters: &[HIRTypedBoundName<TypeInferenceResult>],
+    parameters: &[HIRTypedBoundName<TypeConstructParams>],
     body: Vec<UninferredHIR<'source>>,
 ) -> Vec<FirstAssignmentsDeclaredHIR<'source>> {
     //find all assignments, check if they were declared already.
@@ -152,7 +150,7 @@ fn make_assignments_into_declarations_in_function<'source>(
 }
 
 pub fn transform_first_assignment_into_declaration(
-    hir: Vec<GlobalsInferredMIRRoot>,
+    hir: Vec<GlobalsInferredHIRRoot>,
 ) -> Vec<FirstAssignmentsDeclaredHIRRoot> {
     let mut new_hir: Vec<FirstAssignmentsDeclaredHIRRoot> = vec![];
 

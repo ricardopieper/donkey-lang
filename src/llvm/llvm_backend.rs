@@ -12,8 +12,8 @@ use inkwell::targets::{
 };
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FunctionValue,
-    GlobalValue, IntMathValue, PointerValue, StructValue,
+    BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue, GlobalValue,
+    PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, OptimizationLevel};
 
@@ -462,10 +462,8 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
 
             MIRTopLevelNode::IntrinsicOrExternalFunction {
                 function_name,
-                parameters,
-                return_type,
-                is_varargs,
                 is_external,
+                ..
             } => {
                 if function_name.as_ref().starts_with("reinterpret_ptr") && !is_external {
                     let function_signature = *self
@@ -747,7 +745,7 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
         current_scope: ScopeId,
     ) -> LlvmExpression<'ctx> {
         match lvalue {
-            MIRExprLValue::Variable(name, ty, _) => {
+            MIRExprLValue::Variable(name, _, _) => {
                 log!(
                     "LValue compile, name = {} {:?}, {}",
                     name,

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Write;
 use std::ops::Deref;
@@ -13,12 +12,10 @@ use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{ASTType, Expr, AST};
 use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
+use crate::types::type_constructor_db::TypeConstructParams;
 use crate::types::type_constructor_db::TypeParameter;
-use crate::types::type_constructor_db::Variadic;
 use crate::types::type_instance_db::TypeInstanceId;
 use crate::types::type_instance_db::TypeInstanceManager;
-
-use super::type_inference::TypeInferenceResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LiteralHIRExpr {
@@ -57,8 +54,8 @@ pub type UninferredHIR<'source> = HIR<'source, HIRType, ()>;
 pub type StartingHIRRoot<'source> = HIRRoot<'source, HIRType, UninferredHIR<'source>, HIRType>;
 
 //HIR roots after inferring and registering globals, bodies have not changed (i.e. remain uninferred)
-pub type GlobalsInferredMIRRoot<'source> =
-    HIRRoot<'source, TypeInferenceResult, UninferredHIR<'source>, HIRType>;
+pub type GlobalsInferredHIRRoot<'source> =
+    HIRRoot<'source, TypeConstructParams, UninferredHIR<'source>, HIRType>;
 
 //The HIR after expanding variable assignments into declarations the first time they're assigned. In this case
 //we create them as PendingInference. We also wrap given type declarations by the user in a HIRTypeDef::Provided.
@@ -66,15 +63,14 @@ pub type GlobalsInferredMIRRoot<'source> =
 //the user didn't specify a type, and HIRTypeDef has a PendingInference variant. Maybe an Optional would be enough....
 pub type FirstAssignmentsDeclaredHIR<'source> = HIR<'source, HIRTypeDef, ()>;
 //HIR roots now with body changed, first assignments became declarations.
-//TGlobalTypes is TypeInferenceResult because I didn't want to create an entire new compiler step just to
 pub type FirstAssignmentsDeclaredHIRRoot<'source> =
-    HIRRoot<'source, TypeInferenceResult, FirstAssignmentsDeclaredHIR<'source>, HIRType>;
+    HIRRoot<'source, TypeConstructParams, FirstAssignmentsDeclaredHIR<'source>, HIRType>;
 
 //The HIR with types inferred
-pub type InferredTypeHIR<'source> = HIR<'source, TypeInferenceResult, TypeInferenceResult>;
+pub type InferredTypeHIR<'source> = HIR<'source, TypeConstructParams, TypeConstructParams>;
 //HIR roots with bodies inferred
 pub type InferredTypeHIRRoot<'source> =
-    HIRRoot<'source, TypeInferenceResult, InferredTypeHIR<'source>, TypeInferenceResult>;
+    HIRRoot<'source, TypeConstructParams, InferredTypeHIR<'source>, TypeConstructParams>;
 
 pub type MonomorphizedHIR<'source> = HIR<'source, TypeInstanceId, TypeInstanceId>;
 pub type MonomorphizedHIRRoot<'source> =
@@ -126,7 +122,7 @@ pub enum HIRExpr<'source, TTypeData> {
 
     TypeName {
         type_variable: TTypeData,
-        //Always TypeData
+        //Always TypeData. @TODO why even have this if it's always TypeData?
         type_data: TTypeData,
         meta: HIRExprMetadata<'source>,
     },
@@ -191,7 +187,7 @@ pub enum HIRExpr<'source, TTypeData> {
 pub enum HIRType {
     Simple(InternedString),
     Generic(InternedString, Vec<HIRType>),
-    Function(Vec<TypeParameter>, Vec<HIRType>, Box<HIRType>, Variadic),
+    //Function(Vec<TypeParameter>, Vec<HIRType>, Box<HIRType>, Variadic),
 }
 
 //we need to be able to represent complex stuff,
@@ -237,9 +233,6 @@ impl<'source> Display for HIRTypeDisplayer<'source> {
                 f.write_char('<')?;
                 f.write_str(&comma_sep)?;
                 f.write_char('>')
-            }
-            HIRType::Function(_, _, _, _) => {
-                f.write_str("Must implement display for HIRType::Function")
             }
         }
     }
@@ -335,12 +328,6 @@ pub enum HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType> {
         methods: Vec<HIRRoot<'source, TGlobalTypes, TBodyType, TStructFieldsType>>,
         meta: HIRAstMetadata<'source>,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HIRScope<'source, TUserSpecifiedTypeData, TInferredTypeData> {
-    statements: Vec<HIR<'source, TUserSpecifiedTypeData, TInferredTypeData>>,
-    declared_variables: HashMap<InternedString, TUserSpecifiedTypeData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,7 +574,6 @@ fn ast_decl_function_to_hir<'source>(
     return_type: &Option<ASTType>,
     is_varargs: bool,
     ast: &'source AST,
-    is_method_of: Option<InternedString>,
     accum: &mut Vec<StartingHIRRoot<'source>>,
 ) {
     if body.len() == 1 {
@@ -808,7 +794,6 @@ fn ast_impl_to_hir<'source>(
             &node.return_type,
             node.is_varargs,
             ast,
-            Some(struct_name),
             &mut functions,
         );
     }
@@ -841,7 +826,6 @@ pub fn ast_globals_to_hir<'source>(ast: &'source AST) -> Vec<StartingHIRRoot<'so
                 return_type,
                 *is_varargs,
                 ast,
-                None,
                 &mut accum,
             );
         }

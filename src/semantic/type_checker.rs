@@ -5,7 +5,6 @@ use super::hir::{HIRAstMetadata, HIRExprMetadata};
 
 use super::hir_type_resolution::RootElementType;
 use super::mir_printer::{self, MIRPrinter};
-
 use crate::ast::parser::{Expr, SpannedOperator};
 use crate::interner::InternedString;
 use crate::types::diagnostics::{
@@ -48,7 +47,7 @@ pub enum FunctionName {
 }
 
 pub struct TypeCheckContext<'compiler_context, 'source> {
-    top_level_decls: &'compiler_context NameRegistry,
+    top_level_decls: &'compiler_context NameRegistry<TypeInstanceId>,
     type_db: &'compiler_context TypeInstanceManager,
     errors: &'compiler_context mut TypeErrors<'source>,
     on_element: RootElementType,
@@ -537,14 +536,22 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             .map(|arg| self.typecheck(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
-        if function_type.function_args.len() != checked_args.len() {
+        let skip_self = function_type
+            .function_args
+            .iter()
+            .skip(1)
+            .map(|x| *x)
+            .collect::<Vec<TypeInstanceId>>();
+
+        //-1 por que é metodo e o primeiro é self...
+        if skip_self.len() != checked_args.len() {
             return self
                 .errors
                 .function_call_argument_count
                 .push_typecheck_error(
                     FunctionCallArgumentCountMismatch {
                         called_function_name: make_method_name_or_index(name, &obj_type.name, meta),
-                        expected_count: function_type.function_args.len(),
+                        expected_count: skip_self.len(),
                         passed_count: checked_args.len(),
                     }
                     .at_spanned(self.on_element, meta, loc!()),
@@ -552,12 +559,11 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         };
 
         let checked_arg_types = checked_args.iter().map(|x| x.get_type());
-        let has_invalid_arg = function_type
-            .function_args
-            .iter()
+        let has_invalid_arg = skip_self
+            .into_iter()
             .zip(checked_arg_types)
             .enumerate()
-            .find(|(_index, (expected, actual))| *expected != actual);
+            .find(|(_index, (expected, actual))| *expected != *actual);
 
         if let Some((arg_pos, types)) = has_invalid_arg {
             return self.errors.function_call_mismatches.push_typecheck_error(
@@ -566,7 +572,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         called_function_name: make_method_name_or_index(name, &obj_type.name, meta),
                         argument_position: arg_pos,
                     },
-                    expected: *types.0,
+                    expected: types.0,
                     actual: types.1,
                 }
                 .at_spanned(self.on_element, meta, loc!()),
@@ -935,17 +941,10 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         }
 
         //at this point all top_level_decls should be inferred
-        match self.top_level_decls.get(&name) {
-            Some(super::type_inference::TypeInferenceResult::Monomorphic(type_instance)) => {
-                *type_instance
-            }
-            Some(super::type_inference::TypeInferenceResult::Polymorphic(_)) => {
-                panic!("Unmonomorphized type in top level declaration")
-            }
-            _ => {
-                panic!("Not found: {}", name)
-            }
-        }
+        self.top_level_decls
+            .get(&name)
+            .cloned()
+            .expect(&format!("Variable not found: {}", name))
     }
 
     fn check_if_statement_expression(
@@ -1017,7 +1016,7 @@ fn make_method_name_or_index(
 pub fn typecheck<'source>(
     top_nodes: Vec<MIRTopLevelNode<'source>>,
     type_db: &TypeInstanceManager,
-    names: &NameRegistry,
+    names: &NameRegistry<TypeInstanceId>,
     errors: &mut TypeErrors<'source>,
 ) -> Result<Vec<MIRTopLevelNode<'source>>, CompilerError> {
     let mut new_mir = vec![];
@@ -1466,7 +1465,7 @@ def main():
 
         let (err, _) = run_test(&ast);
         assert_eq!(1, err.count());
-        assert_eq!(1, err.binary_op_not_found.len());
+        assert_eq!(1, err.binary_op_not_found_tc.len());
     }
 
     #[test]
@@ -1495,7 +1494,7 @@ def main():
 
         let (err, _) = run_test(&ast);
         assert_eq!(1, err.count());
-        assert_eq!(1, err.invalid_derefed_type.len());
+        assert_eq!(1, err.invalid_derefed_type_unconstructed.len());
     }
 
     #[test]

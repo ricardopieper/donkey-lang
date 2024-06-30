@@ -6,6 +6,7 @@ use crate::semantic::context::FileTableEntry;
 
 use crate::semantic::mir::{MIRExpr, MIRExprLValue};
 use crate::semantic::mir_printer::MIRPrinter;
+use crate::semantic::type_name_printer::TypeNamePrinter;
 use crate::{
     ast::lexer::Operator,
     semantic::{
@@ -228,23 +229,23 @@ impl CompilerErrorDisplay for CompilerErrorContext<FunctionCallArgumentCountMism
     }
 }
 
-pub struct CallToNonCallableType {
-    pub actual_type: Option<TypeInstanceId>,
+pub struct CallToNonCallableType<T> {
+    pub actual_type: Option<T>,
 }
-impl CompilerErrorData for CallToNonCallableType {}
+impl<T> CompilerErrorData for CallToNonCallableType<T> {}
 
-impl CompilerErrorDisplay for CompilerErrorContext<CallToNonCallableType> {
+impl<T: TypeNamePrinter> CompilerErrorDisplay for CompilerErrorContext<CallToNonCallableType<T>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        match self.error.actual_type {
+        match &self.error.actual_type {
             Some(type_id) => write!(
                 f,
                 "{on_element}, call to non-callable type {non_callable_type_name}",
                 on_element = self.on_element.diag_name(),
-                non_callable_type_name = type_id.to_string(type_db)
+                non_callable_type_name = type_id.print_name(type_db)
             ),
             None => write!(
                 f,
@@ -276,7 +277,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeNotFound> {
 }
 
 pub struct TypePromotionFailure {
-    pub target_type: TypeInstanceId,
+    pub target_type: TypeConstructParams,
 }
 impl CompilerErrorData for TypePromotionFailure {}
 
@@ -290,7 +291,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypePromotionFailure> {
             f,
             "{on_element}, type promotion failure: Cannot promote an integer literal to type: {target_type_name}",
             on_element = self.on_element.diag_name(),
-            target_type_name = self.error.target_type.to_string(type_db),
+            target_type_name = self.error.target_type.to_string(&type_db.constructors),
         )
     }
 }
@@ -311,6 +312,30 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnexpectedTypeFound> {
             "{on_element}, unexpected type found in expression: {unexpected_type}",
             on_element = self.on_element.diag_name(),
             unexpected_type = self.error.type_def.to_string(type_db),
+        )
+    }
+}
+
+pub struct OutOfTypeBoundsTypeConstructor<'source> {
+    pub typ: TypeConstructParams,
+    pub expr: HIRExprMetadata<'source>,
+}
+impl CompilerErrorData for OutOfTypeBoundsTypeConstructor<'_> {}
+
+impl<'source> CompilerErrorDisplay
+    for CompilerErrorContext<OutOfTypeBoundsTypeConstructor<'source>>
+{
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, literal value {expr:?} is out of bounds for type {type}. You can try extracting this value to a different variable and assign a larger type.",
+            on_element = self.on_element.diag_name(),
+            expr = self.error.expr,
+            type = self.error.typ.to_string(&type_db.constructors),
         )
     }
 }
@@ -384,6 +409,30 @@ impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFound> {
     }
 }
 
+pub struct BinaryOperatorNotFoundForTypeConstructor {
+    pub lhs: TypeConstructParams,
+    pub rhs: TypeConstructParams,
+    pub operator: Operator,
+}
+impl CompilerErrorData for BinaryOperatorNotFoundForTypeConstructor {}
+
+impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFoundForTypeConstructor> {
+    fn fmt_err(
+        &self,
+        type_db: &TypeInstanceManager,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, binary operator {operator} not found for types: {lhs_type} {operator} {rhs_type}",
+            on_element = self.on_element.diag_name(),
+            operator = self.error.operator.to_string(),
+            lhs_type = self.error.lhs.to_string(&type_db.constructors),
+            rhs_type = self.error.rhs.to_string(&type_db.constructors)
+        )
+    }
+}
+
 pub struct UnaryOperatorNotFound {
     pub rhs: TypeInstanceId,
     pub operator: Operator,
@@ -406,13 +455,13 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnaryOperatorNotFound> {
     }
 }
 
-pub struct FieldNotFound {
-    pub object_type: TypeInstanceId,
+pub struct FieldNotFound<T> {
+    pub object_type: T,
     pub field: InternedString,
 }
-impl CompilerErrorData for FieldNotFound {}
+impl<T: TypeNamePrinter> CompilerErrorData for FieldNotFound<T> {}
 
-impl CompilerErrorDisplay for CompilerErrorContext<FieldNotFound> {
+impl<T: TypeNamePrinter> CompilerErrorDisplay for CompilerErrorContext<FieldNotFound<T>> {
     fn fmt_err(
         &self,
         type_db: &TypeInstanceManager,
@@ -423,7 +472,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<FieldNotFound> {
             "{on_element}, tried to access field {field} on type {type_name} but no such field exists.",
             on_element = self.on_element.diag_name(),
             field = self.error.field,
-            type_name = self.error.object_type.to_string(type_db)
+            type_name = self.error.object_type.print_name(type_db)
         )
     }
 }
@@ -611,13 +660,10 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeConstructionFailure> {
             "{on_element}, type construction failed: {variable}",
             on_element = self.on_element.diag_name(),
             variable = match self.error.error {
-                TypeConstructionError::TypeNotFound { name } => format!("Type not found: {}", name),
                 TypeConstructionError::IncorrectNumberOfArgs { expected, received } =>
                     format!("Incorrect number of args: expected {expected}, received {received}"),
                 TypeConstructionError::InsufficientInformation =>
                     "Insufficient information to construct type".into(),
-                TypeConstructionError::InvalidTypeConstructionArguments =>
-                    "Invalid type construction arguments".into(),
             }
         )
     }
@@ -899,14 +945,17 @@ make_type_errors!(
     return_type_mismatches = TypeMismatch<ReturnTypeContext>,
     function_call_mismatches = TypeMismatch<FunctionCallContext>,
     function_call_argument_count = FunctionCallArgumentCountMismatch,
-    call_non_callable = CallToNonCallableType,
+    call_non_callable = CallToNonCallableType<TypeInstanceId>,
+    call_non_callable_tc = CallToNonCallableType<TypeConstructorId>,
     type_not_found = TypeNotFound,
     type_promotion_failure = TypePromotionFailure,
     variable_not_found = VariableNotFound,
     unexpected_types = UnexpectedTypeFound,
     binary_op_not_found = BinaryOperatorNotFound,
+    binary_op_not_found_tc = BinaryOperatorNotFoundForTypeConstructor,
     unary_op_not_found = UnaryOperatorNotFound,
-    field_not_found = FieldNotFound,
+    field_not_found = FieldNotFound<TypeInstanceId>,
+    field_not_found_tc = FieldNotFound<TypeConstructorId>,
     method_not_found = MethodNotFound,
     field_or_method_not_found_in_type_constructor = FieldOrMethodNotFoundInTypeConstructor,
     insufficient_array_type_info = InsufficientTypeInformationForArray,
@@ -915,6 +964,7 @@ make_type_errors!(
     type_inference_failure = TypeInferenceFailure,
     type_construction_failure = TypeConstructionFailure,
     out_of_bounds = OutOfTypeBounds<'source>,
+    out_of_bounds_constructor = OutOfTypeBoundsTypeConstructor<'source>,
     invalid_casts = InvalidCast<'source>,
     type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>,
     invalid_derefed_type = DerefOnNonPointerError,

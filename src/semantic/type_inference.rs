@@ -6,16 +6,16 @@ use crate::report;
 use crate::semantic::hir::{HIRExpr, HIRType, HIRTypedBoundName, LiteralHIRExpr, HIR};
 
 use crate::types::diagnostics::{
-    BinaryOperatorNotFound, CallToNonCallableType, CompilerErrorData, ContextualizedCompilerError,
-    DerefOnNonPointerError, DerefOnNonPointerErrorUnconstructed, ErrorReporter, FieldNotFound,
-    InsufficientTypeInformationForArray, InternalError, MethodNotFound, OutOfTypeBounds,
-    RefOnNonLValueError, TypeConstructionFailure, TypeErrors, TypePromotionFailure,
-    UnaryOperatorNotFound, VariableNotFound,
+    BinaryOperatorNotFoundForTypeConstructor, CallToNonCallableType, CompilerErrorData,
+    ContextualizedCompilerError, DerefOnNonPointerErrorUnconstructed, ErrorReporter, FieldNotFound,
+    InsufficientTypeInformationForArray, InternalError, OutOfTypeBoundsTypeConstructor,
+    RefOnNonLValueError, TypeErrors, TypePromotionFailure, VariableNotFound,
 };
 use crate::types::type_constructor_db::{
-    FunctionSignature, TypeConstructParams, TypeParameter,
+    FunctionSignature, TypeConstructParams, TypeConstructor, TypeConstructorId, TypeKind,
+    TypeParameter,
 };
-use crate::types::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
+use crate::types::type_instance_db::TypeInstanceManager;
 
 use super::compiler_errors::CompilerError;
 use super::hir::{
@@ -39,8 +39,8 @@ pub struct TypeInferenceContext<'compiler_state, 'source> {
     //@TODO move function parameters into here
     pub type_db: &'compiler_state mut TypeInstanceManager,
     pub errors: &'compiler_state mut TypeErrors<'source>,
-    pub decls_in_scope: &'compiler_state mut NameRegistry,
-    pub impl_of: Option<TypeInferenceResult>,
+    pub decls_in_scope: &'compiler_state mut NameRegistry<TypeConstructParams>,
+    pub impl_of: Option<TypeConstructParams>,
 }
 
 impl ErrorReporter for TypeInferenceContext<'_, '_> {
@@ -69,42 +69,6 @@ impl<'source> TypeInferenceContext<'_, 'source> {
             location,
         )
     }
-
-    pub fn instantiate_type(
-        &mut self,
-        typedef: &HIRType,
-        location: &impl Spanned,
-    ) -> Result<TypeInferenceResult, CompilerError> {
-        let usage = self.make_usage(typedef, location)?;
-        //Now that we have a mf type usage, we may be able to construct the type.
-        //If we have a type usage *at all*, it means that the type isn't completely wrong, just might be
-        //missing some information. So we can try to construct it. If the typedb returns insufficient information
-        //then we just delay the construction.
-        self.try_construct(usage, location)
-    }
-
-    pub fn try_construct(
-        &mut self,
-        usage: TypeConstructParams,
-        location: &impl Spanned,
-    ) -> Result<TypeInferenceResult, CompilerError> {
-        match self.type_db.construct_usage(&usage) {
-            Ok(instance_id) => Ok(TypeInferenceResult::Monomorphic(instance_id)),
-            Err(TypeConstructionError::InsufficientInformation) => {
-                Ok(TypeInferenceResult::Polymorphic(usage))
-            }
-            Err(e) => {
-                log!("Error constructing type: {:?}", usage);
-                self.errors
-                    .type_construction_failure
-                    .push_inference_error(report!(
-                        self,
-                        location,
-                        TypeConstructionFailure { error: e }
-                    ))?
-            }
-        }
-    }
 }
 
 pub struct FunctionTypeInferenceContext<'compiler_state, 'source> {
@@ -122,58 +86,22 @@ impl ErrorReporter for FunctionTypeInferenceContext<'_, '_> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum TypeInferenceResult {
-    //Fully resolved
-    Monomorphic(TypeInstanceId),
-    //Partially resolved, i.e. a function with some arguments
-    Polymorphic(TypeConstructParams),
-}
-
-impl TypeInferenceResult {
-    fn try_construct_argless(&self, type_db: &mut TypeInstanceManager) -> Option<TypeInstanceId> {
-        match self {
-            TypeInferenceResult::Monomorphic(id) => Some(*id),
-            TypeInferenceResult::Polymorphic(usage) => usage
-                .try_get_root_type_constructor_id()
-                .and_then(|x| type_db.construct_type(x, &[]).ok()),
-        }
-    }
-
-    pub fn expect_monomorphic(&self) -> TypeInstanceId {
-        match self {
-            TypeInferenceResult::Monomorphic(id) => *id,
-            TypeInferenceResult::Polymorphic(_) => panic!("Expected monomorphic type"),
-        }
-    }
-}
-
-impl TypeNamePrinter for TypeInferenceResult {
-    fn print_name(&self, type_db: &TypeInstanceManager) -> String {
-        match self {
-            TypeInferenceResult::Monomorphic(id) => id.print_name(type_db),
-            TypeInferenceResult::Polymorphic(usage) => {
-                format!("Polymorphic({})", usage.print_name(type_db))
-            }
-        }
-    }
-}
-
 impl<'source> FunctionTypeInferenceContext<'_, 'source> {
     pub fn instantiate_type(
         &mut self,
         typedef: &HIRType,
         location: &impl Spanned,
-    ) -> Result<TypeInferenceResult, CompilerError> {
-        self.ctx.instantiate_type(typedef, location)
+    ) -> Result<TypeConstructParams, CompilerError> {
+        self.ctx.make_usage(typedef, location)
     }
 
     fn try_literal_promotion(
         &mut self,
         literal: &LiteralHIRExpr,
-        type_hint: TypeInstanceId,
+        type_hint: &TypeConstructorId,
         meta: &'source crate::ast::parser::Expr,
-    ) -> Result<TypeInstanceId, CompilerError> {
+    ) -> Result<(), CompilerError> {
+        let type_constructor_id = *type_hint;
         match literal {
             LiteralHIRExpr::Integer(i) => {
                 //we need to check for promotions and the attempted promoted type
@@ -181,14 +109,14 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 
                 macro_rules! check_promotion {
                     ($type:ty, $type_id:expr) => {
-                        if type_hint == $type_id {
+                        if type_constructor_id == $type_id {
                             if *i >= <$type>::MIN as i128 && *i <= <$type>::MAX as i128 {
-                                return Ok(type_hint);
+                                return Ok(());
                             }
                             else {
-                                return self.ctx.errors.out_of_bounds.push_inference_error(report!(self, meta, OutOfTypeBounds {
+                                return self.ctx.errors.out_of_bounds_constructor.push_inference_error(report!(self, meta, OutOfTypeBoundsTypeConstructor {
                                     expr: meta, //@TODO unecessary, at_spanned already contains the metadata
-                                    typ: type_hint
+                                    typ: TypeConstructParams::simple($type_id),
                                 }))?;
                             }
                         }
@@ -203,11 +131,11 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                 }
                 let type_db = &self.ctx.type_db;
                 check_promotions!(
-                    u8: type_db.common_types.u8,
-                    u32: type_db.common_types.u32,
-                    u64: type_db.common_types.u64,
-                    i32: type_db.common_types.i32,
-                    i64: type_db.common_types.i64
+                    u8: type_db.constructors.common_types.u8,
+                    u32: type_db.constructors.common_types.u32,
+                    u64: type_db.constructors.common_types.u64,
+                    i32: type_db.constructors.common_types.i32,
+                    i64: type_db.constructors.common_types.i64
                 );
 
                 return self
@@ -218,19 +146,19 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                         self,
                         meta,
                         TypePromotionFailure {
-                            target_type: type_hint,
+                            target_type: TypeConstructParams::simple(type_constructor_id)
                         }
                     ))?;
             }
-            _ => panic!("Cannot promote value: {:?}", literal),
+            _ => panic!("Cannot promote value: {:#?}", literal),
         }
     }
 
     pub fn infer_expr(
         &mut self,
         expression: HIRExpr<'source, ()>,
-        type_hint: Option<TypeInferenceResult>,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
+        type_hint: Option<TypeConstructParams>,
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
         match expression {
             HIRExpr::Variable(var, _, meta) => {
                 log!("Infering variable: {}", var);
@@ -240,31 +168,49 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                     Some(decl_type) => Ok(HIRExpr::Variable(var, decl_type.clone(), meta)),
                     None => {
                         let type_data_type_id = self.load_stdlib_builtin("TypeData");
+                        match type_data_type_id {
+                            Some(type_data_type_id) => {
+                                //try to find a type with this name
+                                let type_data = self
+                                    .ctx
+                                    .type_db
+                                    .constructors
+                                    .find_by_name(InternedString::new(&var.to_string()));
 
-                        //try to find a type with this name
-                        let type_id = self.ctx.type_db.find_by_name(&var.to_string());
+                                //if we have it, then we're done
 
-                        //if we have it, then we're done
+                                if let Some(td) = type_data {
+                                    return Ok(HIRExpr::TypeName {
+                                        type_variable: TypeConstructParams::simple(td.id),
+                                        type_data: type_data_type_id,
+                                        meta,
+                                    });
+                                }
 
-                        if let Some(type_id) = type_id {
-                            return Ok(HIRExpr::TypeName {
-                                type_variable: TypeInferenceResult::Monomorphic(type_id.id),
-                                type_data: TypeInferenceResult::Monomorphic(type_data_type_id),
-                                meta,
-                            });
-                        }
+                                //if we don't have it, maybe it's a type variable coming from a generic
+                                let is_type_param =
+                                    self.ctx.type_parameters.iter().find(|x| x.0 == var);
 
-                        //if we don't have it, maybe it's a type variable coming from a generic
-                        let is_type_param = self.ctx.type_parameters.iter().find(|x| x.0 == var);
+                                match is_type_param {
+                                    Some(type_param) => Ok(HIRExpr::TypeName {
+                                        type_variable: TypeConstructParams::Generic(
+                                            type_param.clone(),
+                                        ),
 
-                        match is_type_param {
-                            Some(type_param) => Ok(HIRExpr::TypeName {
-                                type_variable: TypeInferenceResult::Polymorphic(
-                                    TypeConstructParams::Generic(type_param.clone()),
-                                ),
-                                type_data: TypeInferenceResult::Monomorphic(type_data_type_id),
-                                meta,
-                            }),
+                                        type_data: type_data_type_id,
+                                        meta,
+                                    }),
+                                    None => {
+                                        self.ctx.errors.variable_not_found.push_inference_error(
+                                            report!(
+                                                self,
+                                                meta,
+                                                VariableNotFound { variable_name: var }
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
                             None => {
                                 self.ctx
                                     .errors
@@ -333,10 +279,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             }
             //the self keyword, refers to the type of the impl block
             HIRExpr::SelfValue((), meta) => match self.ctx.impl_of.clone() {
-                Some(impl_of) => Ok(HIRExpr::SelfValue(
-                    TypeInferenceResult::Monomorphic(impl_of.expect_monomorphic()),
-                    meta,
-                )),
+                Some(impl_of) => Ok(HIRExpr::SelfValue(impl_of, meta)),
                 None => self.ctx.errors.internal_error.push_inference_error(report!(
                     self,
                     meta,
@@ -348,34 +291,21 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         }
     }
 
-    fn load_stdlib_builtin(&mut self, name: &str) -> TypeInstanceId {
+    fn load_stdlib_builtin(&mut self, name: &str) -> Option<TypeConstructParams> {
         //check if instance already exists
-        let type_data_type = self.ctx.type_db.find_by_name(name);
+        let type_data_type = self
+            .ctx
+            .type_db
+            .constructors
+            .find_by_name(InternedString::new(name));
 
         match type_data_type {
-            Some(d) => return d.id,
+            Some(d) => return Some(TypeConstructParams::simple(d.id)),
             None => {
-                let type_data_type_constructor = self
-                    .ctx
-                    .type_db
-                    .constructors
-                    .find_by_name(InternedString::new(name));
-
-                match type_data_type_constructor {
-                    Some(type_data_type_constructor) => {
-                        let type_data_type_instance = self
-                            .ctx
-                            .type_db
-                            .construct_type(type_data_type_constructor.id, &[])
-                            .unwrap();
-                        return type_data_type_instance;
-                    }
-                    None => {
-                        //TODO: Fix: navigate through all types and roots before running inference,
-                        //otherwise we can't use types in stdlib
-                        panic!("Type {} not found in stdlib", name);
-                    }
-                }
+                //TODO: Fix: navigate through all types and roots before running inference,
+                //otherwise we can't use types in stdlib
+                log!("Type {} not found in stdlib", name);
+                None
             }
         }
     }
@@ -383,44 +313,34 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
     fn infer_literal(
         &mut self,
         literal_expr: LiteralHIRExpr,
-        type_hint: &Option<TypeInferenceResult>,
+        type_hint: &Option<TypeConstructParams>,
         meta: HIRExprMetadata<'source>,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
-        let literal_type = match literal_expr {
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
+        let literal_type: TypeConstructParams = match literal_expr {
             LiteralHIRExpr::Integer(_) => {
-                if let Some(hint) = type_hint {
-                    match hint {
-                        TypeInferenceResult::Monomorphic(mono_type_hint) => {
-                            self.try_literal_promotion(&literal_expr, *mono_type_hint, meta)?
-                        }
-                        TypeInferenceResult::Polymorphic(_) => {
-                            let constructed = hint.try_construct_argless(self.ctx.type_db);
-                            match constructed {
-                                Some(type_hint) => {
-                                    self.try_literal_promotion(&literal_expr, type_hint, meta)?
-                                }
-                                None => self.ctx.type_db.common_types.i32,
-                            }
-                        }
-                    }
+                if let Some(TypeConstructParams::Parameterized(hint, _)) = type_hint {
+                    self.try_literal_promotion(&literal_expr, hint, meta)?;
+                    TypeConstructParams::simple(*hint)
                 } else {
-                    self.ctx.type_db.common_types.i32
+                    TypeConstructParams::simple(self.ctx.type_db.constructors.common_types.i32)
                 }
             }
             LiteralHIRExpr::Char(_) => {
                 //@TODO promotable?
-                self.ctx.type_db.common_types.char
+                TypeConstructParams::simple(self.ctx.type_db.constructors.common_types.char)
             }
-            LiteralHIRExpr::Float(_) => self.ctx.type_db.common_types.f32,
-            LiteralHIRExpr::String(_) => self.load_stdlib_builtin("str"),
-            LiteralHIRExpr::Boolean(_) => self.ctx.type_db.common_types.bool,
+            LiteralHIRExpr::Float(_) => {
+                TypeConstructParams::simple(self.ctx.type_db.constructors.common_types.f32)
+            }
+            LiteralHIRExpr::String(_) => {
+                self.load_stdlib_builtin("str").expect("str type not found")
+            }
+            LiteralHIRExpr::Boolean(_) => {
+                TypeConstructParams::simple(self.ctx.type_db.constructors.common_types.bool)
+            }
             LiteralHIRExpr::None => todo!("Must implement None"),
         };
-        Ok(HIRExpr::Literal(
-            literal_expr,
-            TypeInferenceResult::Monomorphic(literal_type),
-            meta,
-        ))
+        Ok(HIRExpr::Literal(literal_expr, literal_type, meta))
     }
 
     fn infer_struct_instantiate(
@@ -428,7 +348,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         struct_name: InternedString,
         struct_type_args: Vec<HIRType>,
         meta: HIRExprMetadata<'source>,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
         //since we already have a """good""" way to transform types into TypeUsage and potentially infer them,
         //we can transform the data we got into a HIRType, run InstantiateType in the whole thing
         //and badabing badaboom
@@ -444,6 +364,75 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         ))
     }
 
+    fn replace_type_params(
+        &self,
+        map: &std::collections::HashMap<TypeParameter, TypeConstructParams>,
+        type_construct_params: &TypeConstructParams,
+    ) -> TypeConstructParams {
+        match type_construct_params {
+            TypeConstructParams::Generic(param) => {
+                if let Some(replacement) = map.get(param) {
+                    return replacement.clone();
+                }
+                log!(
+                    "Type param not found in map: {:?}, continuing with generic param as is",
+                    param
+                );
+                TypeConstructParams::Generic(param.clone())
+            }
+            TypeConstructParams::Parameterized(root, args) => {
+                let mut new_args = vec![];
+                for arg in args {
+                    new_args.push(self.replace_type_params(map, arg));
+                }
+                TypeConstructParams::Parameterized(root.clone(), new_args)
+            }
+        }
+    }
+
+    fn function_type_constructor_substitute_generics(
+        &self,
+        type_args: &[TypeConstructParams],
+        function_type: &TypeConstructor,
+        additional_type_args: &std::collections::HashMap<TypeParameter, TypeConstructParams>,
+    ) -> FunctionSignature {
+        let map = {
+            if function_type.type_params.len() != type_args.len() {
+                todo!("Type args and function type params length mismatch");
+            }
+
+            let mut map = std::collections::HashMap::new();
+            for (idx, arg) in type_args.iter().enumerate() {
+                map.insert(function_type.type_params[idx].clone(), arg.clone());
+            }
+            if !additional_type_args.is_empty() {
+                map.extend(additional_type_args.clone());
+            }
+            map
+        };
+
+        let new_params = function_type
+            .function_params
+            .iter()
+            .map(|x| self.replace_type_params(&map, x))
+            .collect::<Vec<_>>();
+
+        let new_return_type = self.replace_type_params(
+            &map,
+            &function_type
+                .function_return_type
+                .clone()
+                .expect("Expected return type"),
+        );
+
+        FunctionSignature {
+            type_parameters: function_type.type_params.clone(),
+            params: new_params,
+            return_type: new_return_type,
+            variadic: function_type.function_variadic,
+        }
+    }
+
     fn infer_function_call(
         &mut self,
         //this is the expression which the function was called, normally this is a variable (TODO: right now it's only variables/identifiers)
@@ -452,7 +441,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         fun_type_args: Vec<HIRUserTypeInfo<()>>,
         fun_params: Vec<HIRExpr<'source, ()>>,
         meta: HIRExprMetadata<'source>,
-    ) -> Result<FunctionCall<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<FunctionCall<'source, TypeConstructParams>, CompilerError> {
         let HIRExpr::Variable(var, .., fcall_meta) = fun_expr else {
             todo!("Currently only function calls on names are supported");
         };
@@ -474,152 +463,68 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             function_type.clone()
         };
 
-        match function_type {
-            TypeInferenceResult::Monomorphic(function_type) => {
-                let type_data = self.ctx.type_db.get_instance(function_type);
+        let function_type_data = self.ctx.type_db.constructors.find(
+            function_type
+                .try_get_base()
+                .expect("Type constructor not found"),
+        );
 
-                if !type_data.is_function {
-                    return self
-                        .ctx
-                        .errors
-                        .call_non_callable
-                        .push_inference_error(report!(
-                            self,
-                            meta,
-                            CallToNonCallableType {
-                                actual_type: Some(function_type)
-                            }
-                        ));
-                }
-
-                let function_args = type_data
-                    .function_args
-                    .iter()
-                    .map(|x| TypeInferenceResult::Monomorphic(*x))
-                    .collect::<Vec<_>>();
-
-                let fun_params = self.infer_expr_array(fun_params, Some(&function_args))?;
-
-                //end the previous borrow and start a new one
-                let type_data = self.ctx.type_db.get_instance(function_type);
-
-                let result = FunctionCall {
-                    function: HIRExpr::Variable(
-                        var,
-                        TypeInferenceResult::Monomorphic(function_type),
-                        fcall_meta,
-                    )
-                    .into(),
-                    args: fun_params,
-                    type_args: vec![],
-                    return_type: TypeInferenceResult::Monomorphic(
-                        type_data.function_return_type.unwrap(),
-                    ),
-                    meta_expr: meta,
-                    meta_ast: None,
-                };
-
-                let strr = HIRExprPrinter::new(&self.ctx.type_db, false).print(&result.function);
-
-                log!("Function call variable (monomorphic): {}", strr);
-
-                Ok(result)
-            }
-
-            //In this case, the signature of the function will propagate unchanged,
-            //but the types **on the arguments** and **return type** will be substituted.
-            /*
-            def read<T>(p: ptr<T>) -> T:
-                intrinsic
-
-            def main():
-                let x = read<i32>(...)
-
-            In this case, read will always be a function with signature <T>(ptr<T>) -> T,
-            but the type of x will be substituted to i32.
-
-            def read<T>(p: ptr<T>) -> T:
-                intrinsic
-
-            def get_item<X>(x: ptr<X>) -> X:
-                item = read<X>(x)
-                return item
-
-            def main():
-                let x = get_item<i32>(...)
-
-            In this case, again, read will always be a function with signature <T>(ptr<T>) -> T,
-            but x will be inferred as ptr<X>, and item will also be inferred as X.
-
-            */
-            TypeInferenceResult::Polymorphic(sig @ TypeConstructParams::FunctionSignature(_)) => {
-                let positional_type_args = self.to_type_constructor_params(fun_type_args, meta)?;
-
-                let substituted = self.generic_substitute(&positional_type_args, &sig, &[]);
-
-                //the return of substituted has to be a FunctionSignature...
-                let TypeConstructParams::FunctionSignature(substituted) = substituted else {
-                    return self.ctx.errors.internal_error.push_inference_error(report!(
-                        self,
-                        meta,
-                        InternalError {
-                            error: "Expected substituted type to be a function signature"
-                                .to_string()
-                        }
-                    ));
-                };
-                let cloned = substituted.clone();
-                //try to run inference on the function parameters
-                let args_inferred = substituted
-                    .params
-                    .into_iter()
-                    .map(|param| self.ctx.try_construct(param, meta))
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let fun_params = self.infer_expr_array(fun_params, Some(&args_inferred))?;
-
-                let type_args_inferred = self.try_construct_many(positional_type_args, meta)?;
-                //println!("Type args inferred: {:?}", type_args_inferred);
-                let result = FunctionCall {
-                    function: HIRExpr::Variable(
-                        var,
-                        TypeInferenceResult::Polymorphic(sig), //this keeps the signature the same
-                        fcall_meta,
-                    )
-                    .into(),
-                    args: fun_params,
-                    type_args: type_args_inferred,
-                    return_type: TypeInferenceResult::Polymorphic(*substituted.return_type),
-                    meta_expr: meta,
-                    meta_ast: None,
-                };
-
-                let strr = HIRExprPrinter::new(&self.ctx.type_db, false).print(&result.function);
-
-                log!("Function call variable (polymorphic): {}", strr);
-                let type_printed = TypeInferenceResult::Polymorphic(
-                    TypeConstructParams::FunctionSignature(cloned),
-                )
-                .print_name(&self.ctx.type_db);
-                log!(
-                    "Function call variable type (polymorphic): {}",
-                    type_printed
-                );
-
-                Ok(result)
-            }
-            TypeInferenceResult::Polymorphic(_) => {
-                return self
-                    .ctx
-                    .errors
-                    .call_non_callable
-                    .push_inference_error(report!(
-                        self,
-                        meta,
-                        CallToNonCallableType { actual_type: None }
-                    ))
-            }
+        if function_type_data.kind != TypeKind::Function {
+            return self
+                .ctx
+                .errors
+                .call_non_callable_tc
+                .push_inference_error(report!(
+                    self,
+                    meta,
+                    CallToNonCallableType {
+                        actual_type: Some(function_type_data.id)
+                    }
+                ));
         }
+
+        let positional_type_args = self.to_type_constructor_params(fun_type_args, meta)?;
+
+        let positional_type_args_resolved = positional_type_args
+            .iter()
+            .map(|x| x.resolved_type.clone())
+            .collect::<Vec<_>>();
+
+        let function_type_data = self.ctx.type_db.constructors.find(
+            function_type
+                .try_get_base()
+                .expect("Type constructor not found"),
+        );
+
+        let ftype_substituted = self.function_type_constructor_substitute_generics(
+            &positional_type_args_resolved,
+            function_type_data,
+            &std::collections::HashMap::new(),
+        );
+
+        let args = ftype_substituted.params.clone();
+        let return_type = ftype_substituted.return_type.clone();
+
+        let fun_params = self.infer_expr_array(fun_params, Some(&args))?;
+
+        let type_args_inferred = self.try_construct_many(positional_type_args)?;
+
+        //println!("Type args inferred: {:?}", type_args_inferred);
+        let result = FunctionCall {
+            function: HIRExpr::Variable(
+                var,
+                function_type, //this keeps the signature the same
+                fcall_meta,
+            )
+            .into(),
+            args: fun_params,
+            type_args: type_args_inferred,
+            return_type,
+            meta_expr: meta,
+            meta_ast: None,
+        };
+
+        Ok(result)
     }
 
     fn infer_method_call(
@@ -628,164 +533,130 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         method_name: InternedString,
         params: Vec<HIRExpr<'source, ()>>,
         meta: HIRExprMetadata<'source>,
-    ) -> Result<MethodCall<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<MethodCall<'source, TypeConstructParams>, CompilerError> {
         //compute type of obj
         //find method_name in type of obj
         let objexpr = self.infer_expr(obj, None)?;
         let typeof_obj = objexpr.get_type();
 
-        match typeof_obj {
-            TypeInferenceResult::Monomorphic(typeof_obj) => {
-                let type_data = self.ctx.type_db.get_instance(typeof_obj);
-                //we'll find the method call here by name
-                let method = type_data.find_method_by_name(method_name);
-                if let Some(method) = method {
-                    let method_type = self.ctx.type_db.get_instance(method.function_type);
-                    let return_type = method_type.function_return_type.unwrap();
-                    let type_hints = method_type
-                        .function_args
-                        .clone()
-                        .into_iter()
-                        .map(|x| TypeInferenceResult::Monomorphic(x))
-                        .collect::<Vec<_>>();
-                    let args = self.infer_expr_array(params, Some(&type_hints))?;
+        let poly_ty = typeof_obj;
+        //we are going to see in the type constructors if the method exists and try to infer something about it
+        let constructor = poly_ty.try_get_base();
+        //println!("method call: {:?}", poly_ty.print_name(self.ctx.type_db));
+        if let Some(constructor) = constructor {
+            let constructor = self.ctx.type_db.constructors.find(constructor);
 
-                    let mcall = MethodCall {
-                        object: objexpr.into(),
-                        method_name,
-                        args,
-                        return_type: TypeInferenceResult::Monomorphic(return_type),
-                        meta_expr: meta,
-                    };
+            let method = constructor.find_method(method_name);
 
-                    Ok(mcall)
-                } else {
-                    self.ctx
-                        .errors
-                        .method_not_found
-                        .push_inference_error(report!(
-                            self,
-                            meta,
-                            MethodNotFound {
-                                object_type: typeof_obj,
-                                method: method_name,
-                            }
-                        ))?
-                }
-            }
-
-            TypeInferenceResult::Polymorphic(poly_ty) => {
-                //we are going to see in the type constructors if the method exists and try to infer something about it
-                let constructor = poly_ty.try_get_root_type_constructor_id();
-                //println!("method call: {:?}", poly_ty.print_name(self.ctx.type_db));
-                if let Some(constructor) = constructor {
-                    let constructor = self.ctx.type_db.constructors.find(constructor);
-
-                    let method = constructor.find_method(method_name);
-
-                    if let Some(method) = method {
-                        let method_call = self.infer_polymorphic_method_call(
-                            poly_ty.clone(),
-                            &method.clone(),
-                            meta,
-                            params.clone(),
-                            &objexpr,
-                            method_name,
-                        )?;
-                        return Ok(method_call);
-                    }
-                }
-
-                //There wasn't a root constructor ID, the object is generic, this will have to be solved in monomorph,
-                //and we have no type hints
-                let args = self.infer_expr_array(params, None)?;
-
-                let mcall = MethodCall {
-                    object: objexpr.into(),
+            if let Some(method) = method {
+                let method_call = self.infer_polymorphic_method_call(
+                    poly_ty.clone(),
+                    &method.clone(),
+                    meta,
+                    params.clone(),
+                    &objexpr,
                     method_name,
-                    args,
-                    return_type: TypeInferenceResult::Polymorphic(poly_ty),
-                    meta_expr: meta,
-                };
-
-                Ok(mcall)
+                )?;
+                return Ok(method_call);
             }
         }
+
+        //There wasn't a root constructor ID, the object is generic, this will have to be solved in monomorph,
+        //and we have no type hints
+        let args = self.infer_expr_array(params, None)?;
+
+        let mcall = MethodCall {
+            object: objexpr.into(),
+            method_name,
+            args,
+            return_type: poly_ty,
+            meta_expr: meta,
+        };
+
+        Ok(mcall)
     }
 
     fn infer_polymorphic_method_call(
         &mut self,
-        poly_ty: TypeConstructParams,
+        object_type: TypeConstructParams,
         method: &crate::types::type_constructor_db::TypeConstructorFunctionDeclaration,
         meta: HIRExprMetadata<'source>,
         params: Vec<HIRExpr<'source, ()>>,
-        objexpr: &HIRExpr<'source, TypeInferenceResult>,
+        objexpr: &HIRExpr<'source, TypeConstructParams>,
         method_name: InternedString,
-    ) -> Result<MethodCall<'source, TypeInferenceResult>, CompilerError> {
-        match poly_ty {
-            //@TODO this is a bit of a mess, maybe poly_ty should be a separate struct...
-            TypeConstructParams::Given(_) => unreachable!("Should not happen: Inference of such a simple type should have resulted in a monomorphic type"),
-            TypeConstructParams::Generic(_) => unreachable!("Should not happen: We know it should not be Generic here"),
-            TypeConstructParams::FunctionSignature(_) => todo!("Don't know what to do here yet but could be useful for metaprogramming?"),
+    ) -> Result<MethodCall<'source, TypeConstructParams>, CompilerError> {
+        match object_type {
+            TypeConstructParams::Generic(_) => {
+                unreachable!("Should not happen: We know it should not be Generic here")
+            }
             TypeConstructParams::Parameterized(root, args) => {
-
                 log!("Infering polymorphic method call with root: {:?} and method {method:?} and args {:?}", root, args);
-                //now we have a map of type parameters and their types substituted, 
+                //now we have a map of type parameters and their types substituted,
                 //let's pretend we actually have a function call whose first argument is the object
 
-                let positional_type_args = args.clone().into_iter()
-                    .map(|x| HIRUserTypeInfo { user_given_type: None, resolved_type: x } ).collect::<Vec<_>>();
+                // let positional_type_args = args.clone().into_iter()
+                //    .map(|x| HIRUserTypeInfo { user_given_type: None, resolved_type: x } ).collect::<Vec<_>>();
 
-                let substituted = self.generic_substitute(
-                    &positional_type_args,
-                    &TypeConstructParams::FunctionSignature(method.signature.clone()), &[]);
+                let constructor = self.ctx.type_db.constructors.find(root);
+                let constructor_type_args = constructor.type_params.clone();
 
-                //the return of substituted has to be a FunctionSignature...
-                let TypeConstructParams::FunctionSignature(substituted) = substituted else {
-                    return self.ctx.errors.internal_error.push_inference_error(report!(
-                        self,
-                        meta,
-                        InternalError {
-                            error: "Method call generic substitution: Expected substituted type to be a function signature"
-                                .to_string()
-                        }
-                    ));
+                let mut additional_type_args = std::collections::HashMap::new();
+                for (idx, arg) in args.iter().enumerate() {
+                    additional_type_args.insert(constructor_type_args[idx].clone(), arg.clone());
+                }
+
+                let method_type = self.ctx.type_db.constructors.find(method.signature);
+
+                let Some(first_arg) = method_type.function_params.first() else {
+                    panic!(
+                        "Function {} does not seem to be a method of an object",
+                        method_name
+                    );
                 };
 
-                //since the method has an object parameter representing this/self, 
-                //we need to skip it when inferring the arguments
+                let function_type_sig = self.function_type_constructor_substitute_generics(
+                    &vec![],
+                    &method_type,
+                    &additional_type_args,
+                );
 
-                let skipped_first = substituted.params.iter().skip(1).cloned().collect::<Vec<_>>();
+                let args = function_type_sig.params.clone();
+                let return_type = function_type_sig.return_type.clone();
 
-                let args_inferred = skipped_first
-                    .into_iter()
-                    .map(|param| self.ctx.try_construct(param, meta))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let skip_self = args
+                    .iter()
+                    .skip(if first_arg.try_get_base().unwrap() == root {
+                        1
+                    } else {
+                        0
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
 
-                let fun_params = self.infer_expr_array(params, Some(&args_inferred))?;
+                let fun_params = self.infer_expr_array(params, Some(&skip_self))?;
 
-                let type_args_inferred = self.try_construct_many(positional_type_args, meta)?;
+                //let type_args_inferred = self.try_construct_many(positional_type_args, meta)?;
                 //println!("Type args inferred: {:?}", type_args_inferred);
 
                 let mcall = MethodCall {
                     object: objexpr.clone().into(),
                     method_name,
                     args: fun_params,
-                    return_type: TypeInferenceResult::Polymorphic(*substituted.return_type),
+                    return_type: return_type,
                     meta_expr: meta,
                 };
 
                 return Ok(mcall);
-            },
+            }
         }
     }
 
     fn infer_array(
         &mut self,
         array_items: Vec<HIRExpr<'source, ()>>,
-        type_hint: Option<TypeInferenceResult>,
+        type_hint: Option<TypeConstructParams>,
         meta: HIRExprMetadata<'source>,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
         if array_items.is_empty() {
             if let Some(hint) = type_hint {
                 Ok(HIRExpr::Array(vec![], hint, meta))
@@ -807,29 +678,11 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             let array_type = self.ctx.type_db.constructors.common_types.array;
 
             if let Some(expr) = first_typed_item {
-                if let TypeInferenceResult::Monomorphic(expr_type) = expr.get_type() {
-                    let array_type_generic_replaced =
-                        self.ctx.type_db.construct_type(array_type, &[expr_type]);
-
-                    match array_type_generic_replaced {
-                        Ok(array_type_generic_replaced) => Ok(HIRExpr::Array(
-                            all_exprs,
-                            TypeInferenceResult::Monomorphic(array_type_generic_replaced),
-                            meta,
-                        )),
-                        Err(e) => self
-                            .ctx
-                            .errors
-                            .type_construction_failure
-                            .push_inference_error(report!(
-                                self,
-                                meta,
-                                TypeConstructionFailure { error: e }
-                            )),
-                    }
-                } else {
-                    Ok(HIRExpr::Array(all_exprs.clone(), expr.get_type(), meta))
-                }
+                Ok(HIRExpr::Array(
+                    all_exprs.clone(),
+                    TypeConstructParams::Parameterized(array_type, vec![expr.get_type()]),
+                    meta,
+                ))
             } else {
                 //array has items but all of them failed type inference lmao
                 //no choice but to give up and return a fully unresolved array
@@ -846,71 +699,65 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         }
     }
 
+    //@TODO this is basically useless in the end, but it does provide information for debugging purposes
+    //when we test the type inference without monomorphization (i.e. what would the IDE see)
     fn infer_member_access(
         &mut self,
         obj: HIRExpr<'source, ()>,
         meta: HIRExprMetadata<'source>,
         name: InternedString,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
         log!("Infering member access: {}", name);
         let obj_expr = self.infer_expr(obj, None)?;
 
         let typeof_obj = obj_expr.get_type();
 
         match typeof_obj {
-            TypeInferenceResult::Monomorphic(typeof_obj) => {
-                let type_data = self.ctx.type_db.get_instance(typeof_obj);
+            TypeConstructParams::Generic(_) => {
+                //If we got here, maybe we don't have the type yet because it's an object with a generic type,
+                //so we can't infer the field type yet
+                //typeof_obj
+                return Ok(HIRExpr::MemberAccess(
+                    obj_expr.into(),
+                    name,
+                    typeof_obj, //doesn't make much sense to return the same type of the field... but we have to return something
+                    meta,
+                ));
+            }
+            TypeConstructParams::Parameterized(constructor, args) => {
+                let constructor = self.ctx.type_db.constructors.find(constructor);
 
-                let field = type_data.fields.iter().find(|field| field.name == name);
+                let mut type_map = std::collections::HashMap::new();
+                for (idx, arg) in args.iter().enumerate() {
+                    type_map.insert(constructor.type_params[idx].clone(), arg.clone());
+                }
+
+                let field = constructor.find_field(name);
+
                 if let Some(field) = field {
-                    let resolved_type = field.field_type;
-                    Ok(HIRExpr::MemberAccess(
+                    let return_type = field.field_type.clone();
+
+                    let replaced_return_type = self.replace_type_params(&type_map, &return_type);
+
+                    return Ok(HIRExpr::MemberAccess(
                         obj_expr.into(),
                         name,
-                        TypeInferenceResult::Monomorphic(resolved_type),
+                        replaced_return_type,
                         meta,
-                    ))
+                    ));
                 } else {
                     self.ctx
                         .errors
-                        .field_not_found
+                        .field_not_found_tc
                         .push_inference_error(report!(
                             self,
                             meta,
                             FieldNotFound {
-                                object_type: typeof_obj,
                                 field: name,
+                                object_type: constructor.id
                             }
-                        ))?
+                        ))
                 }
-            }
-            TypeInferenceResult::Polymorphic(poly_ty) => {
-                //we are going to see in the type constructors if the field exists and try to infer something about it
-                let constructor = poly_ty.try_get_root_type_constructor_id();
-
-                if let Some(constructor) = constructor {
-                    let constructor = self.ctx.type_db.constructors.find(constructor);
-
-                    let field = constructor.find_field(name);
-
-                    if let Some(field) = field {
-                        let return_type =
-                            TypeInferenceResult::Polymorphic(field.field_type.clone());
-
-                        return Ok(HIRExpr::MemberAccess(
-                            obj_expr.into(),
-                            name,
-                            return_type,
-                            meta,
-                        ));
-                    }
-                }
-                Ok(HIRExpr::MemberAccess(
-                    obj_expr.into(),
-                    name,
-                    TypeInferenceResult::Polymorphic(poly_ty),
-                    meta,
-                ))
             }
         }
     }
@@ -919,77 +766,51 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         &mut self,
         rhs: HIRExpr<'source, ()>,
         meta: HIRExprMetadata<'source>,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
         let rhs_expr = self.infer_expr(rhs, None)?;
         let typeof_obj = rhs_expr.get_type();
 
-        match typeof_obj {
-            TypeInferenceResult::Monomorphic(typeof_obj) => {
-                let type_data = self.ctx.type_db.get_instance(typeof_obj);
-                if type_data.base == self.ctx.type_db.constructors.common_types.ptr {
-                    let derefed_type = type_data.type_args[0];
-                    Ok(HIRExpr::Deref(
-                        rhs_expr.into(),
-                        TypeInferenceResult::Monomorphic(derefed_type),
-                        meta,
-                    ))
-                } else {
-                    self.ctx
-                        .errors
-                        .invalid_derefed_type
-                        .push_inference_error(report!(
-                            self,
-                            meta,
-                            DerefOnNonPointerError {
-                                attempted_type: typeof_obj,
-                            }
-                        ))?
-                }
-            }
-            TypeInferenceResult::Polymorphic(TypeConstructParams::Parameterized(
-                maybe_ptr,
-                pointee_type,
-            )) => {
-                if let TypeConstructParams::Given(maybe_ptr_id) = *maybe_ptr
-                    && maybe_ptr_id == self.ctx.type_db.constructors.common_types.ptr
-                {
-                    Ok(HIRExpr::Deref(
-                        rhs_expr.into(),
-                        TypeInferenceResult::Polymorphic(pointee_type[0].clone()),
-                        meta,
-                    ))
-                } else {
-                    self.ctx
-                        .errors
-                        .invalid_derefed_type_unconstructed
-                        .push_inference_error(report!(
-                            self,
-                            meta,
-                            DerefOnNonPointerErrorUnconstructed {
-                                attempted_type: *maybe_ptr.clone(),
-                            }
-                        ))?
-                }
-            }
-            TypeInferenceResult::Polymorphic(params) => self
-                .ctx
-                .errors
-                .invalid_derefed_type_unconstructed
-                .push_inference_error(report!(
-                    self,
+        if let TypeConstructParams::Parameterized(maybe_ptr, pointee_type) = typeof_obj {
+            if maybe_ptr == self.ctx.type_db.constructors.common_types.ptr {
+                return Ok(HIRExpr::Deref(
+                    rhs_expr.into(),
+                    pointee_type[0].clone(),
                     meta,
-                    DerefOnNonPointerErrorUnconstructed {
-                        attempted_type: params.clone(),
-                    }
-                ))?,
+                ));
+            } else {
+                return self
+                    .ctx
+                    .errors
+                    .invalid_derefed_type_unconstructed
+                    .push_inference_error(report!(
+                        self,
+                        meta,
+                        DerefOnNonPointerErrorUnconstructed {
+                            attempted_type: TypeConstructParams::Parameterized(
+                                maybe_ptr,
+                                pointee_type
+                            ),
+                        }
+                    ))?;
+            }
         }
+        self.ctx
+            .errors
+            .invalid_derefed_type_unconstructed
+            .push_inference_error(report!(
+                self,
+                meta,
+                DerefOnNonPointerErrorUnconstructed {
+                    attempted_type: typeof_obj.clone(),
+                }
+            ))
     }
 
     fn infer_ref_expr(
         &mut self,
         rhs: HIRExpr<'source, ()>,
         meta: HIRExprMetadata<'source>,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
         let rhs_expr = self.infer_expr(rhs, None)?;
         let is_lvalue = rhs_expr.is_lvalue(self.ctx.type_db);
         if !is_lvalue {
@@ -1002,37 +823,9 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         let typeof_obj = rhs_expr.get_type();
         let ptr_type = self.ctx.type_db.constructors.common_types.ptr;
 
-        match typeof_obj.clone() {
-            TypeInferenceResult::Monomorphic(typeof_obj) => {
-                let ptr_type_generic_replaced =
-                    self.ctx.type_db.construct_type(ptr_type, &[typeof_obj]);
-                match ptr_type_generic_replaced {
-                    Ok(ptr_type_generic_replaced) => Ok(HIRExpr::Ref(
-                        rhs_expr.into(),
-                        TypeInferenceResult::Monomorphic(ptr_type_generic_replaced),
-                        meta,
-                    )),
-                    Err(e) => self
-                        .ctx
-                        .errors
-                        .type_construction_failure
-                        .push_inference_error(report!(
-                            self,
-                            meta,
-                            TypeConstructionFailure { error: e }
-                        ))?,
-                }
-            }
-            TypeInferenceResult::Polymorphic(construct_params) => {
-                let ref_expr =
-                    TypeInferenceResult::Polymorphic(TypeConstructParams::Parameterized(
-                        TypeConstructParams::Given(ptr_type).into(),
-                        vec![construct_params],
-                    ));
+        let ref_expr = TypeConstructParams::Parameterized(ptr_type, vec![typeof_obj]);
 
-                Ok(HIRExpr::Ref(rhs_expr.into(), ref_expr, meta))
-            }
-        }
+        Ok(HIRExpr::Ref(rhs_expr.into(), ref_expr, meta))
     }
 
     fn infer_unary_expr(
@@ -1040,51 +833,23 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         rhs: HIRExpr<'source, ()>,
         meta: HIRExprMetadata<'source>,
         op: SpannedOperator,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
         let rhs_expr = self.infer_expr(rhs, None)?;
         let rhs_type = rhs_expr.get_type();
-
-        if let TypeInferenceResult::Monomorphic(rhs_type) = rhs_type {
-            for (operator, result_type) in &self.ctx.type_db.get_instance(rhs_type).unary_ops {
-                if *operator == op.0 {
-                    return Ok(HIRExpr::UnaryExpression(
-                        op,
-                        rhs_expr.into(),
-                        TypeInferenceResult::Monomorphic(*result_type),
-                        TypeInferenceCertainty::Certain,
-                        meta,
-                    ));
-                }
-            }
-
-            self.ctx
-                .errors
-                .unary_op_not_found
-                .push(report!(
-                    self,
-                    &op.1,
-                    UnaryOperatorNotFound {
-                        rhs: rhs_type,
-                        operator: op.0,
-                    }
-                ))
-                .as_type_check_error()
-        } else {
-            return Ok(HIRExpr::UnaryExpression(
-                op,
-                rhs_expr.into(),
-                rhs_type,
-                TypeInferenceCertainty::Uncertain,
-                meta,
-            ));
-        }
+        return Ok(HIRExpr::UnaryExpression(
+            op,
+            rhs_expr.into(),
+            rhs_type,
+            TypeInferenceCertainty::Uncertain,
+            meta,
+        ));
     }
 
     fn infer_expr_array(
         &mut self,
         exprs: Vec<HIRExpr<'source, ()>>,
-        positional_type_hints: Option<&[TypeInferenceResult]>,
-    ) -> Result<Vec<HIRExpr<'source, TypeInferenceResult>>, CompilerError> {
+        positional_type_hints: Option<&[TypeConstructParams]>,
+    ) -> Result<Vec<HIRExpr<'source, TypeConstructParams>>, CompilerError> {
         let mut result = vec![];
         for (idx, expr) in exprs.into_iter().enumerate() {
             let type_hint = positional_type_hints.and_then(|hints| hints.get(idx));
@@ -1097,11 +862,10 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
     fn try_construct_many(
         &mut self,
         args: Vec<HIRUserTypeInfo<TypeConstructParams>>,
-        meta: HIRExprMetadata<'source>,
-    ) -> Result<Vec<HIRUserTypeInfo<TypeInferenceResult>>, CompilerError> {
+    ) -> Result<Vec<HIRUserTypeInfo<TypeConstructParams>>, CompilerError> {
         let mut result = vec![];
         for arg in args {
-            let res = self.ctx.try_construct(arg.resolved_type, meta)?;
+            let res = arg.resolved_type;
             result.push(HIRUserTypeInfo {
                 resolved_type: res,
                 user_given_type: arg.user_given_type,
@@ -1129,90 +893,13 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         Ok(result)
     }
 
-    fn generic_substitute_many(
-        &mut self,
-        params: &[TypeConstructParams],
-        positional_type_args: &[HIRUserTypeInfo<TypeConstructParams>],
-        generics: &[TypeParameter],
-    ) -> Vec<TypeConstructParams> {
-        params
-            .iter()
-            .map(|param| self.generic_substitute(positional_type_args, param, generics))
-            .collect::<Vec<_>>()
-    }
-
-    //Generate a function signature for a type usage, given the type arguments.
-    fn generic_substitute(
-        &mut self,
-        //these are the arguments passed, for instance, call<i32, T>()
-        positional_type_args: &[HIRUserTypeInfo<TypeConstructParams>],
-        //this is the type of the function being called. The first call to generic_substitute will be a FunctionSignature
-        type_of_value: &TypeConstructParams,
-        //The order of the type parameters of the function definition, def foo<T, U>(..) would be <T, U>,
-        //but in the first call this will be empty.
-        positional_type_parameters: &[TypeParameter],
-    ) -> TypeConstructParams {
-        log!("Generic substitute: \nType of value: {:?}\nPositional Type Args{:?}\nPositional type params:{:?}", type_of_value.to_string(&self.ctx.type_db.constructors), positional_type_args, positional_type_parameters);
-        match type_of_value {
-            //If the type is given then just use it.
-            TypeConstructParams::Given(type_constructor) => {
-                TypeConstructParams::Given(*type_constructor)
-            }
-            TypeConstructParams::Generic(type_param) => {
-                //get the index of the parameter in type_parameters
-                let index = positional_type_parameters
-                    .iter()
-                    .position(|x| x == type_param)
-                    .expect("Type parameter not found");
-                //println!("Index of type parameter: {}", index);
-                //get the type argument at the same index
-                let type_arg = positional_type_args
-                    .get(index)
-                    .expect("Type argument not found"); //TODO nicer error
-                                                        //return the type argument
-                type_arg.resolved_type.clone()
-            }
-            //@TODO this is a bit weird.... the caller can pass positional_type_args because it knows it's a function....
-            TypeConstructParams::FunctionSignature(FunctionSignature {
-                generics,
-                params,
-                return_type,
-                variadic,
-            }) => {
-                log!("Substituting function signature with generics: {:?} and params: {:?} and return type: {:?} and variadic: {:?}", generics, params, return_type, variadic);
-                //we need to return a new function signature with the type parameters substituted.
-                let substituted_params =
-                    self.generic_substitute_many(params, positional_type_args, generics);
-                let substituted_return_type =
-                    self.generic_substitute(positional_type_args, return_type, generics);
-
-                TypeConstructParams::FunctionSignature(FunctionSignature {
-                    generics: generics.clone(),
-                    params: substituted_params,
-                    return_type: substituted_return_type.into(),
-                    variadic: *variadic,
-                })
-            }
-            TypeConstructParams::Parameterized(base, params) => {
-                let base =
-                    self.generic_substitute(positional_type_args, base, positional_type_parameters);
-                let substituted_params = self.generic_substitute_many(
-                    params,
-                    positional_type_args,
-                    positional_type_parameters,
-                );
-                TypeConstructParams::Parameterized(base.into(), substituted_params)
-            }
-        }
-    }
-
     fn infer_binop(
         &mut self,
         lhs: HIRExpr<'source, ()>,
         meta: HIRExprMetadata<'source>,
         rhs: HIRExpr<'source, ()>,
         op: SpannedOperator,
-    ) -> Result<HIRExpr<'source, TypeInferenceResult>, CompilerError> {
+    ) -> Result<HIRExpr<'source, TypeConstructParams>, CompilerError> {
         let lhs_expr = self.infer_expr(lhs, None)?;
         let lhs_type = lhs_expr.get_type();
 
@@ -1225,21 +912,20 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         let s = rhs_type.print_name(&self.ctx.type_db);
         log!("RHS type inferred: {}", s);
 
-        match (lhs_type, rhs_type) {
-            (
-                TypeInferenceResult::Monomorphic(lhs_type),
-                TypeInferenceResult::Monomorphic(rhs_type),
-            ) => {
-                let lhs_instance = self.ctx.type_db.get_instance(lhs_type);
+        let lhs_type_id = lhs_type.try_get_base();
+        let rhs_type_id = rhs_type.try_get_base();
+        match (lhs_type_id, rhs_type_id) {
+            (Some(lhs_type_id), Some(rhs_type_id)) => {
+                let lhs_instance = self.ctx.type_db.constructors.find(lhs_type_id);
 
                 for (operator, rhs_supported, result_type) in &lhs_instance.rhs_binary_ops {
-                    if *operator == op.0 && *rhs_supported == rhs_type {
+                    if *operator == op.0 && rhs_supported.try_get_base() == Some(rhs_type_id) {
                         return Ok(HIRExpr::BinaryOperation(
                             Box::new(lhs_expr),
                             op,
                             Box::new(rhs_expr),
-                            TypeInferenceResult::Monomorphic(*result_type),
-                            TypeInferenceCertainty::Certain,
+                            result_type.clone(),
+                            TypeInferenceCertainty::Uncertain,
                             meta,
                         ));
                     }
@@ -1248,24 +934,24 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                 //operator not found, add binary op not found error
                 self.ctx
                     .errors
-                    .binary_op_not_found
+                    .binary_op_not_found_tc
                     .push_inference_error(report!(
                         self,
                         &op.1,
-                        BinaryOperatorNotFound {
+                        BinaryOperatorNotFoundForTypeConstructor {
                             lhs: lhs_type,
                             rhs: rhs_type,
                             operator: op.0,
                         }
                     ))
             }
-            (ty, _) => {
+            _ => {
                 //if one of the types is not inferred, we have to wait for monomorphization and rerun inference later
                 Ok(HIRExpr::BinaryOperation(
                     Box::new(lhs_expr),
                     op,
                     Box::new(rhs_expr),
-                    ty, //just pass anything here, not important
+                    lhs_type, //just pass anything here, not important
                     TypeInferenceCertainty::Uncertain,
                     meta,
                 ))
@@ -1446,9 +1132,9 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 
     fn infer_function(
         &mut self,
-        parameters: &[HIRTypedBoundName<TypeInferenceResult>],
+        parameters: &[HIRTypedBoundName<TypeConstructParams>],
         body: Vec<TypeInferenceInputHIR<'source>>,
-        _return_type: TypeInferenceResult,
+        _return_type: TypeConstructParams,
         _meta: HIRAstMetadata<'source>,
     ) -> Result<Vec<InferredTypeHIR<'source>>, CompilerError> {
         let mut decls_in_scope = NameRegistry::new();
@@ -1477,7 +1163,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 }
 
 pub fn infer_types<'source>(
-    globals: &mut NameRegistry,
+    globals: &mut NameRegistry<TypeConstructParams>,
     type_db: &mut TypeInstanceManager,
     mir: Vec<TypeInferenceInputHIRRoot<'source>>,
     errors: &mut TypeErrors<'source>,
@@ -1537,23 +1223,21 @@ pub fn infer_types<'source>(
                 type_parameters,
                 meta,
             } => {
-                let mut inference_ctx = TypeInferenceContext {
-                    on_function: RootElementType::Struct(struct_name),
-                    type_db,
-                    errors,
-                    decls_in_scope: globals,
-                    type_parameters: type_parameters.clone(),
-                    impl_of: None,
-                };
-
                 let resolved_fields = fields
                     .into_iter()
                     .map(|f| {
-                        let resolved_type = inference_ctx.instantiate_type(&f.type_data, meta)?;
+                        let type_data = hir_type_to_usage(
+                            RootElementType::Struct(struct_name),
+                            &f.type_data,
+                            type_db,
+                            &type_parameters,
+                            errors,
+                            meta,
+                        )?;
 
                         Ok(HIRTypedBoundName {
                             name: f.name,
-                            type_data: resolved_type,
+                            type_data,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1571,7 +1255,6 @@ pub fn infer_types<'source>(
                 methods,
                 meta,
             } => {
-                
                 let mut methods_inferred = vec![];
 
                 for method in methods {

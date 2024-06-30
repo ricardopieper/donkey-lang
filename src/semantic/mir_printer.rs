@@ -200,7 +200,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> Strin
             parameters,
             return_type,
             is_varargs,
-            is_external,
+            ..
         } => {
             let parameters = parameters
                 .iter()
