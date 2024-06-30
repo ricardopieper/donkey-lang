@@ -3102,7 +3102,6 @@ print(x)"
     }
 
     #[test]
-    #[ignore] //Cannot parse self yet
     fn member_compare() {
         parse_and_print_back_to_original("self.current >= self.max");
     }

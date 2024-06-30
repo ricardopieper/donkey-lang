@@ -1,3 +1,4 @@
+use crate::semantic::type_name_printer::TypeNamePrinter;
 use crate::{ast::lexer::Operator, compiler::layouts::Bytes};
 
 use crate::interner::InternedString;
@@ -9,7 +10,6 @@ pub struct TypeConstructorId(pub usize);
 #[cfg(test)] 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TypeConstructorId(pub usize, pub InternedString);
-
 
 
 impl TypeConstructorId {
@@ -692,7 +692,7 @@ impl TypeConstructorDatabase {
                         TypeConstructParams::Parameterized(
                             ptr_type,
                             vec![TypeConstructParams::Generic(TypeParameter(istr("TPtr")))],
-                        ),
+                        ), //self
                         TypeConstructParams::simple(self.common_types.u64)],/* offset * sizeof(TPtr) */
                     return_type: TypeConstructParams::Parameterized(
                         ptr_type,
@@ -700,7 +700,6 @@ impl TypeConstructorDatabase {
                     ).into(),
                     variadic: Variadic(false),
                     type_parameters: vec![]
-                
             },
         );
         self.mark_as_intrisic(ptr_type);
@@ -725,7 +724,13 @@ impl TypeConstructorDatabase {
             arr_type,
             istr("__index_ptr__"),
              FunctionSignature {
-                    params: vec![TypeConstructParams::simple(u32_type)],
+                    params: vec![
+                        TypeConstructParams::Parameterized(
+                            arr_type,
+                            vec![TypeConstructParams::Generic(TypeParameter(istr("TItem")))],
+                        ), //self
+                        TypeConstructParams::simple(u32_type)
+                    ],
                     return_type: TypeConstructParams::Parameterized(
                         ptr_type,
                         vec![TypeConstructParams::Generic(TypeParameter(istr("TItem")))],
@@ -733,7 +738,6 @@ impl TypeConstructorDatabase {
                     .into(),
                     variadic: Variadic(false),
                     type_parameters: vec![],
-                
             },
         );
 

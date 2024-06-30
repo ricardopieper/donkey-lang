@@ -14,8 +14,8 @@ use crate::ast::{lexer, parser};
 use crate::interner::InternedString;
 use crate::semantic::{first_assignments, mir_printer, top_level_decls, type_inference};
 use crate::types::diagnostics::TypeErrorPrinter;
-use crate::types::type_constructor_db::TypeConstructParams;
-use crate::types::type_instance_db::TypeInstanceManager;
+use crate::types::type_constructor_db::{TypeConstructParams, TypeKind};
+use crate::types::type_instance_db::{TypeInstanceId, TypeInstanceManager};
 use crate::{ast::parser::AST, types::diagnostics::TypeErrors};
 
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
@@ -108,7 +108,6 @@ pub struct Analyzer<'source> {
     pub mir: Vec<MIRTopLevelNode<'source>>,
     pub unchecked_mir: Vec<MIRTopLevelNode<'source>>,
     pub type_db: TypeInstanceManager,
-    pub globals: NameRegistry<TypeConstructParams>,
     pub type_errors: TypeErrors<'source>,
     pub hir: Vec<InferredTypeHIRRoot<'source>>,
     pub hir_monomorphized: Vec<MonomorphizedHIRRoot<'source>>,
@@ -119,7 +118,6 @@ impl<'source> Analyzer<'source> {
     pub fn new(source: &'source Source) -> Analyzer<'source> {
         Analyzer {
             type_db: TypeInstanceManager::new(),
-            globals: NameRegistry::new(),
             type_errors: TypeErrors::new(),
             mir: vec![],
             hir: vec![],
@@ -182,6 +180,7 @@ impl<'source> Analyzer<'source> {
     }
     pub fn generate_mir_and_typecheck(&mut self, source: &'source Source, do_typecheck: bool) {
         //stage 1: conversion to HIR
+        let mut globals: NameRegistry<TypeConstructParams> = NameRegistry::new();
         let all_hir = source
             .file_table
             .iter()
@@ -190,7 +189,7 @@ impl<'source> Analyzer<'source> {
 
         let inferred_globals_hir = match top_level_decls::build_name_registry_and_resolve_signatures(
             &mut self.type_db,
-            &mut self.globals,
+            &mut globals,
             &mut self.type_errors,
             all_hir,
         ) {
@@ -211,7 +210,7 @@ impl<'source> Analyzer<'source> {
         );
 
         let type_inferred = type_inference::infer_types(
-            &mut self.globals,
+            &mut globals,
             &mut self.type_db,
             struct_instantiations,
             &mut self.type_errors,
@@ -247,19 +246,44 @@ impl<'source> Analyzer<'source> {
 
         let (monomorphized_hir, new_top_level_decls) = monomorphizer.get_result();
 
-       
+
 
         self.hir_monomorphized = monomorphized_hir.clone();
 
         let mir = hir_to_mir(monomorphized_hir, &mut self.type_errors);
 
+        let mut top_level_decls_instantiated = NameRegistry::<TypeInstanceId>::new();
+
+        top_level_decls_instantiated.include(&new_top_level_decls);
+
+        for (k, v) in globals.names.iter() {
+            match v {
+                TypeConstructParams::Parameterized(tc, args) if args.len() == 0 => {
+
+                    let type_data = self.type_db.constructors.find(*tc);
+
+                    if type_data.kind == TypeKind::Function && type_data.type_params.len() > 0 {
+                        continue;
+                    }
+
+                    let instance = self
+                        .type_db
+                        .construct_type(*tc, &[])
+                        .expect(&format!("Failed to construct type for name {}", k));
+                    top_level_decls_instantiated.insert(k.clone(), instance);
+                },
+                _ => {}
+            }
+        }
+
         if let Ok(mir) = mir {
             let printed_mir = mir_printer::print_mir(&mir, &self.type_db);
             log!("MIR being typechecked: {printed_mir}");
+            new_top_level_decls.print(&self.type_db);
 
             if do_typecheck {
                 let typechecked =
-                    typecheck(mir, &self.type_db, &new_top_level_decls, &mut self.type_errors);
+                    typecheck(mir, &self.type_db, &top_level_decls_instantiated, &mut self.type_errors);
 
                 if self.type_errors.count() == 0 {
                     self.mir.extend(typechecked.unwrap());
@@ -326,12 +350,12 @@ mod tests {
 
     use crate::{
         ast::lexer::Operator,
-        interner::{InternedString},
+        interner::InternedString,
         semantic::{
             context::test_utils::{do_analysis, parse, parse_no_std},
             hir::HIRTypeDisplayer,
             hir_printer::HIRPrinter,
-            mir_printer::print_mir,
+            mir_printer::print_mir, type_name_printer::TypeNamePrinter,
         },
     };
 
@@ -459,6 +483,7 @@ def main(args: array<str>):
     print_int(10)",
         );
         let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 0);
         let result = print_hir(analyzed.last_hir(1), &analyzed);
 
@@ -607,7 +632,7 @@ def main():
 def id(x: i32) -> i32:
     return x
 def main() -> Void:
-    my_func : fn (i32) -> i32 = id
+    my_func : fn(i32) -> i32 = id
     my_var : i32 = my_func(1)";
 
         assert_eq!(expected.trim(), final_result.trim());
@@ -644,7 +669,7 @@ def main() -> Void:
 
     #[test]
     fn return_expr() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
 def main(x: i32) -> i32:
     y = 0
@@ -678,7 +703,7 @@ def main(x: i32) -> i32:
 
     #[test]
     fn self_decl_read_expr() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
 def main(x: i32) -> i32:
     a = 1
@@ -693,7 +718,7 @@ def main(x: i32) -> i32:
 
     #[test]
     fn if_return_both_branches() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
 def main(x: i32) -> i32:
     if x == 0:
@@ -718,7 +743,7 @@ def main(x: i32) -> i32:
 
     #[test]
     fn if_more_branches() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
 def main(x: i32) -> i32:
     if x == 0:
@@ -780,7 +805,7 @@ def main(x: i32) -> i32:
 
     #[test]
     fn if_statements_decls_inside_branches() {
-        let parsed = parse(
+        let parsed = parse_no_std(
             "
 def main() -> i32:
     x = 0
@@ -872,26 +897,26 @@ def my_function():
         let analyzed = do_analysis(&parsed);
 
         assert_eq!(analyzed.type_errors.count(), 1);
-        assert_eq!(analyzed.type_errors.binary_op_not_found.len(), 1);
+        assert_eq!(analyzed.type_errors.binary_op_not_found_tc.len(), 1);
 
         assert_eq!(
-            analyzed.type_errors.binary_op_not_found[0]
+            analyzed.type_errors.binary_op_not_found_tc[0]
                 .error
                 .lhs
-                .to_string(&analyzed.type_db),
+                .print_name(&analyzed.type_db),
             "i32"
         );
 
         assert_eq!(
-            analyzed.type_errors.binary_op_not_found[0]
+            analyzed.type_errors.binary_op_not_found_tc[0]
                 .error
                 .rhs
-                .to_string(&analyzed.type_db),
+                .print_name(&analyzed.type_db),
             "str"
         );
 
         assert_eq!(
-            analyzed.type_errors.binary_op_not_found[0].error.operator,
+            analyzed.type_errors.binary_op_not_found_tc[0].error.operator,
             Operator::Plus
         );
     }
@@ -908,21 +933,21 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 1);
 
-        assert_eq!(analyzed.type_errors.field_not_found.len(), 1);
+        assert_eq!(analyzed.type_errors.field_not_found_tc.len(), 1);
 
         assert_eq!(
-            analyzed.type_errors.field_not_found[0].error.field,
+            analyzed.type_errors.field_not_found_tc[0].error.field,
             InternedString::new("sizee")
         );
         assert_eq!(
-            analyzed.type_errors.field_not_found[0]
+            analyzed.type_errors.field_not_found_tc[0]
                 .error
                 .object_type
-                .to_string(&analyzed.type_db),
-            "array<i32>"
+                .print_name(&analyzed.type_db),
+            "array"
         );
         assert_eq!(
-            analyzed.type_errors.field_not_found[0]
+            analyzed.type_errors.field_not_found_tc[0]
                 .on_element
                 .get_name(),
             "my_function"
@@ -938,8 +963,9 @@ def my_function():
     y = x.reevert()",
         );
         let analyzed = do_analysis(&parsed);
-
+        analyzed.print_errors();
         assert_eq!(analyzed.type_errors.count(), 1);
+
         assert_eq!(analyzed.type_errors.method_not_found.len(), 1);
 
         assert_eq!(
@@ -1000,7 +1026,7 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
-            analyzed.type_errors.field_not_found[0].error.field,
+            analyzed.type_errors.field_not_found_tc[0].error.field,
             InternedString::new("as_i32")
         );
     }
@@ -1017,7 +1043,7 @@ def my_function():
 
         assert_eq!(analyzed.type_errors.count(), 1);
         assert_eq!(
-            analyzed.type_errors.field_not_found[0].error.field,
+            analyzed.type_errors.field_not_found_tc[0].error.field,
             InternedString::new("as_i32")
         );
     }
@@ -1084,15 +1110,15 @@ def my_function():
         );
         let analyzed = do_analysis(&parsed);
         assert_eq!(analyzed.type_errors.count(), 1);
-        assert_eq!(analyzed.type_errors.call_non_callable.len(), 1);
+        assert_eq!(analyzed.type_errors.call_non_callable_tc.len(), 1);
 
         assert_eq!(
-            analyzed.type_errors.call_non_callable[0]
+            analyzed.type_errors.call_non_callable_tc[0]
                 .error
                 .actual_type
                 .unwrap()
-                .to_string(&analyzed.type_db),
-            "array<i32>"
+                .print_name(&analyzed.type_db),
+            "array"
         );
     }
 
@@ -1624,7 +1650,7 @@ def main():
 
         let analyzed = do_analysis(&parsed);
         analyzed.print_errors();
-        let final_result = print_hir_mono(analyzed.last_hir_mono(3), &analyzed);
+        let final_result = print_hir_mono(&analyzed.hir_monomorphized, &analyzed);
         println!("{final_result}");
 
         let expected = "
@@ -1716,6 +1742,36 @@ def print_type_data_i32() -> Void:
     type_size : i32 = {{{i32: TypeData}.size: u64} as i32: i32}
     {print_int: fn (i32) -> Void}({type_size: i32})
         ";
+
+        assert_eq!(expected.trim(), final_result.trim());
+    }
+
+
+    #[test]
+    fn zero_arguments_bug() {
+        let parsed = parse_no_std(
+            "
+def some_fn(s: ptr<i32>) -> i32:
+    intrinsic
+
+def another_fn() -> i32:
+    x = 0
+    return some_fn(&x)
+",
+        );
+
+        let analyzed = do_analysis(&parsed);
+        analyzed.print_errors();
+        //let final_result = print_hir(analyzed.last_hir(1), &analyzed);
+        let final_result = print_hir_mono_verbose(analyzed.last_hir_mono(2), &analyzed);
+        println!("{final_result}");
+        assert_eq!(analyzed.type_errors.count(), 0);
+        let expected = "
+def some_fn(s: ptr<i32>) -> i32:
+def another_fn() -> i32:
+    x : i32 = {0: i32}
+    return {{some_fn: fn (ptr<i32>) -> i32}({&{x: i32}: ptr<i32>}): i32}
+";
 
         assert_eq!(expected.trim(), final_result.trim());
     }

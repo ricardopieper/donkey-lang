@@ -1,4 +1,5 @@
 use core::panic;
+use std::collections::HashMap;
 
 use crate::ast::parser::{Spanned, SpannedOperator};
 use crate::interner::InternedString;
@@ -9,7 +10,7 @@ use crate::types::diagnostics::{
     BinaryOperatorNotFound, BinaryOperatorNotFoundForTypeConstructor, CallToNonCallableType, CompilerErrorData, ContextualizedCompilerError, DerefOnNonPointerError, DerefOnNonPointerErrorUnconstructed, ErrorReporter, FieldNotFound, InsufficientTypeInformationForArray, InternalError, MethodNotFound, OutOfTypeBounds, OutOfTypeBoundsTypeConstructor, RefOnNonLValueError, TypeConstructionFailure, TypeErrors, TypePromotionFailure, UnaryOperatorNotFound, VariableNotFound
 };
 use crate::types::type_constructor_db::{
-    FunctionSignature, TypeConstructParams, TypeConstructorId, TypeParameter
+    FunctionSignature, TypeConstructParams, TypeConstructor, TypeConstructorId, TypeKind, TypeParameter
 };
 use crate::types::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
 
@@ -164,40 +165,54 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                     Some(decl_type) => Ok(HIRExpr::Variable(var, decl_type.clone(), meta)),
                     None => {
                         let type_data_type_id = self.load_stdlib_builtin("TypeData");
+                        match type_data_type_id {
+                            Some(type_data_type_id) => {
+                       
+                                //try to find a type with this name
+                                let type_data = self.ctx.type_db.constructors.find_by_name(InternedString::new(&var.to_string()));
 
-                        //try to find a type with this name
-                        let type_data = self.ctx.type_db.constructors.find_by_name(InternedString::new(&var.to_string()));
+                                //if we have it, then we're done
 
-                        //if we have it, then we're done
+                                if let Some(td) = type_data {
+                                    return Ok(HIRExpr::TypeName {
+                                        type_variable: TypeConstructParams::simple(td.id),
+                                        type_data: type_data_type_id,
+                                        meta,
+                                    });
+                                }
 
-                        if let Some(td) = type_data {
-                            return Ok(HIRExpr::TypeName {
-                                type_variable: TypeConstructParams::simple(td.id),
-                                type_data: type_data_type_id,
-                                meta,
-                            });
-                        }
+                                //if we don't have it, maybe it's a type variable coming from a generic
+                                let is_type_param = self.ctx.type_parameters.iter().find(|x| x.0 == var);
 
-                        //if we don't have it, maybe it's a type variable coming from a generic
-                        let is_type_param = self.ctx.type_parameters.iter().find(|x| x.0 == var);
-
-                        match is_type_param {
-                            Some(type_param) => Ok(HIRExpr::TypeName {
-                                type_variable: 
-                                    TypeConstructParams::Generic(type_param.clone()),
-                                
-                                type_data: type_data_type_id,
-                                meta,
-                            }),
+                                match is_type_param {
+                                    Some(type_param) => Ok(HIRExpr::TypeName {
+                                        type_variable: 
+                                            TypeConstructParams::Generic(type_param.clone()),
+                                        
+                                        type_data: type_data_type_id,
+                                        meta,
+                                    }),
+                                    None => {
+                                        self.ctx
+                                            .errors
+                                            .variable_not_found
+                                            .push_inference_error(report!(
+                                                self,
+                                                meta,
+                                                VariableNotFound { variable_name: var }
+                                            ))
+                                    }
+                                }
+                            },
                             None => {
                                 self.ctx
-                                    .errors
-                                    .variable_not_found
-                                    .push_inference_error(report!(
-                                        self,
-                                        meta,
-                                        VariableNotFound { variable_name: var }
-                                    ))
+                                .errors
+                                .variable_not_found
+                                .push_inference_error(report!(
+                                    self,
+                                    meta,
+                                    VariableNotFound { variable_name: var }
+                                ))
                             }
                         }
                     }
@@ -272,16 +287,17 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         }
     }
 
-    fn load_stdlib_builtin(&mut self, name: &str) -> TypeConstructParams {
+    fn load_stdlib_builtin(&mut self, name: &str) -> Option<TypeConstructParams> {
         //check if instance already exists
         let type_data_type = self.ctx.type_db.constructors.find_by_name(InternedString::new(name));
 
         match type_data_type {
-            Some(d) => return TypeConstructParams::simple(d.id),
+            Some(d) => return Some(TypeConstructParams::simple(d.id)),
             None => {
                 //TODO: Fix: navigate through all types and roots before running inference,
                 //otherwise we can't use types in stdlib
-                panic!("Type {} not found in stdlib", name);
+                log!("Type {} not found in stdlib", name);
+                None
             }
         }
     }
@@ -306,7 +322,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
                 TypeConstructParams::simple(self.ctx.type_db.constructors.common_types.char)
             }
             LiteralHIRExpr::Float(_) => TypeConstructParams::simple(self.ctx.type_db.constructors.common_types.f32),
-            LiteralHIRExpr::String(_) => self.load_stdlib_builtin("str"),
+            LiteralHIRExpr::String(_) => self.load_stdlib_builtin("str").expect("str type not found"),
             LiteralHIRExpr::Boolean(_) => TypeConstructParams::simple(self.ctx.type_db.constructors.common_types.bool),
             LiteralHIRExpr::None => todo!("Must implement None"),
         };
@@ -338,6 +354,66 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         ))
     }
 
+
+    fn replace_type_params(
+        &self,
+        map: &std::collections::HashMap<TypeParameter, TypeConstructParams>,
+        type_construct_params: &TypeConstructParams,
+    ) -> TypeConstructParams {
+        match type_construct_params {
+            TypeConstructParams::Generic(param) => {
+                if let Some(replacement) = map.get(param) {
+                    return replacement.clone();
+                }
+                log!("Type param not found in map: {:?}, continuing with generic param as is", param);
+                TypeConstructParams::Generic(param.clone())
+            }
+            TypeConstructParams::Parameterized(root, args) => {
+                let mut new_args = vec![];
+                for arg in args {
+                    new_args.push(self.replace_type_params(map, arg));
+                }
+                TypeConstructParams::Parameterized(root.clone(), new_args)
+            }
+        }
+    }
+
+    fn function_type_constructor_substitute_generics(
+        &self,
+        type_args: &[TypeConstructParams],
+        function_type: &TypeConstructor,
+        additional_type_args: &std::collections::HashMap<TypeParameter, TypeConstructParams>,
+    ) -> FunctionSignature {
+        let map = {
+            if function_type.type_params.len() != type_args.len() {
+                todo!("Type args and function type params length mismatch");
+            }
+
+            let mut map = std::collections::HashMap::new();
+            for (idx, arg) in type_args.iter().enumerate() {
+                map.insert(function_type.type_params[idx].clone(), arg.clone());
+            }
+            if !additional_type_args.is_empty() {
+                map.extend(additional_type_args.clone());
+            }
+            map
+        };
+        
+        let new_params = function_type.function_params.iter().map(|x| {
+            self.replace_type_params(&map, x)
+        }).collect::<Vec<_>>();
+
+        let new_return_type = self.replace_type_params(&map, &function_type.function_return_type.clone().expect("Expected return type"));
+
+        FunctionSignature {
+            type_parameters: function_type.type_params.clone(),
+            params: new_params,
+            return_type: new_return_type,
+            variadic: function_type.function_variadic,
+        }
+    }
+
+
     fn infer_function_call(
         &mut self,
         //this is the expression which the function was called, normally this is a variable (TODO: right now it's only variables/identifiers)
@@ -367,33 +443,40 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             };
             function_type.clone()
         };
+        
+        let function_type_data = self.ctx.type_db.constructors.find(function_type.try_get_base().expect("Type constructor not found"));
 
-        let positional_type_args = self.to_type_constructor_params(fun_type_args, meta)?;
-        let substituted = self.generic_substitute(&positional_type_args, &function_type, &[]);
 
-        //@TODO check that this is actually callable and do:
-        /*
+        if function_type_data.kind != TypeKind::Function {
             return self
-            .ctx
-            .errors
-            .call_non_callable
-            .push_inference_error(report!(
-                self,
-                meta,
-                CallToNonCallableType { actual_type: None }
-            ))
-        */
+                .ctx
+                .errors
+                .call_non_callable_tc
+                .push_inference_error(report!(
+                    self,
+                    meta,
+                    CallToNonCallableType { actual_type: Some(function_type_data.id) }
+                ));
+        }
+        
+      
+        let positional_type_args = self.to_type_constructor_params(fun_type_args, meta)?;
 
-        let cloned = substituted.clone();
+        let positional_type_args_resolved = positional_type_args.iter().map(|x| x.resolved_type.clone()).collect::<Vec<_>>();
 
-        let type_data = self.ctx.type_db.constructors.find(substituted.try_get_base().expect("Type constructor not found"));
+        let function_type_data = self.ctx.type_db.constructors.find(function_type.try_get_base().expect("Type constructor not found"));
 
-        let args = type_data.function_params.clone();
-        let return_type = type_data.function_return_type.clone().expect("Expected return type");
+        let ftype_substituted = self.function_type_constructor_substitute_generics(&positional_type_args_resolved, function_type_data, &std::collections::HashMap::new());    
+
+        let args = ftype_substituted.params.clone();
+        let return_type = ftype_substituted.return_type.clone();
         
         let fun_params = self.infer_expr_array(fun_params, Some(&args))?;
+ 
 
         let type_args_inferred = self.try_construct_many(positional_type_args, meta)?;
+
+
         //println!("Type args inferred: {:?}", type_args_inferred);
         let result = FunctionCall {
             function: HIRExpr::Variable(
@@ -409,19 +492,7 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             meta_ast: None,
         };
 
-        let strr = HIRExprPrinter::new(&self.ctx.type_db, false).print(&result.function);
-
-        log!("Function call variable (polymorphic): {}", strr);
-        let type_printed = cloned
-            .print_name(&self.ctx.type_db);
-        log!(
-            "Function call variable type (polymorphic): {}",
-            type_printed
-        );
-
         Ok(result)
-            
-        
     }
 
     fn infer_method_call(
@@ -475,36 +546,54 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 
     fn infer_polymorphic_method_call(
         &mut self,
-        poly_ty: TypeConstructParams,
+        object_type: TypeConstructParams,
         method: &crate::types::type_constructor_db::TypeConstructorFunctionDeclaration,
         meta: HIRExprMetadata<'source>,
         params: Vec<HIRExpr<'source, ()>>,
         objexpr: &HIRExpr<'source, TypeConstructParams>,
         method_name: InternedString,
     ) -> Result<MethodCall<'source, TypeConstructParams>, CompilerError> {
-        match poly_ty {
-            //@TODO this is a bit of a mess, maybe poly_ty should be a separate struct...
+        match object_type {
             TypeConstructParams::Generic(_) => unreachable!("Should not happen: We know it should not be Generic here"),
             TypeConstructParams::Parameterized(root, args) => {
-
                 log!("Infering polymorphic method call with root: {:?} and method {method:?} and args {:?}", root, args);
                 //now we have a map of type parameters and their types substituted, 
                 //let's pretend we actually have a function call whose first argument is the object
 
-                let positional_type_args = args.clone().into_iter()
-                    .map(|x| HIRUserTypeInfo { user_given_type: None, resolved_type: x } ).collect::<Vec<_>>();
+                // let positional_type_args = args.clone().into_iter()
+                //    .map(|x| HIRUserTypeInfo { user_given_type: None, resolved_type: x } ).collect::<Vec<_>>();
+                
+                let constructor = self.ctx.type_db.constructors.find(root);
+                let constructor_type_args = constructor.type_params.clone();
 
-                let substituted = self.generic_substitute(
-                    &positional_type_args,
-                    &TypeConstructParams::Parameterized(root, args), &[]);
+                let mut additional_type_args = std::collections::HashMap::new();
+                for (idx, arg) in args.iter().enumerate() {
+                    additional_type_args.insert(constructor_type_args[idx].clone(), arg.clone());
+                }
 
-                let type_data = 
-                    self.ctx.type_db.constructors.find(substituted.try_get_base().expect("Type constructor not found"));
+                let method_type = self.ctx.type_db.constructors.find(method.signature);
 
-                let args = type_data.function_params.clone();
-                let return_type = type_data.function_return_type.clone().expect("Expected return type");
-       
-                let fun_params = self.infer_expr_array(params, Some(&args))?;
+                let Some(first_arg) = method_type.function_params.first() else {
+                    panic!("Function {} does not seem to be a method of an object", method_name);
+                };
+
+                let function_type_sig = self.function_type_constructor_substitute_generics(
+                    &vec![], 
+                    &method_type,
+                    &additional_type_args);
+
+                let args = function_type_sig.params.clone();
+                let return_type = function_type_sig.return_type.clone();
+
+                let skip_self = args.iter().skip(
+                    if first_arg.try_get_base().unwrap() == root {
+                        1
+                    } else {
+                        0
+                    }
+                ).cloned().collect::<Vec<_>>();
+
+                let fun_params = self.infer_expr_array(params, Some(&skip_self))?;
 
                 //let type_args_inferred = self.try_construct_many(positional_type_args, meta)?;
                 //println!("Type args inferred: {:?}", type_args_inferred);
@@ -581,35 +670,55 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
 
         let typeof_obj = obj_expr.get_type();
 
-        //we are going to see in the type constructors if the field exists and try to infer something about it
-        let constructor = typeof_obj.try_get_base();
 
-        if let Some(constructor) = constructor {
-            let constructor = self.ctx.type_db.constructors.find(constructor);
-
-            let field = constructor.find_field(name);
-
-            if let Some(field) = field {
-                let return_type = field.field_type.clone();
-
+        match typeof_obj {
+            TypeConstructParams::Generic(_) => {
+                //If we got here, maybe we don't have the type yet because it's an object with a generic type,
+                //so we can't infer the field type yet
+                //typeof_obj
                 return Ok(HIRExpr::MemberAccess(
                     obj_expr.into(),
                     name,
-                    return_type,
+                    typeof_obj, //doesn't make much sense to return the same type of the field... but we have to return something
                     meta,
                 ));
             }
+            TypeConstructParams::Parameterized(constructor, args) => {
+                let constructor = self.ctx.type_db.constructors.find(constructor);
+
+                let mut type_map = std::collections::HashMap::new();
+                for (idx, arg) in args.iter().enumerate() {
+                    type_map.insert(constructor.type_params[idx].clone(), arg.clone());
+                }
+
+                let field = constructor.find_field(name);
+    
+                if let Some(field) = field {
+                    let return_type = field.field_type.clone();
+                    
+                    let replaced_return_type = self.replace_type_params(&type_map, &return_type);
+
+                    return Ok(HIRExpr::MemberAccess(
+                        obj_expr.into(),
+                        name,
+                        replaced_return_type,
+                        meta,
+                    ));
+                } else {
+                    self.ctx
+                        .errors
+                        .field_not_found_tc
+                        .push_inference_error(report!(
+                            self,
+                            meta,
+                            FieldNotFound {
+                                field: name,
+                                object_type: constructor.id
+                            }
+                        ))
+                }
+            },
         }
-        //If we got here, maybe we don't have the type yet because it's an object with a generic type,
-        //so we can't infer the field type yet
-        //typeof_obj
-        return Ok(HIRExpr::MemberAccess(
-            obj_expr.into(),
-            name,
-            typeof_obj, //doesn't make much sense to return the same type of the field... but we have to return something
-            meta,
-        ));
-        
     }
 
     fn infer_deref_expr(
@@ -620,7 +729,6 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
         let rhs_expr = self.infer_expr(rhs, None)?;
         let typeof_obj = rhs_expr.get_type();
 
-        
         if let TypeConstructParams::Parameterized(
             maybe_ptr,
             pointee_type,
@@ -750,57 +858,6 @@ impl<'source> FunctionTypeInferenceContext<'_, 'source> {
             });
         }
         Ok(result)
-    }
-
-    fn generic_substitute_many(
-        &mut self,
-        params: &[TypeConstructParams],
-        positional_type_args: &[HIRUserTypeInfo<TypeConstructParams>],
-        generics: &[TypeParameter],
-    ) -> Vec<TypeConstructParams> {
-        params
-            .iter()
-            .map(|param| self.generic_substitute(positional_type_args, param, generics))
-            .collect::<Vec<_>>()
-    }
-
-    //Generate a function signature for a type usage, given the type arguments.
-    fn generic_substitute(
-        &mut self,
-        //these are the arguments passed, for instance, call<i32, T>()
-        positional_type_args: &[HIRUserTypeInfo<TypeConstructParams>],
-        //this is the type of the function being called. The first call to generic_substitute will be a FunctionSignature
-        type_of_value: &TypeConstructParams,
-        //The order of the type parameters of the function definition, def foo<T, U>(..) would be <T, U>,
-        //but in the first call this will be empty.
-        positional_type_parameters: &[TypeParameter],
-    ) -> TypeConstructParams {
-        log!("Generic substitute: \nType of value: {:?}\nPositional Type Args{:?}\nPositional type params:{:?}", type_of_value.to_string(&self.ctx.type_db.constructors), positional_type_args, positional_type_parameters);
-        match type_of_value {        
-            TypeConstructParams::Generic(type_param) => {
-                //get the index of the parameter in type_parameters
-                let index = positional_type_parameters
-                    .iter()
-                    .position(|x| x == type_param)
-                    .expect("Type parameter not found");
-                //println!("Index of type parameter: {}", index);
-                //get the type argument at the same index
-                let type_arg = positional_type_args
-                    .get(index)
-                    .expect("Type argument not found"); //TODO nicer error
-                                                        //return the type argument
-                type_arg.resolved_type.clone()
-            }
-           
-            TypeConstructParams::Parameterized(base, params) => {
-                let substituted_params = self.generic_substitute_many(
-                    params,
-                    positional_type_args,
-                    positional_type_parameters,
-                );
-                TypeConstructParams::Parameterized(*base, substituted_params)
-            }
-        }
     }
 
     fn infer_binop(

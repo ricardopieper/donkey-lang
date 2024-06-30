@@ -18,7 +18,7 @@ use super::type_inference::{TypeInferenceContext};
 
 #[derive(Clone)]
 pub struct NameRegistry<T> {
-    names: HashMap<InternedString, T>
+    pub names: HashMap<InternedString, T>
 }
 
 impl<T: Clone> NameRegistry<T> {
@@ -80,7 +80,7 @@ pub fn build_name_registry_and_resolve_signatures<'a, 'source>(
                 is_external,
                 method_of,
             } => {
-                log!("Top level function: {function_name}");
+                log!("Top level function: {function_name}, variadic: {is_varargs}");
 
                 let params_usage = parameters
                     .iter()

@@ -17,7 +17,6 @@ use crate::types::diagnostics::{
     BinaryOperatorNotFound, FieldNotFound, IfStatementNotBoolean, OutOfTypeBounds,
     UnexpectedTypeFound,
 };
-use crate::types::type_constructor_db::TypeConstructParams;
 use crate::types::type_instance_db::{
     CommonTypeInstances, StructMember, TypeInstanceId, TypeInstanceManager,
 };
@@ -537,14 +536,18 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
             .map(|arg| self.typecheck(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
-        if function_type.function_args.len() != checked_args.len() {
+        let skip_self = function_type.function_args
+            .iter().skip(1).map(|x|*x).collect::<Vec<TypeInstanceId>>();
+
+        //-1 por que é metodo e o primeiro é self...
+        if skip_self.len() != checked_args.len() {
             return self
                 .errors
                 .function_call_argument_count
                 .push_typecheck_error(
                     FunctionCallArgumentCountMismatch {
                         called_function_name: make_method_name_or_index(name, &obj_type.name, meta),
-                        expected_count: function_type.function_args.len(),
+                        expected_count: skip_self.len(),
                         passed_count: checked_args.len(),
                     }
                     .at_spanned(self.on_element, meta, loc!()),
@@ -552,12 +555,11 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         };
 
         let checked_arg_types = checked_args.iter().map(|x| x.get_type());
-        let has_invalid_arg = function_type
-            .function_args
-            .iter()
+        let has_invalid_arg = skip_self
+            .into_iter()
             .zip(checked_arg_types)
             .enumerate()
-            .find(|(_index, (expected, actual))| *expected != actual);
+            .find(|(_index, (expected, actual))| *expected != *actual);
 
         if let Some((arg_pos, types)) = has_invalid_arg {
             return self.errors.function_call_mismatches.push_typecheck_error(
@@ -566,7 +568,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
                         called_function_name: make_method_name_or_index(name, &obj_type.name, meta),
                         argument_position: arg_pos,
                     },
-                    expected: *types.0,
+                    expected: types.0,
                     actual: types.1,
                 }
                 .at_spanned(self.on_element, meta, loc!()),
@@ -935,7 +937,7 @@ impl<'compiler_context, 'source> TypeCheckContext<'compiler_context, 'source> {
         }
 
         //at this point all top_level_decls should be inferred
-        self.top_level_decls.get(&name).cloned().expect("Variable not found")
+        self.top_level_decls.get(&name).cloned().expect(&format!("Variable not found: {}", name))
     }
 
     fn check_if_statement_expression(
@@ -1456,7 +1458,7 @@ def main():
 
         let (err, _) = run_test(&ast);
         assert_eq!(1, err.count());
-        assert_eq!(1, err.binary_op_not_found.len());
+        assert_eq!(1, err.binary_op_not_found_tc.len());
     }
 
     #[test]
@@ -1485,7 +1487,7 @@ def main():
 
         let (err, _) = run_test(&ast);
         assert_eq!(1, err.count());
-        assert_eq!(1, err.invalid_derefed_type.len());
+        assert_eq!(1, err.invalid_derefed_type_unconstructed.len());
     }
 
     #[test]

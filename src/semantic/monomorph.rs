@@ -456,7 +456,7 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
             meta_expr,
         } = call;
 
-        log!("Function returns type {return_type:#?}");
+        log!("Function returns type {return_type:#?}, Function data: {function:#?}");
 
         //if the call args involve a type that is generic and present on the monomorphization type map,
         //they would get replaced here
@@ -552,7 +552,6 @@ impl<'s, 'compiler_state> Monomorphizer<'s, 'compiler_state> {
                             .insert(interned, function_type);
 
                         HIRExpr::Variable(interned, function_type, meta)
-                      
                     },
                 }
             }
