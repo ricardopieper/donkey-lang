@@ -2,7 +2,7 @@ New Type Inference Algorithm
 ============================
 
 
-The file `type_inference.rs` right now contains 1.6k lines of code, and after I got away from this project for almost 10 months, I can't undertand it anymore.
+The file `type_inference.rs` right now contains 1.6k lines of code, and after I got away from this project for almost 10 months, I can't understand it anymore.
 
 It's too complex. At every point, I have to handle the difference between a simple type like `i32`, `str`, etc and a composite, generic type
 such as `List<i32>`, `ptr<List<i32>>`, etc. Not only that, I need to handle the difference between fully resolving and constructing a type in the first try,
@@ -71,9 +71,27 @@ pub enum TypeConstructParams {
 Since the monomorphizer is currently able to deal with all of this, it should be lots of busy work but overall possible.
 
 `TypeInferenceResult`
-=====================
+---------------------
 
 There is an issue. The `TypeInferenceResult` enum is used in a lot of places, including the environment (i.e. which variables exist, what functions are in scope),
 so there isn't a really good way to change it. I need to go with a hammer and destroy everything that uses it.
 
 The main issue really is the environment. Maybe the environment should change according to the stage of the compiler?
+
+
+Result of simplification
+------------------------
+
+About 300 lines got removed from the type inference algorithm. It didn't get all that much simpler to understand, but some polymorphic method call code that was completely
+impossible to understand is now gone.
+
+As for the environment, it's still an issue. After the first pass to get globals, I get all definitions that are not actually polymorphic and do a naive type construction, 
+i,e. functions that have no type parameters are easy to construct. The environment (`NameRegistry`) really does change types according to the stage of the compiler,
+as it is generic over the type of the types it contains.
+
+The monomorphizer isn't terribly simpler, but at least it's always expeecting only the `TypeConstructParams` type, instead of also expecting a TypeInstanceId.
+
+Overall, ~300 lines of code less.
+
+
+

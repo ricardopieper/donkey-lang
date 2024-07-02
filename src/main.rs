@@ -23,7 +23,7 @@ mod llvm;
 #[macro_use]
 mod semantic;
 mod types;
-
+mod typing_hm;
 //use crate::compiler::donkey_backend::generate_donkey_vm;
 
 //use crate::donkey_vm::asm::assembler::as_donkey_vm_program;
