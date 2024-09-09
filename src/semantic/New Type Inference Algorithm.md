@@ -35,7 +35,7 @@ pub enum TypeConstructParams {
 But wait, why do we have `FunctionSignature`? If we have FunctionSignature, shouldn't we also have `Array`, `Pointer`, etc? No.
 If arrays, pointers, etc all of these generic types are just type constructors, we can just use `Parameterized` for them.
 
-This is what we're going to do: There will be specialized functions to *register* a new function type constructor according to 
+This is what we're going to do: There will be specialized functions to *register* a new function type constructor according to
 the function signature. But the returned type will just be a `TypeConstructParams::Parameterized`. type.
 
 ```rust
@@ -46,7 +46,7 @@ pub enum TypeConstructParams {
 }
 ```
 
-Now, why `Parameterized` has a `Box<TypeConstructParams>`? Would it make sense to have a T1<T2>? Hmm I don't know. 
+Now, why `Parameterized` has a `Box<TypeConstructParams>`? Would it make sense to have a T1<T2>? Hmm I don't know.
 Maybe a List<T1><T2>? Well that doesn't seem to make much sense, this should be a simple type system and this is getting too complex.
 
 So maybe we should have this, where parameterized types always have a TypeConstructorId as the base:
@@ -85,7 +85,7 @@ Result of simplification
 About 300 lines got removed from the type inference algorithm. It didn't get all that much simpler to understand, but some polymorphic method call code that was completely
 impossible to understand is now gone.
 
-As for the environment, it's still an issue. After the first pass to get globals, I get all definitions that are not actually polymorphic and do a naive type construction, 
+As for the environment, it's still an issue. After the first pass to get globals, I get all definitions that are not actually polymorphic and do a naive type construction,
 i,e. functions that have no type parameters are easy to construct. The environment (`NameRegistry`) really does change types according to the stage of the compiler,
 as it is generic over the type of the types it contains.
 
@@ -93,5 +93,19 @@ The monomorphizer isn't terribly simpler, but at least it's always expeecting on
 
 Overall, ~300 lines of code less.
 
+Complete rewrite
+================
 
+After that, it became clear that it wasn't just the data structures that weren't ideal.
+The whole algorithm was just wrong.
 
+I decided I couldn't just wing it anymore. Instead I decided to look at the literature and implemented
+a subset of the Hindley-Milner type inference algorithm.
+
+This is a work in progress, but it's promising.
+
+Another change is that now I'm using a completely separate data structure for typing the HIR. Instead
+of storing the types in the HIR, I'm storing "type indices" in the tree, and the actual types are stored
+in a table separately. This way I can apply substitution to the types without having to modify the HIR.
+
+Yes it relies on functions performing "side effects", functional people hate it ¯\_(ツ)_/¯.

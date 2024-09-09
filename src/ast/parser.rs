@@ -160,12 +160,6 @@ pub struct AstSpan {
     pub end: TokenSpanIndex,
 }
 
-impl Spanned for AstSpan {
-    fn get_span(&self) -> AstSpan {
-        *self
-    }
-}
-
 impl AstSpan {
     pub fn range(&self, other: &Self) -> Self {
         Self {
@@ -178,6 +172,12 @@ impl AstSpan {
             start: other.start,
             end: self.end,
         }
+    }
+}
+
+impl Spanned for AstSpan {
+    fn get_span(&self) -> AstSpan {
+        *self
     }
 }
 
@@ -2413,7 +2413,7 @@ impl SomeStruct:
         print(self)
 
 def not_method():
-    print(1)    
+    print(1)
     ",
         );
     }

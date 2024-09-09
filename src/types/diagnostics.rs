@@ -1,24 +1,41 @@
 use crate::ast::lexer::TokenSpanIndex;
 use crate::ast::parser::Spanned;
 use crate::interner::InternedString;
-use crate::semantic::compiler_errors::CompilerError;
 use crate::semantic::context::FileTableEntry;
+use crate::semantic::hir::MetaTable;
+#[derive(Copy, Clone)]
+pub enum RootElementType {
+    Struct(InternedString),
+    Function(InternedString),
+    Impl(InternedString),
+    ImplMethod(InternedString, InternedString),
+}
 
-use crate::semantic::mir::{MIRExpr, MIRExprLValue};
-use crate::semantic::mir_printer::MIRPrinter;
-use crate::semantic::type_name_printer::TypeNamePrinter;
-use crate::{
-    ast::lexer::Operator,
-    semantic::{
-        hir::{HIRExprMetadata, HIRType, HIRTypeDisplayer},
-        hir_type_resolution::RootElementType,
-        type_checker::FunctionName,
-    },
-};
+impl RootElementType {
+    #[allow(dead_code)]
+    pub fn get_name(&self) -> String {
+        match self {
+            RootElementType::Struct(s) | RootElementType::Function(s) => s.into(),
+            RootElementType::Impl(s) => s.into(),
+            RootElementType::ImplMethod(i, m) => format!("{}:{}", i, m),
+        }
+    }
+
+    pub fn diag_name(&self) -> String {
+        match self {
+            RootElementType::Struct(s) => format!("In struct {}", s),
+            RootElementType::Function(s) => format!("In function {}", s),
+            RootElementType::Impl(s) => format!("In impl {}", s),
+            RootElementType::ImplMethod(i, m) => format!("In method {m} of impl {i}"),
+        }
+    }
+}
+
+use crate::semantic::hir::{HIRTypeDisplayer, MonoType, NodeIndex, PolyType};
+use crate::{ast::lexer::Operator, semantic::hir::HIRType};
 use std::fmt::Display;
 
-use super::type_constructor_db::{TypeConstructParams, TypeConstructorId};
-use super::type_instance_db::{TypeConstructionError, TypeInstanceId, TypeInstanceManager};
+use super::type_constructor_db::{TypeConstructorDatabase, TypeConstructorId};
 
 pub trait ErrorReporter {
     fn report<T: CompilerErrorData>(
@@ -42,7 +59,7 @@ where
 {
     pub error: T,
     pub on_element: RootElementType,
-    pub location: TokenSpanIndex,
+    pub location: NodeIndex,
     pub compiler_code_location: &'static str,
 }
 
@@ -52,14 +69,7 @@ pub trait ContextualizedCompilerError<T: CompilerErrorData> {
     fn at(
         self,
         on_element: RootElementType,
-        location: TokenSpanIndex,
-        compiler_code_location: &'static str,
-    ) -> CompilerErrorContext<T>;
-
-    fn at_spanned(
-        self,
-        on_element: RootElementType,
-        span: &impl Spanned,
+        location: NodeIndex,
         compiler_code_location: &'static str,
     ) -> CompilerErrorContext<T>;
 }
@@ -68,7 +78,7 @@ impl<T: Sized + CompilerErrorData> ContextualizedCompilerError<T> for T {
     fn at(
         self,
         on_element: RootElementType,
-        location: TokenSpanIndex,
+        location: NodeIndex,
         compiler_code_location: &'static str,
     ) -> CompilerErrorContext<T> {
         CompilerErrorContext {
@@ -78,41 +88,72 @@ impl<T: Sized + CompilerErrorData> ContextualizedCompilerError<T> for T {
             compiler_code_location,
         }
     }
-
-    fn at_spanned(
-        self,
-        on_element: RootElementType,
-        span: &impl Spanned,
-        compiler_code_location: &'static str,
-    ) -> CompilerErrorContext<T> {
-        let span = span.get_span();
-        self.at(on_element, span.start, compiler_code_location)
-    }
 }
 
 pub trait CompilerErrorDisplay {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result;
 }
 
 pub struct TypeMismatch<TContext> {
     pub context: TContext,
-    pub expected: TypeInstanceId,
-    pub actual: TypeInstanceId,
+    pub expected: PolyType,
+    pub actual: PolyType,
 }
 impl<T> CompilerErrorData for TypeMismatch<T> {}
 
-pub struct AssignContext<'source> {
-    pub assign_lvalue_expr: MIRExprLValue<'source>,
+pub trait TypeNamePrinter {
+    fn print_name(&self, type_db: &TypeConstructorDatabase) -> String;
 }
 
-impl<'source> CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<AssignContext<'source>>> {
+impl TypeNamePrinter for PolyType {
+    fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
+        self.to_string(type_db)
+    }
+}
+
+impl TypeNamePrinter for MonoType {
+    fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
+        self.print_name(type_db)
+    }
+}
+
+impl TypeNamePrinter for TypeConstructorId {
+    fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
+        type_db.get_name(*self).into()
+    }
+}
+
+impl TypeNamePrinter for HIRType {
+    fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
+        fn slice_types_str(types: &[HIRType], type_db: &TypeConstructorDatabase) -> String {
+            types
+                .iter()
+                .map(|x| x.print_name(type_db))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+
+        match self {
+            HIRType::Simple(s) => format!("UNRESOLVED! {}", s),
+            HIRType::Generic(s, g) => {
+                format!("UNRESOLVED {}<{}>", s, slice_types_str(g, type_db))
+            }
+        }
+    }
+}
+
+pub struct AssignContext {
+    pub assign_lvalue_expr: String,
+}
+
+impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<AssignContext>> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         let var_type_str = self.error.expected.to_string(type_db);
@@ -120,7 +161,7 @@ impl<'source> CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<AssignC
 
         write!(f, "Assigned type mismatch: {on_element}, assignment to variable {var}: variable has type {var_type_str} but got assigned a value of type {expr_type_str}",
             on_element = self.on_element.diag_name(),
-            var = MIRPrinter::new(type_db).print_lvalue(&self.error.context.assign_lvalue_expr),
+            var = self.error.context.assign_lvalue_expr,
         )
     }
 }
@@ -130,7 +171,7 @@ pub struct ReturnTypeContext();
 impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<ReturnTypeContext>> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         let passed_name = self.error.actual.to_string(type_db);
@@ -143,6 +184,24 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<ReturnTypeContex
     }
 }
 
+//cloneless: This is cloneable because it's only really copied when needed,
+//and the names here are built by something else, it's a separate allocation.
+//Only when the strings are computed in-place instead of coming from source they are really cloned,
+//and only when something bad happens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionName {
+    Function(InternedString),
+    //@todo sometimes the function won't have a name, it will be an expression. Maybe we should create an enum when we don't have a nice
+    //way to get the name.
+    #[allow(dead_code)]
+    IndexAccess,
+    #[allow(dead_code)]
+    Method {
+        function_name: InternedString,
+        type_name: InternedString,
+    },
+}
+
 pub struct FunctionCallContext {
     pub called_function_name: FunctionName,
     pub argument_position: usize,
@@ -151,7 +210,7 @@ pub struct FunctionCallContext {
 impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<FunctionCallContext>> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         let passed_name = self.error.actual.to_string(type_db);
@@ -194,7 +253,7 @@ impl CompilerErrorData for FunctionCallArgumentCountMismatch {}
 impl CompilerErrorDisplay for CompilerErrorContext<FunctionCallArgumentCountMismatch> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         match &self.error.called_function_name {
@@ -237,7 +296,7 @@ impl<T> CompilerErrorData for CallToNonCallableType<T> {}
 impl<T: TypeNamePrinter> CompilerErrorDisplay for CompilerErrorContext<CallToNonCallableType<T>> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         match &self.error.actual_type {
@@ -264,7 +323,7 @@ impl CompilerErrorData for TypeNotFound {}
 impl CompilerErrorDisplay for CompilerErrorContext<TypeNotFound> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -277,117 +336,139 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeNotFound> {
 }
 
 pub struct TypePromotionFailure {
-    pub target_type: TypeConstructParams,
+    pub target_type: PolyType,
 }
 impl CompilerErrorData for TypePromotionFailure {}
 
 impl CompilerErrorDisplay for CompilerErrorContext<TypePromotionFailure> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
             f,
             "{on_element}, type promotion failure: Cannot promote an integer literal to type: {target_type_name}",
             on_element = self.on_element.diag_name(),
-            target_type_name = self.error.target_type.to_string(&type_db.constructors),
+            target_type_name = self.error.target_type.to_string(&type_db),
         )
     }
 }
 
 pub struct UnexpectedTypeFound {
-    pub type_def: TypeInstanceId,
+    pub type_def: String,
 }
 impl CompilerErrorData for UnexpectedTypeFound {}
 
 impl CompilerErrorDisplay for CompilerErrorContext<UnexpectedTypeFound> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
             f,
             "{on_element}, unexpected type found in expression: {unexpected_type}",
             on_element = self.on_element.diag_name(),
-            unexpected_type = self.error.type_def.to_string(type_db),
+            unexpected_type = self.error.type_def
         )
     }
 }
 
-pub struct OutOfTypeBoundsTypeConstructor<'source> {
-    pub typ: TypeConstructParams,
-    pub expr: HIRExprMetadata<'source>,
+pub struct UnificationError {
+    pub expected: MonoType,
+    pub actual: MonoType,
 }
-impl CompilerErrorData for OutOfTypeBoundsTypeConstructor<'_> {}
+impl CompilerErrorData for UnificationError {}
 
-impl<'source> CompilerErrorDisplay
-    for CompilerErrorContext<OutOfTypeBoundsTypeConstructor<'source>>
-{
+impl CompilerErrorDisplay for CompilerErrorContext<UnificationError> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
             f,
-            "{on_element}, literal value {expr:?} is out of bounds for type {type}. You can try extracting this value to a different variable and assign a larger type.",
+            "{on_element}, type error: Expected {expected_type} but got {actual_type}",
             on_element = self.on_element.diag_name(),
-            expr = self.error.expr,
-            type = self.error.typ.to_string(&type_db.constructors),
+            expected_type = self.error.expected.print_name(type_db),
+            actual_type = self.error.actual.print_name(type_db)
         )
     }
 }
 
-pub struct OutOfTypeBounds<'source> {
-    pub typ: TypeInstanceId,
-    pub expr: HIRExprMetadata<'source>,
-}
-impl CompilerErrorData for OutOfTypeBounds<'_> {}
+// pub struct OutOfTypeBoundsTypeConstructor<'source> {
+//     pub typ: PolyType,
+//     pub expr: HIRExprMetadata<'source>,
+// }
+// impl CompilerErrorData for OutOfTypeBoundsTypeConstructor<'_> {}
 
-impl<'source> CompilerErrorDisplay for CompilerErrorContext<OutOfTypeBounds<'source>> {
-    fn fmt_err(
-        &self,
-        type_db: &TypeInstanceManager,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        write!(
-            f,
-            "{on_element}, literal value {expr:?} is out of bounds for type {type}. You can try extracting this value to a different variable and assign a larger type.",
-            on_element = self.on_element.diag_name(),
-            expr = self.error.expr,
-            type = self.error.typ.to_string(type_db),
-        )
-    }
-}
+// impl<'source> CompilerErrorDisplay
+//     for CompilerErrorContext<OutOfTypeBoundsTypeConstructor<'source>>
+// {
+//     fn fmt_err(
+//         &self,
+//         type_db: &TypeConstructorDatabase,
+//         f: &mut std::fmt::Formatter<'_>,
+//     ) -> std::fmt::Result {
+//         write!(
+//             f,
+//             "{on_element}, literal value {expr:?} is out of bounds for type {type}. You can try extracting this value to a different variable and assign a larger type.",
+//             on_element = self.on_element.diag_name(),
+//             expr = self.error.expr,
+//             type = self.error.typ.to_string(&type_db),
+//         )
+//     }
+// }
 
-pub struct InvalidCast<'source> {
-    pub expr: MIRExpr<'source>,
-    pub cast_to: TypeInstanceId,
-}
-impl CompilerErrorData for InvalidCast<'_> {}
+// pub struct OutOfTypeBounds<'source> {
+//     pub typ: TypeInstanceId,
+//     pub expr: HIRExprMetadata<'source>,
+// }
+// impl CompilerErrorData for OutOfTypeBounds<'_> {}
 
-impl<'source> CompilerErrorDisplay for CompilerErrorContext<InvalidCast<'source>> {
-    fn fmt_err(
-        &self,
-        type_db: &TypeInstanceManager,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        write!(
-            f,
-            "{on_element}, value {expr} of type {type} cannot be casted to {cast_type}",
-            on_element = self.on_element.diag_name(),
-            expr = MIRPrinter::new( type_db).print(&self.error.expr),
-            type = self.error.expr.get_type().to_string(type_db),
-            cast_type = self.error.cast_to.to_string(type_db),
-        )
-    }
-}
+// impl<'source> CompilerErrorDisplay for CompilerErrorContext<OutOfTypeBounds<'source>> {
+//     fn fmt_err(
+//         &self,
+//         type_db: &TypeConstructorDatabase,
+//         f: &mut std::fmt::Formatter<'_>,
+//     ) -> std::fmt::Result {
+//         write!(
+//             f,
+//             "{on_element}, literal value {expr:?} is out of bounds for type {type}. You can try extracting this value to a different variable and assign a larger type.",
+//             on_element = self.on_element.diag_name(),
+//             expr = self.error.expr,
+//             type = self.error.typ.to_string(type_db),
+//         )
+//     }
+// }
+
+// pub struct InvalidCast<'source> {
+//     pub expr: MIRExpr<'source>,
+//     pub cast_to: TypeInstanceId,
+// }
+// impl CompilerErrorData for InvalidCast<'_> {}
+
+// impl<'source> CompilerErrorDisplay for CompilerErrorContext<InvalidCast<'source>> {
+//     fn fmt_err(
+//         &self,
+//         type_db: &TypeConstructorDatabase,
+//         f: &mut std::fmt::Formatter<'_>,
+//     ) -> std::fmt::Result {
+//         write!(
+//             f,
+//             "{on_element}, value {expr} of type {type} cannot be casted to {cast_type}",
+//             on_element = self.on_element.diag_name(),
+//             expr = MIRPrinter::new( type_db).print(&self.error.expr),
+//             type = self.error.expr.get_type().to_string(type_db),
+//             cast_type = self.error.cast_to.to_string(type_db),
+//         )
+//     }
+// }
 
 pub struct BinaryOperatorNotFound {
-    pub lhs: TypeInstanceId,
-    pub rhs: TypeInstanceId,
+    pub lhs: PolyType,
+    pub rhs: PolyType,
     pub operator: Operator,
 }
 impl CompilerErrorData for BinaryOperatorNotFound {}
@@ -395,7 +476,7 @@ impl CompilerErrorData for BinaryOperatorNotFound {}
 impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFound> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -410,8 +491,8 @@ impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFound> {
 }
 
 pub struct BinaryOperatorNotFoundForTypeConstructor {
-    pub lhs: TypeConstructParams,
-    pub rhs: TypeConstructParams,
+    pub lhs: PolyType,
+    pub rhs: PolyType,
     pub operator: Operator,
 }
 impl CompilerErrorData for BinaryOperatorNotFoundForTypeConstructor {}
@@ -419,7 +500,7 @@ impl CompilerErrorData for BinaryOperatorNotFoundForTypeConstructor {}
 impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFoundForTypeConstructor> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -427,14 +508,14 @@ impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFoundForType
             "{on_element}, binary operator {operator} not found for types: {lhs_type} {operator} {rhs_type}",
             on_element = self.on_element.diag_name(),
             operator = self.error.operator.to_string(),
-            lhs_type = self.error.lhs.to_string(&type_db.constructors),
-            rhs_type = self.error.rhs.to_string(&type_db.constructors)
+            lhs_type = self.error.lhs.to_string(&type_db),
+            rhs_type = self.error.rhs.to_string(&type_db)
         )
     }
 }
 
 pub struct UnaryOperatorNotFound {
-    pub rhs: TypeInstanceId,
+    pub rhs: PolyType,
     pub operator: Operator,
 }
 impl CompilerErrorData for UnaryOperatorNotFound {}
@@ -442,7 +523,7 @@ impl CompilerErrorData for UnaryOperatorNotFound {}
 impl CompilerErrorDisplay for CompilerErrorContext<UnaryOperatorNotFound> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -464,7 +545,7 @@ impl<T: TypeNamePrinter> CompilerErrorData for FieldNotFound<T> {}
 impl<T: TypeNamePrinter> CompilerErrorDisplay for CompilerErrorContext<FieldNotFound<T>> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -478,7 +559,7 @@ impl<T: TypeNamePrinter> CompilerErrorDisplay for CompilerErrorContext<FieldNotF
 }
 
 pub struct MethodNotFound {
-    pub object_type: TypeInstanceId,
+    pub object_type: PolyType,
     pub method: InternedString,
 }
 impl CompilerErrorData for MethodNotFound {}
@@ -486,7 +567,7 @@ impl CompilerErrorData for MethodNotFound {}
 impl CompilerErrorDisplay for CompilerErrorContext<MethodNotFound> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -508,7 +589,7 @@ impl CompilerErrorData for FieldOrMethodNotFoundInTypeConstructor {}
 impl CompilerErrorDisplay for CompilerErrorContext<FieldOrMethodNotFoundInTypeConstructor> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -516,7 +597,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<FieldOrMethodNotFoundInTypeCo
             "{on_element}, tried to access field/method {field_or_method} on type {type_name} but no such field or method exists.",
             on_element = self.on_element.diag_name(),
             field_or_method = self.error.field_or_method,
-            type_name = self.error.object_type.to_string(&type_db.constructors)
+            type_name = self.error.object_type.to_string(&type_db)
         )
     }
 }
@@ -527,7 +608,7 @@ impl CompilerErrorData for InsufficientTypeInformationForArray {}
 impl CompilerErrorDisplay for CompilerErrorContext<InsufficientTypeInformationForArray> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -538,35 +619,35 @@ impl CompilerErrorDisplay for CompilerErrorContext<InsufficientTypeInformationFo
     }
 }
 
-pub struct ArrayExpressionsNotAllTheSameType {
-    pub expected_type: TypeInstanceId,
-}
-impl CompilerErrorData for ArrayExpressionsNotAllTheSameType {}
+// pub struct ArrayExpressionsNotAllTheSameType {
+//     pub expected_type: TypeInstanceId,
+// }
+// impl CompilerErrorData for ArrayExpressionsNotAllTheSameType {}
 
-impl CompilerErrorDisplay for CompilerErrorContext<ArrayExpressionsNotAllTheSameType> {
-    fn fmt_err(
-        &self,
-        type_db: &TypeInstanceManager,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        write!(
-            f,
-            "{on_element}, expressions in array expected to be of type {type_name} but an expression of a different type was found",
-            on_element = self.on_element.diag_name(),
-            type_name = self.error.expected_type.to_string(type_db)
-        )
-    }
-}
+// impl CompilerErrorDisplay for CompilerErrorContext<ArrayExpressionsNotAllTheSameType> {
+//     fn fmt_err(
+//         &self,
+//         type_db: &TypeConstructorDatabase,
+//         f: &mut std::fmt::Formatter<'_>,
+//     ) -> std::fmt::Result {
+//         write!(
+//             f,
+//             "{on_element}, expressions in array expected to be of type {type_name} but an expression of a different type was found",
+//             on_element = self.on_element.diag_name(),
+//             type_name = self.error.expected_type.to_string(type_db)
+//         )
+//     }
+// }
 
 pub struct IfStatementNotBoolean {
-    pub actual_type: TypeInstanceId,
+    pub actual_type: PolyType,
 }
 impl CompilerErrorData for IfStatementNotBoolean {}
 
 impl CompilerErrorDisplay for CompilerErrorContext<IfStatementNotBoolean> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -586,7 +667,7 @@ impl CompilerErrorData for TypeInferenceFailure {}
 impl CompilerErrorDisplay for CompilerErrorContext<TypeInferenceFailure> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -598,31 +679,31 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeInferenceFailure> {
     }
 }
 
-pub struct UnexpectedTypeInferenceMismatch<'source> {
-    pub inferred: TypeInstanceId,
-    pub checked: TypeInstanceId,
-    pub expr: MIRExpr<'source>,
-}
-impl CompilerErrorData for UnexpectedTypeInferenceMismatch<'_> {}
+// pub struct UnexpectedTypeInferenceMismatch<'source> {
+//     pub inferred: TypeInstanceId,
+//     pub checked: TypeInstanceId,
+//     pub expr: MIRExpr<'source>,
+// }
+// impl CompilerErrorData for UnexpectedTypeInferenceMismatch<'_> {}
 
-impl<'source> CompilerErrorDisplay
-    for CompilerErrorContext<UnexpectedTypeInferenceMismatch<'source>>
-{
-    fn fmt_err(
-        &self,
-        type_db: &TypeInstanceManager,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        write!(
-            f,
-            "Type inference/check bug: {on_element}, type inferred for expression {expr_str} was {inferred_type}, but type checker detected {checked_type}",
-            on_element = self.on_element.diag_name(),
-            expr_str = MIRPrinter::new( type_db).print(&self.error.expr),
-            inferred_type = self.error.inferred.to_string(type_db),
-            checked_type = self.error.checked.to_string(type_db)
-        )
-    }
-}
+// impl<'source> CompilerErrorDisplay
+//     for CompilerErrorContext<UnexpectedTypeInferenceMismatch<'source>>
+// {
+//     fn fmt_err(
+//         &self,
+//         type_db: &TypeConstructorDatabase,
+//         f: &mut std::fmt::Formatter<'_>,
+//     ) -> std::fmt::Result {
+//         write!(
+//             f,
+//             "Type inference/check bug: {on_element}, type inferred for expression {expr_str} was {inferred_type}, but type checker detected {checked_type}",
+//             on_element = self.on_element.diag_name(),
+//             expr_str = MIRPrinter::new( type_db).print(&self.error.expr),
+//             inferred_type = self.error.inferred.to_string(type_db),
+//             checked_type = self.error.checked.to_string(type_db)
+//         )
+//     }
+// }
 
 pub struct InternalError {
     pub error: String,
@@ -632,7 +713,7 @@ impl CompilerErrorData for InternalError {}
 impl CompilerErrorDisplay for CompilerErrorContext<InternalError> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -644,30 +725,30 @@ impl CompilerErrorDisplay for CompilerErrorContext<InternalError> {
     }
 }
 
-pub struct TypeConstructionFailure {
-    pub error: TypeConstructionError,
-}
-impl CompilerErrorData for TypeConstructionFailure {}
+// pub struct TypeConstructionFailure {
+//     pub error: TypeConstructionError,
+// }
+// impl CompilerErrorData for TypeConstructionFailure {}
 
-impl CompilerErrorDisplay for CompilerErrorContext<TypeConstructionFailure> {
-    fn fmt_err(
-        &self,
-        _type_db: &TypeInstanceManager,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        write!(
-            f,
-            "{on_element}, type construction failed: {variable}",
-            on_element = self.on_element.diag_name(),
-            variable = match self.error.error {
-                TypeConstructionError::IncorrectNumberOfArgs { expected, received } =>
-                    format!("Incorrect number of args: expected {expected}, received {received}"),
-                TypeConstructionError::InsufficientInformation =>
-                    "Insufficient information to construct type".into(),
-            }
-        )
-    }
-}
+// impl CompilerErrorDisplay for CompilerErrorContext<TypeConstructionFailure> {
+//     fn fmt_err(
+//         &self,
+//         _type_db: &TypeConstructorDatabase,
+//         f: &mut std::fmt::Formatter<'_>,
+//     ) -> std::fmt::Result {
+//         write!(
+//             f,
+//             "{on_element}, type construction failed: {variable}",
+//             on_element = self.on_element.diag_name(),
+//             variable = match self.error.error {
+//                 TypeConstructionError::IncorrectNumberOfArgs { expected, received } =>
+//                     format!("Incorrect number of args: expected {expected}, received {received}"),
+//                 TypeConstructionError::InsufficientInformation =>
+//                     "Insufficient information to construct type".into(),
+//             }
+//         )
+//     }
+// }
 
 pub struct VariableNotFound {
     pub variable_name: InternedString,
@@ -677,7 +758,7 @@ impl CompilerErrorData for VariableNotFound {}
 impl CompilerErrorDisplay for CompilerErrorContext<VariableNotFound> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -695,7 +776,7 @@ impl CompilerErrorData for AssignToNonLValueError {}
 impl CompilerErrorDisplay for CompilerErrorContext<AssignToNonLValueError> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -707,14 +788,14 @@ impl CompilerErrorDisplay for CompilerErrorContext<AssignToNonLValueError> {
 }
 
 pub struct DerefOnNonPointerError {
-    pub attempted_type: TypeInstanceId,
+    pub attempted_type: PolyType,
 }
 impl CompilerErrorData for DerefOnNonPointerError {}
 
 impl CompilerErrorDisplay for CompilerErrorContext<DerefOnNonPointerError> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -727,7 +808,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<DerefOnNonPointerError> {
 }
 
 pub struct DerefOnNonPointerErrorUnconstructed {
-    pub attempted_type: TypeConstructParams,
+    pub attempted_type: PolyType,
 }
 
 impl CompilerErrorData for DerefOnNonPointerErrorUnconstructed {}
@@ -735,14 +816,14 @@ impl CompilerErrorData for DerefOnNonPointerErrorUnconstructed {}
 impl CompilerErrorDisplay for CompilerErrorContext<DerefOnNonPointerErrorUnconstructed> {
     fn fmt_err(
         &self,
-        type_db: &TypeInstanceManager,
+        type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
             f,
             "{on_element}, Attempted to deref a non-pointer type: {attempted_type}",
             on_element = self.on_element.diag_name(),
-            attempted_type = self.error.attempted_type.to_string(&type_db.constructors)
+            attempted_type = self.error.attempted_type.to_string(&type_db)
         )
     }
 }
@@ -753,7 +834,7 @@ impl CompilerErrorData for VarargsNotSupported {}
 impl CompilerErrorDisplay for CompilerErrorContext<VarargsNotSupported> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -770,7 +851,7 @@ impl CompilerErrorData for ImplMismatchTypeArgs {}
 impl CompilerErrorDisplay for CompilerErrorContext<ImplMismatchTypeArgs> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -787,7 +868,7 @@ impl CompilerErrorData for RefOnNonLValueError {}
 impl CompilerErrorDisplay for CompilerErrorContext<RefOnNonLValueError> {
     fn fmt_err(
         &self,
-        _type_db: &TypeInstanceManager,
+        _type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
         write!(
@@ -795,23 +876,6 @@ impl CompilerErrorDisplay for CompilerErrorContext<RefOnNonLValueError> {
             "{on_element}, lvalue is required when creating a reference",
             on_element = self.on_element.diag_name()
         )
-    }
-}
-
-#[derive(Debug)]
-pub struct ReportToken(
-    //this is private because we don't want outside code to construct this struct directly
-    std::marker::PhantomData<()>,
-);
-
-impl ReportToken {
-    pub fn as_type_inference_error<T>(self) -> Result<T, crate::types::diagnostics::CompilerError> {
-        Err(crate::types::diagnostics::CompilerError::TypeInferenceError(self))
-    }
-    pub fn as_type_check_error<T>(self) -> Result<T, crate::types::diagnostics::CompilerError> {
-        Err(crate::types::diagnostics::CompilerError::TypeCheckError(
-            self,
-        ))
     }
 }
 
@@ -828,29 +892,8 @@ impl<T: CompilerErrorData> CompilerErrorList<T> {
         self.errors.len()
     }
 
-    pub fn push(&mut self, error: CompilerErrorContext<T>) -> ReportToken {
+    pub fn push(&mut self, error: CompilerErrorContext<T>) {
         self.errors.push(error);
-        ReportToken(std::marker::PhantomData)
-    }
-
-    pub fn push_inference_error<R>(
-        &mut self,
-        error: CompilerErrorContext<T>,
-    ) -> Result<R, CompilerError> {
-        self.errors.push(error);
-        Err(CompilerError::TypeInferenceError(ReportToken(
-            std::marker::PhantomData,
-        )))
-    }
-
-    pub fn push_typecheck_error<R>(
-        &mut self,
-        error: CompilerErrorContext<T>,
-    ) -> Result<R, CompilerError> {
-        self.errors.push(error);
-        Err(CompilerError::TypeCheckError(ReportToken(
-            std::marker::PhantomData,
-        )))
     }
 }
 
@@ -869,14 +912,14 @@ where
 macro_rules! make_type_errors {
     ($($field:ident = $typename:ty), *) => {
 
-        pub struct TypeErrors<'source>{
+        pub struct TypeErrors{
             $(
                 pub $field: CompilerErrorList<$typename>,
             )*
         }
 
-        impl<'source> TypeErrors<'source> {
-            pub fn new() -> TypeErrors<'source> {
+        impl<'source> TypeErrors {
+            pub fn new() -> TypeErrors {
                 TypeErrors {
                     $(
                         $field: CompilerErrorList::new(),
@@ -890,7 +933,7 @@ macro_rules! make_type_errors {
             }
         }
 
-        impl<'errors, 'callargs, 'type_db, 'source, 'files> Display for TypeErrorPrinter<'errors, 'type_db, 'source, 'files> {
+        impl<'errors, 'callargs, 'type_db,'meta, 'files> Display for TypeErrorPrinter<'errors, 'type_db,'meta, 'files> {
 
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 if self.errors.count() == 0 {
@@ -898,9 +941,11 @@ macro_rules! make_type_errors {
                 }
                 $(
                     for err in self.errors.$field.errors.iter() {
-                        let file = &self.file_table[err.location.file.0];
+                        let location = &self.meta_table[err.location];
+                        let span: TokenSpanIndex = location.ast_span.start;
+                        let file = &self.file_table[span.file.0];
                         let file_name = &file.path;
-                        let tok = file.token_table.tokens[err.location.index];
+                        let tok = file.token_table.tokens[span.index];
                         let span = file.token_table.spans[tok.span_index.index];
                         let line = span.start.line;
                         let column = span.start.column;
@@ -918,20 +963,21 @@ macro_rules! make_type_errors {
         }
 
 
-        pub struct TypeErrorPrinter<'errors, 'type_db, 'source, 'files> {
-            pub errors: &'errors TypeErrors<'source>,
-            pub type_db: &'type_db TypeInstanceManager,
+        pub struct TypeErrorPrinter<'errors, 'type_db,'meta, 'files> {
+            pub errors: &'errors TypeErrors,
+            pub type_db: &'type_db TypeConstructorDatabase,
             pub file_table: &'files [FileTableEntry],
+            pub meta_table: &'meta MetaTable,
         }
 
-        impl<'errors, 'callargs, 'type_db, 'source, 'files> TypeErrorPrinter<'errors, 'type_db, 'source, 'files> {
+        impl<'errors, 'callargs, 'type_db, 'meta, 'files> TypeErrorPrinter<'errors, 'type_db, 'meta,'files> {
             pub fn new(
-                errors: &'errors TypeErrors<'source>,
-                type_db: &'type_db TypeInstanceManager,
-
+                errors: &'errors TypeErrors,
+                type_db: &'type_db TypeConstructorDatabase,
+                meta_table: &'meta MetaTable,
                 file_table: &'files [FileTableEntry],
-            ) -> TypeErrorPrinter<'errors, 'type_db, 'source, 'files> {
-                TypeErrorPrinter { errors, type_db, file_table }
+            ) -> TypeErrorPrinter<'errors, 'type_db, 'meta, 'files> {
+                TypeErrorPrinter { errors, type_db, file_table , meta_table }
             }
         }
 
@@ -941,11 +987,12 @@ macro_rules! make_type_errors {
 pub const REPORT_COMPILER_ERR_LOCATION: bool = false;
 
 make_type_errors!(
-    assign_mismatches = TypeMismatch<AssignContext<'source>>,
+    unify_error = UnificationError,
+    assign_mismatches = TypeMismatch<AssignContext>,
     return_type_mismatches = TypeMismatch<ReturnTypeContext>,
     function_call_mismatches = TypeMismatch<FunctionCallContext>,
     function_call_argument_count = FunctionCallArgumentCountMismatch,
-    call_non_callable = CallToNonCallableType<TypeInstanceId>,
+    call_non_callable = CallToNonCallableType<PolyType>,
     call_non_callable_tc = CallToNonCallableType<TypeConstructorId>,
     type_not_found = TypeNotFound,
     type_promotion_failure = TypePromotionFailure,
@@ -954,19 +1001,19 @@ make_type_errors!(
     binary_op_not_found = BinaryOperatorNotFound,
     binary_op_not_found_tc = BinaryOperatorNotFoundForTypeConstructor,
     unary_op_not_found = UnaryOperatorNotFound,
-    field_not_found = FieldNotFound<TypeInstanceId>,
+    field_not_found = FieldNotFound<PolyType>,
     field_not_found_tc = FieldNotFound<TypeConstructorId>,
     method_not_found = MethodNotFound,
     field_or_method_not_found_in_type_constructor = FieldOrMethodNotFoundInTypeConstructor,
     insufficient_array_type_info = InsufficientTypeInformationForArray,
-    array_expressions_not_all_the_same_type = ArrayExpressionsNotAllTheSameType,
+    //array_expressions_not_all_the_same_type = ArrayExpressionsNotAllTheSameType,
     if_statement_unexpected_type = IfStatementNotBoolean,
     type_inference_failure = TypeInferenceFailure,
-    type_construction_failure = TypeConstructionFailure,
-    out_of_bounds = OutOfTypeBounds<'source>,
-    out_of_bounds_constructor = OutOfTypeBoundsTypeConstructor<'source>,
-    invalid_casts = InvalidCast<'source>,
-    type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>,
+    //type_construction_failure = TypeConstructionFailure,
+    //out_of_bounds = OutOfTypeBounds<'source>,
+    //out_of_bounds_constructor = OutOfTypeBoundsTypeConstructor<'source>,
+    //invalid_casts = InvalidCast<'source>,
+    //type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>,
     invalid_derefed_type = DerefOnNonPointerError,
     invalid_derefed_type_unconstructed = DerefOnNonPointerErrorUnconstructed,
     invalid_refed_type = RefOnNonLValueError,
