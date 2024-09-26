@@ -6,12 +6,12 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
-
-
 [dev-dependencies]
 pretty_assertions = "1.4.0"
 match_deref = "0.1.1"
+
+quickcheck = "1"
+quickcheck_macros = "1"
 
 [profile.dev]
 opt-level = 0

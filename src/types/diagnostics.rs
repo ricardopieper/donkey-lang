@@ -33,6 +33,7 @@ impl RootElementType {
 
 use crate::semantic::hir::{HIRTypeDisplayer, MonoType, NodeIndex, PolyType};
 use crate::{ast::lexer::Operator, semantic::hir::HIRType};
+use std::borrow::Cow;
 use std::fmt::Display;
 
 use super::type_constructor_db::{TypeConstructorDatabase, TypeConstructorId};
@@ -376,8 +377,8 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnexpectedTypeFound> {
 }
 
 pub struct UnificationError {
-    pub expected: MonoType,
-    pub actual: MonoType,
+    pub stack: Vec<(MonoType, MonoType)>,
+    pub context: String,
 }
 impl CompilerErrorData for UnificationError {}
 
@@ -387,12 +388,56 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnificationError> {
         type_db: &TypeConstructorDatabase,
         f: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
+        if self.error.context.is_empty() {
+            write!(
+                f,
+                "{on_element}, type error:",
+                on_element = self.on_element.diag_name(),
+            )?;
+        } else {
+            write!(
+                f,
+                "{on_element}, type error: {context}:",
+                on_element = self.on_element.diag_name(),
+                context = self.error.context,
+            )?;
+        }
+        writeln!(f)?;
+
+        for (idx, (t1, t2)) in self.error.stack.iter().enumerate() {
+            for _ in 0..idx {
+                write!(f, " ")?;
+            }
+
+            writeln!(
+                f,
+                "> On unification of {} and {}",
+                t1.print_name(type_db),
+                t2.print_name(type_db)
+            )?;
+        }
+        Ok(())
+    }
+}
+
+pub struct UnificationTypeArgsCountError {
+    pub expected: usize,
+    pub actual: usize,
+}
+impl CompilerErrorData for UnificationTypeArgsCountError {}
+
+impl CompilerErrorDisplay for CompilerErrorContext<UnificationTypeArgsCountError> {
+    fn fmt_err(
+        &self,
+        _: &TypeConstructorDatabase,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
-            "{on_element}, type error: Expected {expected_type} but got {actual_type}",
+            "{on_element}, type error: Expected {expected_args} type args but got {actual_args}",
             on_element = self.on_element.diag_name(),
-            expected_type = self.error.expected.print_name(type_db),
-            actual_type = self.error.actual.print_name(type_db)
+            expected_args = self.error.expected,
+            actual_args = self.error.actual
         )
     }
 }
@@ -926,7 +971,7 @@ macro_rules! make_type_errors {
                     )*
                 }
             }
-            pub fn count(&self) -> usize {
+            pub fn len(&self) -> usize {
                 $(
                     self.$field.len() +
                 )* 0
@@ -936,7 +981,7 @@ macro_rules! make_type_errors {
         impl<'errors, 'callargs, 'type_db,'meta, 'files> Display for TypeErrorPrinter<'errors, 'type_db,'meta, 'files> {
 
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                if self.errors.count() == 0 {
+                if self.errors.len() == 0 {
                     return Ok(());
                 }
                 $(
@@ -961,26 +1006,31 @@ macro_rules! make_type_errors {
                 return Ok(());
             }
         }
+    }
+}
 
+pub struct TypeErrorPrinter<'errors, 'type_db, 'meta, 'files> {
+    pub errors: &'errors TypeErrors,
+    pub type_db: &'type_db TypeConstructorDatabase,
+    pub file_table: &'files [FileTableEntry],
+    pub meta_table: &'meta MetaTable,
+}
 
-        pub struct TypeErrorPrinter<'errors, 'type_db,'meta, 'files> {
-            pub errors: &'errors TypeErrors,
-            pub type_db: &'type_db TypeConstructorDatabase,
-            pub file_table: &'files [FileTableEntry],
-            pub meta_table: &'meta MetaTable,
+impl<'errors, 'callargs, 'type_db, 'meta, 'files>
+    TypeErrorPrinter<'errors, 'type_db, 'meta, 'files>
+{
+    pub fn new(
+        errors: &'errors TypeErrors,
+        type_db: &'type_db TypeConstructorDatabase,
+        meta_table: &'meta MetaTable,
+        file_table: &'files [FileTableEntry],
+    ) -> TypeErrorPrinter<'errors, 'type_db, 'meta, 'files> {
+        TypeErrorPrinter {
+            errors,
+            type_db,
+            file_table,
+            meta_table,
         }
-
-        impl<'errors, 'callargs, 'type_db, 'meta, 'files> TypeErrorPrinter<'errors, 'type_db, 'meta,'files> {
-            pub fn new(
-                errors: &'errors TypeErrors,
-                type_db: &'type_db TypeConstructorDatabase,
-                meta_table: &'meta MetaTable,
-                file_table: &'files [FileTableEntry],
-            ) -> TypeErrorPrinter<'errors, 'type_db, 'meta, 'files> {
-                TypeErrorPrinter { errors, type_db, file_table , meta_table }
-            }
-        }
-
     }
 }
 
@@ -988,6 +1038,7 @@ pub const REPORT_COMPILER_ERR_LOCATION: bool = false;
 
 make_type_errors!(
     unify_error = UnificationError,
+    unify_args_count = UnificationTypeArgsCountError,
     assign_mismatches = TypeMismatch<AssignContext>,
     return_type_mismatches = TypeMismatch<ReturnTypeContext>,
     function_call_mismatches = TypeMismatch<FunctionCallContext>,

@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Write;
@@ -59,7 +60,7 @@ pub struct MethodCall {
 }
 
 // Index into a type table, tells what type an expression or variable is.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct TypeIndex(usize);
 
 impl TypeIndex {
@@ -73,12 +74,22 @@ impl TypeIndex {
     pub fn is_untyped(&self) -> bool {
         self.0 == usize::MAX
     }
+
+    pub fn poly<'a>(&self, ty: &'a TypeTable) -> PolyType {
+        ty[*self].clone()
+    }
 }
 
 // Index of the HIR node (either an expression or a statement) so that we can store
 // data about it somewhere else.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct NodeIndex(usize);
+
+impl NodeIndex {
+    pub fn none() -> NodeIndex {
+        NodeIndex(usize::MAX)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HIRExpr {
@@ -139,11 +150,12 @@ impl HIRType {
         &self,
         type_db: &TypeConstructorDatabase,
         generics_in_context: &[TypeParameter],
+        use_skolems: bool
     ) -> PolyType {
         let bound_generics = self.bound_generics(generics_in_context);
 
         if bound_generics.is_empty() {
-            return PolyType::mono(self.make_mono(type_db, generics_in_context).into());
+            return PolyType::mono(self.make_mono(type_db, generics_in_context, use_skolems).into());
         }
 
         match self {
@@ -169,7 +181,7 @@ impl HIRType {
                     .expect("Could not find type");
                 let generics: Vec<MonoType> = type_args
                     .iter()
-                    .map(|x| x.make_mono(type_db, generics_in_context))
+                    .map(|x| x.make_mono(type_db, generics_in_context, use_skolems))
                     .collect();
 
                 PolyType {
@@ -184,12 +196,17 @@ impl HIRType {
         &self,
         type_db: &TypeConstructorDatabase,
         generics: &[TypeParameter],
+        use_skolems: bool,
     ) -> MonoType {
         match self {
             HIRType::Simple(s) => {
                 let is_generic = generics.iter().find(|x| x.0 == *s).is_some();
                 if is_generic {
-                    MonoType::variable(s.clone())
+                    if use_skolems {
+                        MonoType::Skolem(TypeVariable(s.clone()))
+                    } else {
+                        MonoType::variable(s.clone())
+                    }
                 } else {
                     let ty = match type_db.find_by_name(*s) {
                         Some(t) => t,
@@ -204,7 +221,7 @@ impl HIRType {
                     .expect("Could not find type");
                 let generics: Vec<MonoType> = type_args
                     .iter()
-                    .map(|x| x.make_mono(type_db, generics))
+                    .map(|x| x.make_mono(type_db, generics, use_skolems))
                     .collect();
                 MonoType::Application(ty.id, generics)
             }
@@ -404,33 +421,10 @@ pub struct TypeParameter(pub InternedString);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct TypeVariable(pub InternedString);
 
-impl PartialEq<TypeVariable> for TypeParameter {
-    fn eq(&self, other: &TypeVariable) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl PartialEq<TypeParameter> for TypeVariable {
-    fn eq(&self, other: &TypeParameter) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Into<TypeVariable> for TypeParameter {
-    fn into(self) -> TypeVariable {
-        TypeVariable(self.0)
-    }
-}
-
-impl Into<TypeParameter> for TypeVariable {
-    fn into(self) -> TypeParameter {
-        TypeParameter(self.0)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MonoType {
     Variable(TypeVariable),
+    Skolem(TypeVariable),
     Application(TypeConstructorId, Vec<MonoType>),
 }
 
@@ -443,6 +437,13 @@ impl MonoType {
                 }
 
                 return MonoType::Variable(var.clone());
+            }
+            MonoType::Skolem(var) => {
+                if let Some(sub) = substitution.get(&var) {
+                    return sub.clone();
+                }
+
+                return MonoType::Skolem(var.clone());
             }
             MonoType::Application(constructor, args) => {
                 let new_args = args
@@ -458,12 +459,18 @@ impl MonoType {
     pub fn contains_type_variable(&self, other: TypeVariable) -> bool {
         match self {
             MonoType::Variable(var) => *var == other,
+            MonoType::Skolem(var) => *var == other,
             MonoType::Application(_, args) => args.iter().any(|x| x.contains_type_variable(other)),
         }
     }
 
-    pub fn variable(name: InternedString) -> MonoType {
-        MonoType::Variable(TypeVariable(name))
+
+    pub fn skolem<T>(name: T) -> MonoType where T: Into<InternedString> {
+        MonoType::Skolem(TypeVariable(name.into()))
+    }
+
+    pub fn variable<T>(name: T) -> MonoType where T: Into<InternedString> {
+        MonoType::Variable(TypeVariable(name.into()))
     }
 
     pub fn simple(ty: TypeConstructorId) -> MonoType {
@@ -473,6 +480,7 @@ impl MonoType {
     pub fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
         match self {
             MonoType::Variable(name) => name.0.to_string(),
+            MonoType::Skolem(name) => name.0.to_string(),
             MonoType::Application(constructor, args) => {
                 let ctor = type_db.find(*constructor);
                 if ctor.kind == TypeKind::Function && args.len() > 0 {
@@ -592,7 +600,8 @@ impl PolyType {
     }
 
     pub fn contains_type_variable(&self, other: TypeVariable) -> bool {
-        let is_in_quantifiers = self.quantifiers.iter().any(|q| *q == other);
+        //let is_in_quantifiers = self.quantifiers.iter().any(|q| q.0 == other.0);
+        let is_in_quantifiers = false;
         return self.mono.contains_type_variable(other) && !is_in_quantifiers;
     }
 }
@@ -602,6 +611,7 @@ pub struct TypeTable {
     pub table: Vec<PolyType>,
     current_index: TypeIndex,
     ty_var_current: u64,
+    frozen_indices: BTreeSet<TypeIndex>,
 }
 
 impl TypeTable {
@@ -610,6 +620,7 @@ impl TypeTable {
             current_index: TypeIndex(0),
             table: vec![],
             ty_var_current: 0,
+            frozen_indices: BTreeSet::new(),
         }
     }
 
@@ -629,6 +640,10 @@ impl TypeTable {
         return ret;
     }
 
+    pub fn freeze(&mut self, index: TypeIndex) {
+        //self.frozen_indices.insert(index);
+    }
+
     pub fn untyped(&self) -> TypeIndex {
         TypeIndex(usize::MAX)
     }
@@ -637,8 +652,12 @@ impl TypeTable {
         if substitution.len() == 0 {
             return;
         }
-        for entry in self.table.iter_mut() {
+        for (idx, entry) in self.table.iter_mut().enumerate() {
             //check if this is a type variable
+            if self.frozen_indices.contains(&TypeIndex(idx)) {
+                continue;
+            }
+
             if let MonoType::Variable(tv) = &entry.mono
                 && entry.quantifiers.len() == 0
             //would be undefined behavior if this is > 0
@@ -795,7 +814,7 @@ fn expr_to_hir<'source>(
                             user_given_type: Some(x.into()),
                             resolved_type: {
                                 let hir: HIRType = x.into();
-                                ty.next_with(hir.make_poly(type_db, generics_in_context))
+                                ty.next_with(hir.make_poly(type_db, generics_in_context, false))
                             },
                         })
                         .collect(),
@@ -943,7 +962,7 @@ fn ast_to_hir<'source>(
                 expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
 
             let typedef: HIRType = (&var.name_type).into();
-            let poly = typedef.make_poly(type_db, generics);
+            let poly = typedef.make_poly(type_db, generics, false);
             let ty_var = ty.next_with(poly);
             decls.insert(var.name.0, ty_var);
             let decl_hir = HIR::Declare {
@@ -1069,15 +1088,17 @@ fn ast_decl_function_to_hir<'source>(
 ) {
     let mut ty = TypeTable::new();
     let type_parameters: Vec<_> = type_parameters.iter().map(|x| TypeParameter(x.0)).collect();
-    let parameters = create_parameters(parameters, type_db, &type_parameters, &mut ty, decls);
+    let parameters = create_parameters(parameters, type_db, &type_parameters, &mut ty, decls, true);
     let hir_return = match return_type {
         Some(x) => x.into(),
         None => HIRType::Simple(InternedString::new("Void")),
     };
 
     let return_ty = ty.next_with(PolyType::mono(
-        hir_return.make_mono(type_db, &type_parameters),
+        hir_return.make_mono(type_db, &type_parameters, true),
     ));
+
+    ty.freeze(return_ty);
 
     let return_type = HIRTypeWithTypeVariable {
         hir_type: hir_return,
@@ -1152,10 +1173,11 @@ fn create_parameters(
     type_params: &[TypeParameter],
     ty: &mut TypeTable,
     decls: &mut HashMap<InternedString, TypeIndex>,
+    use_skolem: bool,
 ) -> Vec<HIRTypedBoundName> {
     parameters
         .iter()
-        .map(|it| create_param(it, type_db, type_params, ty, decls))
+        .map(|it| create_param(it, type_db, type_params, ty, decls, use_skolem))
         .collect()
 }
 
@@ -1165,10 +1187,12 @@ fn create_param(
     type_params: &[TypeParameter], //not args, params
     ty: &mut TypeTable,
     decls: &mut HashMap<InternedString, TypeIndex>,
+    use_skolem: bool,
 ) -> HIRTypedBoundName {
     let hir_type: HIRType = (&param.name_type).into();
-    let poly = hir_type.make_mono(type_db, type_params);
+    let poly = hir_type.make_mono(type_db, type_params,use_skolem);
     let ty_var = ty.next_with(PolyType::mono(poly));
+    ty.freeze(ty_var);
     decls.insert(param.name.0, ty_var);
     HIRTypedBoundName {
         name: param.name.0,
@@ -1557,6 +1581,7 @@ pub fn ast_globals_to_hir<'source>(
                 &type_parameters,
                 &mut ty,
                 &mut HashMap::new(),
+                true
             );
             accum.push(HIRRoot::StructDeclaration {
                 struct_name: struct_name.0,
