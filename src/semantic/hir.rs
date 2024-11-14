@@ -114,7 +114,7 @@ pub enum HIRExpr {
     FunctionCall(Box<FunctionCall>, NodeIndex),
     //struct name, type args, $(args:type,)*, return type, metadata
     //Only TExpr is actually needed in later stages, type args won't need to be inferred individually.
-    StructInstantiate(InternedString, Vec<HIRType>, NodeIndex, TypeIndex),
+    StructInstantiate(InternedString, Vec<HIRUserTypeInfo>, NodeIndex, TypeIndex),
     Deref(Box<HIRExpr>, NodeIndex, TypeIndex),
     Ref(Box<HIRExpr>, NodeIndex, TypeIndex),
     UnaryExpression(SpannedOperator, Box<HIRExpr>, NodeIndex, TypeIndex),
@@ -150,12 +150,15 @@ impl HIRType {
         &self,
         type_db: &TypeConstructorDatabase,
         generics_in_context: &[TypeParameter],
-        use_skolems: bool
+        use_skolems: bool,
     ) -> PolyType {
         let bound_generics = self.bound_generics(generics_in_context);
 
         if bound_generics.is_empty() {
-            return PolyType::mono(self.make_mono(type_db, generics_in_context, use_skolems).into());
+            return PolyType::mono(
+                self.make_mono(type_db, generics_in_context, use_skolems)
+                    .into(),
+            );
         }
 
         match self {
@@ -216,9 +219,9 @@ impl HIRType {
                 }
             }
             HIRType::Generic(type_name, type_args) => {
-                let ty = type_db
-                    .find_by_name(*type_name)
-                    .expect("Could not find type");
+                let Some(ty) = type_db.find_by_name(*type_name) else {
+                    panic!("Could not find type {}", type_name)
+                };
                 let generics: Vec<MonoType> = type_args
                     .iter()
                     .map(|x| x.make_mono(type_db, generics, use_skolems))
@@ -464,12 +467,17 @@ impl MonoType {
         }
     }
 
-
-    pub fn skolem<T>(name: T) -> MonoType where T: Into<InternedString> {
+    pub fn skolem<T>(name: T) -> MonoType
+    where
+        T: Into<InternedString>,
+    {
         MonoType::Skolem(TypeVariable(name.into()))
     }
 
-    pub fn variable<T>(name: T) -> MonoType where T: Into<InternedString> {
+    pub fn variable<T>(name: T) -> MonoType
+    where
+        T: Into<InternedString>,
+    {
         MonoType::Variable(TypeVariable(name.into()))
     }
 
@@ -510,6 +518,13 @@ impl MonoType {
                     }
                 }
             }
+        }
+    }
+
+    pub fn try_get_type_argument(&self, index: usize) -> Option<&MonoType> {
+        match self {
+            MonoType::Application(_, args) => args.get(index),
+            _ => None,
         }
     }
 }
@@ -640,10 +655,6 @@ impl TypeTable {
         return ret;
     }
 
-    pub fn freeze(&mut self, index: TypeIndex) {
-        //self.frozen_indices.insert(index);
-    }
-
     pub fn untyped(&self) -> TypeIndex {
         TypeIndex(usize::MAX)
     }
@@ -686,6 +697,14 @@ impl Index<&TypeIndex> for TypeTable {
     }
 }
 
+impl Index<&mut TypeIndex> for TypeTable {
+    type Output = PolyType;
+
+    fn index(&self, index: &mut TypeIndex) -> &Self::Output {
+        &self.table[index.0]
+    }
+}
+
 impl IndexMut<TypeIndex> for TypeTable {
     fn index_mut(&mut self, index: TypeIndex) -> &mut Self::Output {
         &mut self.table[index.0]
@@ -694,6 +713,12 @@ impl IndexMut<TypeIndex> for TypeTable {
 
 impl IndexMut<&TypeIndex> for TypeTable {
     fn index_mut(&mut self, index: &TypeIndex) -> &mut Self::Output {
+        &mut self.table[index.0]
+    }
+}
+
+impl IndexMut<&mut TypeIndex> for TypeTable {
+    fn index_mut(&mut self, index: &mut TypeIndex) -> &mut Self::Output {
         &mut self.table[index.0]
     }
 }
@@ -962,8 +987,8 @@ fn ast_to_hir<'source>(
                 expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
 
             let typedef: HIRType = (&var.name_type).into();
-            let poly = typedef.make_poly(type_db, generics, false);
-            let ty_var = ty.next_with(poly);
+            //let poly = typedef.make_poly(type_db, generics, false);
+            let ty_var = ty.next();
             decls.insert(var.name.0, ty_var);
             let decl_hir = HIR::Declare {
                 var: var.name.0,
@@ -1000,6 +1025,13 @@ fn ast_to_hir<'source>(
                     };
                     accum.push(decl_hir);
                 }
+            } else {
+                let decl_hir = HIR::Assign {
+                    path: path_expr.clone(),
+                    expression: result_expr,
+                    location: path_expr.get_node_index(),
+                };
+                accum.push(decl_hir);
             }
         }
         AST::Return(ast, expr) => match expr {
@@ -1094,11 +1126,11 @@ fn ast_decl_function_to_hir<'source>(
         None => HIRType::Simple(InternedString::new("Void")),
     };
 
-    let return_ty = ty.next_with(PolyType::mono(
-        hir_return.make_mono(type_db, &type_parameters, true),
-    ));
-
-    ty.freeze(return_ty);
+    let return_ty = ty.next_with(PolyType::mono(hir_return.make_mono(
+        type_db,
+        &type_parameters,
+        true,
+    )));
 
     let return_type = HIRTypeWithTypeVariable {
         hir_type: hir_return,
@@ -1189,10 +1221,11 @@ fn create_param(
     decls: &mut HashMap<InternedString, TypeIndex>,
     use_skolem: bool,
 ) -> HIRTypedBoundName {
+    //TODO maybe I need to register struct types before I anticipated....s
     let hir_type: HIRType = (&param.name_type).into();
-    let poly = hir_type.make_mono(type_db, type_params,use_skolem);
-    let ty_var = ty.next_with(PolyType::mono(poly));
-    ty.freeze(ty_var);
+    //let poly = hir_type.make_mono(type_db, type_params, use_skolem);
+    let ty_var = ty.next();
+
     decls.insert(param.name.0, ty_var);
     HIRTypedBoundName {
         name: param.name.0,
@@ -1581,7 +1614,7 @@ pub fn ast_globals_to_hir<'source>(
                 &type_parameters,
                 &mut ty,
                 &mut HashMap::new(),
-                true
+                true,
             );
             accum.push(HIRRoot::StructDeclaration {
                 struct_name: struct_name.0,

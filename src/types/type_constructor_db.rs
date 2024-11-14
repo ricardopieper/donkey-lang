@@ -56,6 +56,8 @@ pub struct Variadic(pub bool);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSignature {
+    //These type parameters must include the ones in the struct itself, so that we can treat them as
+    //any other function and run more or less the same algorithms
     pub type_parameters: Vec<TypeParameter>,
     pub parameters: Vec<MonoType>,
     pub return_type: MonoType, //boxed so that we can use it in a recursive type
@@ -444,7 +446,7 @@ impl TypeConstructorDatabase {
                 fields: vec![],
                 functions: vec![],
                 rhs_binary_ops: vec![],
-                type_params: vec![],
+                type_params: signature.type_parameters,
                 unary_ops: vec![],
                 is_intrinsic: false,
                 function_params: signature.parameters,
@@ -599,7 +601,7 @@ impl TypeConstructorDatabase {
             ptr_type,
             istr("write"),
             FunctionSignature {
-                type_parameters: vec![],
+                type_parameters: vec![TypeParameter(istr("TPtr"))],
                 parameters: vec![
                     MonoType::Application(
                         ptr_type,
@@ -616,13 +618,30 @@ impl TypeConstructorDatabase {
             ptr_type,
             istr("read"),
             FunctionSignature {
-                type_parameters: vec![],
+                type_parameters: vec![TypeParameter(istr("TPtr"))],
                 parameters: vec![
                     MonoType::Application(
                         ptr_type,
                         vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
                     ), //self
                     MonoType::simple(self.common_types.u64),
+                ], /* offset * sizeof(TPtr) */
+                return_type: MonoType::Variable(TypeVariable(istr("TPtr"))).into(),
+                variadic: Variadic(false),
+            },
+        );
+
+        self.add_function_to_type(
+            ptr_type,
+            istr("read_i32"),
+            FunctionSignature {
+                type_parameters: vec![TypeParameter(istr("TPtr"))],
+                parameters: vec![
+                    MonoType::Application(
+                        ptr_type,
+                        vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
+                    ), //self
+                    MonoType::simple(self.common_types.i32),
                 ], /* offset * sizeof(TPtr) */
                 return_type: MonoType::Variable(TypeVariable(istr("TPtr"))).into(),
                 variadic: Variadic(false),
@@ -645,7 +664,7 @@ impl TypeConstructorDatabase {
                 )
                 .into(),
                 variadic: Variadic(false),
-                type_parameters: vec![],
+                type_parameters: vec![TypeParameter(istr("TPtr"))],
             },
         );
         self.mark_as_intrisic(ptr_type);
@@ -675,7 +694,24 @@ impl TypeConstructorDatabase {
                 )
                 .into(),
                 variadic: Variadic(false),
-                type_parameters: vec![],
+                type_parameters: vec![TypeParameter(istr("TItem"))],
+            },
+        );
+
+        self.add_function_to_type(
+            arr_type,
+            istr("len"),
+            FunctionSignature {
+                parameters: vec![
+                    MonoType::Application(
+                        arr_type,
+                        vec![MonoType::Variable(TypeVariable(istr("TItem")))],
+                    ), //self
+                    MonoType::simple(u32_type),
+                ],
+                return_type: MonoType::Application(u32_type, vec![]).into(),
+                variadic: Variadic(false),
+                type_parameters: vec![TypeParameter(istr("TItem"))],
             },
         );
 

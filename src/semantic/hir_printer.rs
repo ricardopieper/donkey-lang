@@ -339,10 +339,11 @@ impl<'type_db> HIRPrinter<'type_db> {
 
                 for field in body {
                     structdecl.push_str(&format!(
-                        "{}  {}: {}",
+                        "{}    {}: {}",
                         indent, field.name, field.type_data.hir_type
                     ));
                 }
+                structdecl.push('\n');
 
                 structdecl
             }

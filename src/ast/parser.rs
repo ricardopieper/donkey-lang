@@ -3223,6 +3223,23 @@ print(x)"
         );
     }
 
+
+    #[test]
+    fn struct_definition_set_field() {
+        parse_and_print_back_to_original(
+            "
+struct SomeStruct:
+    field: i32
+    otherfield: str
+
+def main():
+    x = SomeStruct()
+    x.field = 1
+    ",
+        );
+    }
+
+
     #[test]
     fn access_at_index() {
         parse_and_print_back_to_original("list[1]");

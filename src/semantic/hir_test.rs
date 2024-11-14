@@ -189,8 +189,8 @@ def foo<T>(i: T) -> i32:
 
     let expected = "
 def foo<T>(i: T (inferred: T)) -> i32 (return inferred: i32):
-    x : 't1 = {{i: T} + {2: i32}: 't1} [synth]
-    return {{x: 't1} * {3: i32}: i32}
+    x : 't2 = {{i: T} + {2: i32}: 't2} [synth]
+    return {{x: 't2} * {3: i32}: i32}
     ";
 
     println!("{result}");
@@ -199,7 +199,7 @@ def foo<T>(i: T (inferred: T)) -> i32 (return inferred: i32):
 }
 
 #[test]
-fn test_call_function() {
+fn test_call_function_right_params() {
     let (.., result, _, _) = setup(
         "
 def foo(x: i32) -> i32:
@@ -241,7 +241,7 @@ def bar(y: i32) -> i32:
 def foo(x: f32 (inferred: f32)) -> f32 (return inferred: f32):
     return {x: f32}
 def bar(y: i32 (inferred: i32)) -> i32 (return inferred: i32):
-    return {{foo: 't0}({y: i32}): 't1}
+    return {{foo: 't1}({y: i32}): 't2
     ";
     println!("{result}");
 
@@ -621,7 +621,7 @@ def baz<T, U>(x: ptr<ptr<T>> (inferred: ptr<ptr<T>>), y: ptr<U> (inferred: ptr<U
     return {*{y: ptr<U>}: U}
 def bar<U, T>(u: U (inferred: U), t: T (inferred: T)) -> U (return inferred: U):
     x : ptr<U> = {&{u: U}: ptr<U>} [synth]
-    return {{baz: 't2}({x: ptr<U>}, {&{x: ptr<U>}: ptr<ptr<U>>}): 't4}
+    return {{baz: 't4}({x: ptr<U>}, {&{x: ptr<U>}: ptr<ptr<U>>}): 't6}
 ";
 
     println!("{result}");
@@ -654,5 +654,241 @@ def main() -> i32 (return inferred: i32):
 
     println!("{result}");
 
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn method_call_infer_types() {
+    let (.., result, typing_result, errors) = setup(
+        "
+def main(x: ptr<i32>):
+    y = x.read(0)
+    x.write(0, 99)
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main(x: ptr<i32> (inferred: ptr<i32>)) -> Void (return inferred: Void):
+    y : i32 = {{x: ptr<i32>}.read({0: u64}): i32} [synth]
+    {x: ptr<i32>}.write({0: u64}, {99: i32})
+";
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn struct_inference() {
+    let (.., result, typing_result, errors) = setup(
+        "
+struct SomeStruct:
+    x: i32
+
+def main():
+    x = SomeStruct()
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct SomeStruct:
+    x: i32
+def main() -> Void (return inferred: Void):
+    x : SomeStruct = {SomeStruct(): SomeStruct} [synth]
+";
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn struct_set_field() {
+    let (.., result, typing_result, errors) = setup(
+        "
+struct SomeStruct:
+    x: i32
+
+def main():
+    my_struct = SomeStruct()
+    my_struct.x = 1
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct SomeStruct:
+    x: i32
+def main() -> Void (return inferred: Void):
+    my_struct : SomeStruct = {SomeStruct(): SomeStruct} [synth]
+    {{my_struct: SomeStruct}.x: i32} = {1: i32}
+";
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn generic_struct_set_field_generic_works() {
+    let (.., result, typing_result, errors) = setup(
+        "
+struct SomeStruct<T>:
+    x: ptr<T>
+
+struct SomeOtherStruct<T>:
+    x: T
+
+def main():
+    x = 1
+    some_struct = SomeStruct<i32>()
+    some_struct.x = &x
+    other_struct = SomeOtherStruct<ptr<i32>>()
+    other_struct.x = some_struct.x
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct SomeStruct:
+    x: ptr<T>
+struct SomeOtherStruct:
+    x: T
+def main() -> Void (return inferred: Void):
+    x : i32 = {1: i32} [synth]
+    some_struct : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
+    {{some_struct: SomeStruct<i32>}.x: ptr<i32>} = {&{x: i32}: ptr<i32>}
+    other_struct : SomeOtherStruct<ptr<i32>> = {SomeOtherStruct<ptr<i32>>(): SomeOtherStruct<ptr<i32>>} [synth]
+    {{other_struct: SomeOtherStruct<ptr<i32>>}.x: ptr<i32>} = {{some_struct: SomeStruct<i32>}.x: ptr<i32>}
+";
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn generic_struct_set_field_generic_does_not_typecheck() {
+    let (.., result, typing_result, errors) = setup(
+        "
+struct SomeStruct<T>:
+    x: ptr<T>
+
+struct SomeOtherStruct<T>:
+    x: T
+
+def main():
+    x = 1
+    some_struct = SomeStruct<i32>()
+    some_struct.x = &x
+    other_struct = SomeOtherStruct<ptr<f64>>()
+    other_struct.x = some_struct.x
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect_err("Expected typing error");
+    assert_eq!(errors.len(), 1);
+
+    let expected = "
+struct SomeStruct:
+    x: ptr<T>
+struct SomeOtherStruct:
+    x: T
+def main() -> Void (return inferred: Void):
+    x : i32 = {1: i32} [synth]
+    some_struct : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
+    {{some_struct: SomeStruct<i32>}.x: ptr<i32>} = {&{x: i32}: ptr<i32>}
+    other_struct : SomeOtherStruct<ptr<f64>> = {SomeOtherStruct<ptr<f64>>(): SomeOtherStruct<ptr<f64>>} [synth]
+    {{other_struct: SomeOtherStruct<ptr<f64>>}.x: ptr<f64>} = {{some_struct: SomeStruct<i32>}.x: ptr<i32>}
+";
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn do_not_accept_hallucinated_variables() {
+    let (.., result, typing_result, errors) = setup(
+        "
+struct SomeStruct<T>:
+    x: ptr<T>
+
+def main():
+    some_struct = SomeStruct<i32>()
+    some_struct.x = &value
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect_err("Expected typing error");
+    assert_eq!(errors.len(), 1);
+
+    let expected = "
+struct SomeStruct:
+    x: ptr<T>
+def main() -> Void (return inferred: Void):
+    some_struct : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
+    {{some_struct: SomeStruct<i32>}.x: ptr<'t4>} = {&{value: 't4}: ptr<'t4>}
+";
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn dont_confuse_type_parameters_struct_and_caller_ptr() {
+    let (.., result, typing_result, errors) = setup(
+        "
+def make_ptr<TPtr>(val: TPtr) -> ptr<TPtr>:
+    return &val
+
+def main():
+    float_ptr = make_ptr(1.0)
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def make_ptr<TPtr>(val: TPtr (inferred: TPtr)) -> ptr<TPtr> (return inferred: ptr<TPtr>):
+    return {&{val: TPtr}: ptr<TPtr>}
+def main() -> Void (return inferred: Void):
+    float_ptr : ptr<f32> = {{make_ptr: (f32) -> ptr<f32>}({1.0: f32}): ptr<f32>} [synth]
+";
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn accept_user_declared_structs_in_function_params() {
+    let (.., result, typing_result, errors) = setup(
+        "
+struct SomeStruct:
+    x: i32
+
+def main(val: SomeStruct):
+    val.x = 1
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct SomeStruct:
+    x: i32
+def main(val: SomeStruct (inferred: SomeStruct)) -> Void (return inferred: Void):
+    {{val: SomeStruct}.x: i32} = {1: i32}
+";
     assert_eq!(expected.trim(), result.trim());
 }
