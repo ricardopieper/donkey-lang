@@ -189,8 +189,8 @@ def foo<T>(i: T) -> i32:
 
     let expected = "
 def foo<T>(i: T (inferred: T)) -> i32 (return inferred: i32):
-    x : 't2 = {{i: T} + {2: i32}: 't2} [synth]
-    return {{x: 't2} * {3: i32}: i32}
+    x : 't1 = {{i: T} + {2: i32}: 't1} [synth]
+    return {{x: 't1} * {3: i32}: i32}
     ";
 
     println!("{result}");
@@ -241,7 +241,7 @@ def bar(y: i32) -> i32:
 def foo(x: f32 (inferred: f32)) -> f32 (return inferred: f32):
     return {x: f32}
 def bar(y: i32 (inferred: i32)) -> i32 (return inferred: i32):
-    return {{foo: 't1}({y: i32}): 't2
+    return {{foo: 't0}({y: i32}): 't1}
     ";
     println!("{result}");
 
@@ -621,7 +621,7 @@ def baz<T, U>(x: ptr<ptr<T>> (inferred: ptr<ptr<T>>), y: ptr<U> (inferred: ptr<U
     return {*{y: ptr<U>}: U}
 def bar<U, T>(u: U (inferred: U), t: T (inferred: T)) -> U (return inferred: U):
     x : ptr<U> = {&{u: U}: ptr<U>} [synth]
-    return {{baz: 't4}({x: ptr<U>}, {&{x: ptr<U>}: ptr<ptr<U>>}): 't6}
+    return {{baz: 't2}({x: ptr<U>}, {&{x: ptr<U>}: ptr<ptr<U>>}): 't4}
 ";
 
     println!("{result}");
@@ -814,7 +814,7 @@ def main() -> Void (return inferred: Void):
 }
 
 #[test]
-fn do_not_accept_hallucinated_variables() {
+fn do_not_accept_non_existing_variables() {
     let (.., result, typing_result, errors) = setup(
         "
 struct SomeStruct<T>:

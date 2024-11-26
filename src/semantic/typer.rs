@@ -148,9 +148,7 @@ impl<'tydb> Typer<'tydb> {
                     );
 
                     for field in fields {
-                        let field_ty = type_table[&field.type_data.type_variable]
-                            .expect_mono()
-                            .clone();
+                        let field_ty = type_table[&field.type_data.type_variable].mono.clone();
                         self.type_database
                             .add_field(ty, field.name.clone(), field_ty);
                     }
@@ -536,11 +534,11 @@ impl<'tydb> Typer<'tydb> {
                     location,
                 } => {
                     //let poly = typedef.hir_type.make_poly(type_db, generics, false);
-                    type_table[typedef.type_variable] = typedef.hir_type.make_poly(
+                    /*type_table[typedef.type_variable] = typedef.hir_type.make_poly(
                         &self.type_database,
                         func_type_parameters,
                         false,
-                    );
+                    );*/
                     let ty_data_for_typedef = type_table[typedef.type_variable].clone();
 
                     self.infer_type_for_expression(

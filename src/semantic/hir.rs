@@ -987,8 +987,8 @@ fn ast_to_hir<'source>(
                 expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
 
             let typedef: HIRType = (&var.name_type).into();
-            //let poly = typedef.make_poly(type_db, generics, false);
-            let ty_var = ty.next();
+            let poly = typedef.make_poly(type_db, generics, false);
+            let ty_var = ty.next_with(poly);
             decls.insert(var.name.0, ty_var);
             let decl_hir = HIR::Declare {
                 var: var.name.0,
@@ -1223,8 +1223,8 @@ fn create_param(
 ) -> HIRTypedBoundName {
     //TODO maybe I need to register struct types before I anticipated....s
     let hir_type: HIRType = (&param.name_type).into();
-    //let poly = hir_type.make_mono(type_db, type_params, use_skolem);
-    let ty_var = ty.next();
+    let poly = hir_type.make_poly(type_db, type_params, use_skolem);
+    let ty_var = ty.next_with(poly);
 
     decls.insert(param.name.0, ty_var);
     HIRTypedBoundName {
