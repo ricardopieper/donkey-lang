@@ -1,8 +1,6 @@
 #[cfg(test)]
-mod test {
+mod tests {
     use quickcheck::{Arbitrary, Gen};
-
-    #[cfg(test)]
     extern crate quickcheck;
 
     use crate::{
