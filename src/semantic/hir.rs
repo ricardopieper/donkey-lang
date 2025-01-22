@@ -211,16 +211,17 @@ impl HIRType {
                         MonoType::variable(s.clone())
                     }
                 } else {
-                    let ty = match type_db.find_by_name(*s) {
-                        Some(t) => t,
-                        None => panic!("Could not find type {}", s),
-                    };
-                    MonoType::Application(ty.id, vec![])
+                    match type_db.find_by_name(*s) {
+                        Some(t) => MonoType::Application(t.id, vec![]),
+                        None => {
+                            panic!("Could not find type {s} (simple)")
+                        }
+                    }
                 }
             }
             HIRType::Generic(type_name, type_args) => {
                 let Some(ty) = type_db.find_by_name(*type_name) else {
-                    panic!("Could not find type {}", type_name)
+                    panic!("Could not find type {type_name} (generic)")
                 };
                 let generics: Vec<MonoType> = type_args
                     .iter()
@@ -361,17 +362,20 @@ pub enum HIRRoot {
         is_external: bool,
         is_varargs: bool,
         type_table: TypeTable,
+        has_been_monomorphized: bool,
     },
     StructDeclaration {
         struct_name: InternedString,
         type_parameters: Vec<TypeParameter>,
         fields: Vec<HIRTypedBoundName>,
         type_table: TypeTable,
+        has_been_monomorphized: bool,
     },
     ImplDeclaration {
         struct_name: InternedString,
         type_parameters: Vec<TypeParameter>,
         methods: Vec<HIRRoot>,
+        has_been_monomorphized: bool,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -487,8 +491,8 @@ impl MonoType {
 
     pub fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
         match self {
-            MonoType::Variable(name) => name.0.to_string(),
-            MonoType::Skolem(name) => name.0.to_string(),
+            MonoType::Variable(name) => format!("{}", name.0.to_string()),
+            MonoType::Skolem(name) => format!("{}", name.0.to_string()),
             MonoType::Application(constructor, args) => {
                 let ctor = type_db.find(*constructor);
                 if ctor.kind == TypeKind::Function && args.len() > 0 {
@@ -626,6 +630,7 @@ pub struct TypeTable {
     pub table: Vec<PolyType>,
     current_index: TypeIndex,
     ty_var_current: u64,
+    param_current: u64,
     frozen_indices: BTreeSet<TypeIndex>,
 }
 
@@ -635,6 +640,7 @@ impl TypeTable {
             current_index: TypeIndex(0),
             table: vec![],
             ty_var_current: 0,
+            param_current: 0,
             frozen_indices: BTreeSet::new(),
         }
     }
@@ -645,6 +651,15 @@ impl TypeTable {
             InternedString::new(&var_name),
         ))));
         self.ty_var_current += 1;
+        r
+    }
+
+    pub fn next_param_or_return(&mut self) -> TypeIndex {
+        let var_name = format!("'param{}", self.param_current);
+        let r = self.next_with(PolyType::mono(MonoType::Variable(TypeVariable(
+            InternedString::new(&var_name),
+        ))));
+        self.param_current += 1;
         r
     }
 
@@ -663,18 +678,49 @@ impl TypeTable {
         if substitution.len() == 0 {
             return;
         }
-        for (idx, entry) in self.table.iter_mut().enumerate() {
-            //check if this is a type variable
-            if self.frozen_indices.contains(&TypeIndex(idx)) {
-                continue;
-            }
 
-            if let MonoType::Variable(tv) = &entry.mono
-                && entry.quantifiers.len() == 0
-            //would be undefined behavior if this is > 0
-            {
-                if let Some(sub) = substitution.get(tv) {
-                    entry.mono = sub.clone();
+        for (_, entry) in self.table.iter_mut().enumerate() {
+            match entry.mono {
+                MonoType::Variable(tv) => {
+                    if entry.quantifiers.len() == 0 {
+                        if let Some(sub) = substitution.get(&tv) {
+                            entry.mono = sub.clone();
+                        }
+                    }
+                }
+                MonoType::Application(_, ref mut args) => {
+                    for arg in args {
+                        *arg = arg.apply_substitution(substitution);
+                    }
+                }
+                _ => {} //skolems are not substituted.
+            }
+        }
+    }
+
+    //used by monomorphization to do a function-wide substitution. Includes skolems,
+    //and includes type variables that are deep inside type applications (the arguments of type applications)
+    pub fn apply_function_wide_substitution(
+        &mut self,
+        substitution: &HashMap<TypeVariable, MonoType>,
+    ) {
+        if substitution.len() == 0 {
+            return;
+        }
+        for (_, entry) in self.table.iter_mut().enumerate() {
+            match entry.mono {
+                MonoType::Variable(tv) | MonoType::Skolem(tv) => {
+                    if let Some(sub) = substitution.get(&tv) {
+                        entry.mono = sub.clone();
+                    }
+                }
+                MonoType::Application(_, ref mut args) => {
+                    //perhaps this should also be done in the apply_substitution method
+                    //because currently it's not possible to substitute a type variable
+                    //deep inside a type application
+                    for arg in args {
+                        *arg = arg.apply_substitution(substitution);
+                    }
                 }
             }
         }
@@ -816,6 +862,11 @@ fn expr_to_hir<'source>(
             if let Some(t) = decls.get(&name.0) {
                 HIRExpr::Variable(name.0, meta.next(name), t.clone())
             } else {
+                //Since the HIR processor processes the AST in a top-down manner
+                //and decls is only scoped to the current function, we can't find
+                //function names in the decls right now. Assume it exists
+                //and try to resolve later.
+                //The Typer will have to check if the variable actually exists.
                 HIRExpr::Variable(name.0, meta.next(name), ty.next())
             }
         }
@@ -1126,11 +1177,11 @@ fn ast_decl_function_to_hir<'source>(
         None => HIRType::Simple(InternedString::new("Void")),
     };
 
-    let return_ty = ty.next_with(PolyType::mono(hir_return.make_mono(
-        type_db,
-        &type_parameters,
-        true,
-    )));
+    let return_ty = ty.next_param_or_return(); /*(PolyType::mono(hir_return.make_mono(
+                                                   type_db,
+                                                   &type_parameters,
+                                                   true,
+                                               )));*/
 
     let return_type = HIRTypeWithTypeVariable {
         hir_type: hir_return,
@@ -1150,6 +1201,7 @@ fn ast_decl_function_to_hir<'source>(
                 return_type,
                 method_of: Some(ty.next()),
                 type_table: ty,
+                has_been_monomorphized: false,
             });
             return;
         }
@@ -1166,6 +1218,7 @@ fn ast_decl_function_to_hir<'source>(
                 return_type,
                 method_of: None,
                 type_table: ty,
+                has_been_monomorphized: false,
             });
             return;
         }
@@ -1195,6 +1248,7 @@ fn ast_decl_function_to_hir<'source>(
         return_type,
         method_of: None,
         type_table: ty,
+        has_been_monomorphized: false,
     };
     accum.push(decl_hir);
 }
@@ -1209,11 +1263,11 @@ fn create_parameters(
 ) -> Vec<HIRTypedBoundName> {
     parameters
         .iter()
-        .map(|it| create_param(it, type_db, type_params, ty, decls, use_skolem))
+        .map(|it| create_function_param(it, type_db, type_params, ty, decls, use_skolem))
         .collect()
 }
 
-fn create_param(
+fn create_function_param(
     param: &TypeBoundName,
     type_db: &TypeConstructorDatabase,
     type_params: &[TypeParameter], //not args, params
@@ -1221,11 +1275,8 @@ fn create_param(
     decls: &mut HashMap<InternedString, TypeIndex>,
     use_skolem: bool,
 ) -> HIRTypedBoundName {
-    //TODO maybe I need to register struct types before I anticipated....s
     let hir_type: HIRType = (&param.name_type).into();
-    let poly = hir_type.make_poly(type_db, type_params, use_skolem);
-    let ty_var = ty.next_with(poly);
-
+    let ty_var = ty.next_param_or_return();
     decls.insert(param.name.0, ty_var);
     HIRTypedBoundName {
         name: param.name.0,
@@ -1236,6 +1287,23 @@ fn create_param(
     }
 }
 
+fn create_struct_field_type(
+    param: &TypeBoundName,
+    type_db: &TypeConstructorDatabase,
+    type_params: &[TypeParameter], //not args, params
+    ty: &mut TypeTable,
+) -> HIRTypedBoundName {
+    let hir_type: HIRType = (&param.name_type).into();
+    let ty_var = hir_type.make_poly(type_db, type_params, true);
+    let next = ty.next_with(ty_var);
+    HIRTypedBoundName {
+        name: param.name.0,
+        type_data: HIRTypeWithTypeVariable {
+            hir_type,
+            type_variable: next,
+        },
+    }
+}
 fn ast_if_to_hir<'source>(
     type_db: &TypeConstructorDatabase,
     true_branch: &'source ASTIfStatement,
@@ -1470,6 +1538,7 @@ fn ast_impl_to_hir<'source>(
         struct_name,
         type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
         methods: functions,
+        has_been_monomorphized: false,
     });
 }
 
@@ -1608,19 +1677,25 @@ pub fn ast_globals_to_hir<'source>(
             let mut ty = TypeTable::new();
             let type_parameters: Vec<_> =
                 type_parameters.iter().map(|x| TypeParameter(x.0)).collect();
-            let fields = create_parameters(
-                body,
-                type_db,
-                &type_parameters,
-                &mut ty,
-                &mut HashMap::new(),
-                true,
-            );
+            let fields: Vec<_> = body
+                .iter()
+                .map(|field| create_struct_field_type(field, type_db, &type_parameters, &mut ty))
+                .collect();
+
+            for field in &fields {
+                log!(
+                    "Field: {} {}",
+                    field.name,
+                    &ty[field.type_data.type_variable].to_string(type_db)
+                );
+            }
+
             accum.push(HIRRoot::StructDeclaration {
                 struct_name: struct_name.0,
                 fields,
                 type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
                 type_table: ty,
+                has_been_monomorphized: false,
             });
         }
         other => panic!("AST not supported: {other:?}"),

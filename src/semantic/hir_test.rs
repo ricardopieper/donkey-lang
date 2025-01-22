@@ -73,6 +73,64 @@ fn setup(
     )
 }
 
+#[cfg(test)]
+fn setup_mono(
+    src: &'static str,
+) -> (
+    TypeConstructorDatabase,
+    MetaTable,
+    Source,
+    Vec<HIRRoot>,
+    String,
+    Result<(), ()>,
+    TypeErrors,
+) {
+    use crate::semantic::monomorph::Monomorphizer;
+
+    let mut type_db = TypeConstructorDatabase::new();
+    let mut meta_table = MetaTable::new();
+    let original_src = test_utils::parse_no_stdlib(src);
+
+    let mut parsed = ast_globals_to_hir(&original_src.file_table[0].ast, &type_db, &mut meta_table);
+
+    let (compiler_errors, tc_result) = {
+        let tc_result = {
+            let mut typer = Typer::new(&mut type_db);
+            typer.forgive_skolem_mismatches();
+            let tc_result = typer.assign_types(&mut parsed);
+            (typer.compiler_errors, tc_result)
+        };
+        let mut mono = Monomorphizer::new(&mut type_db);
+
+        mono.run(&mut parsed).unwrap();
+        parsed = mono.get_result();
+        tc_result
+    };
+
+    let hir_string = {
+        let printer = HIRPrinter::new(true, &type_db);
+        printer.print_hir(&parsed)
+    };
+
+    let printer = TypeErrorPrinter::new(
+        &compiler_errors,
+        &type_db,
+        &meta_table,
+        &original_src.file_table,
+    );
+    println!("{printer}");
+
+    (
+        type_db,
+        meta_table,
+        original_src,
+        parsed,
+        hir_string,
+        tc_result,
+        compiler_errors,
+    )
+}
+
 #[test]
 fn test_assign_variables_simple() {
     let (.., result, _, _) = setup(
@@ -235,7 +293,10 @@ def bar(y: i32) -> i32:
 
     assert_eq!(errors.len(), 1);
     assert_eq!(errors.unify_error.len(), 1);
-    assert_eq!(&errors.unify_error[0].error.context, "On function call");
+    assert_eq!(
+        &errors.unify_error[0].error.context,
+        "On function call to foo"
+    );
 
     let expected = "
 def foo(x: f32 (inferred: f32)) -> f32 (return inferred: f32):
@@ -614,7 +675,10 @@ def bar<U, T>(u: U, t: T) -> U:
     typing_result.expect_err("Expected type error");
     assert_eq!(errors.len(), 1);
     assert_eq!(errors.unify_error.len(), 1);
-    assert_eq!(&errors.unify_error[0].error.context, "On function call");
+    assert_eq!(
+        &errors.unify_error[0].error.context,
+        "On function call to baz"
+    );
 
     let expected = "
 def baz<T, U>(x: ptr<ptr<T>> (inferred: ptr<ptr<T>>), y: ptr<U> (inferred: ptr<U>)) -> U (return inferred: U):
@@ -830,13 +894,14 @@ def main():
 
     typing_result.expect_err("Expected typing error");
     assert_eq!(errors.len(), 1);
+    assert_eq!(errors.variable_not_found.len(), 1);
 
     let expected = "
 struct SomeStruct:
     x: ptr<T>
 def main() -> Void (return inferred: Void):
     some_struct : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
-    {{some_struct: SomeStruct<i32>}.x: ptr<'t4>} = {&{value: 't4}: ptr<'t4>}
+    {{some_struct: SomeStruct<i32>}.x: ptr<i32>} = {&{value: 't4}: 't5}
 ";
     assert_eq!(expected.trim(), result.trim());
 }
@@ -891,4 +956,312 @@ def main(val: SomeStruct (inferred: SomeStruct)) -> Void (return inferred: Void)
     {{val: SomeStruct}.x: i32} = {1: i32}
 ";
     assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn accept_user_declared_structs_in_function_params_after_the_function() {
+    let (.., result, typing_result, errors) = setup(
+        "
+def main(val: SomeStruct):
+    val.x = 1
+
+struct SomeStruct:
+    x: i32
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main(val: SomeStruct (inferred: SomeStruct)) -> Void (return inferred: Void):
+    {{val: SomeStruct}.x: i32} = {1: i32}
+struct SomeStruct:
+    x: i32
+";
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn return_ptr_to_struct_ptr() {
+    let (.., result, typing_result, errors) = setup(
+        "
+
+def main(val: ptr<SomeStruct>) -> ptr<i32>:
+    return &(*val).x
+
+struct SomeStruct:
+    x: i32
+",
+    );
+
+    println!("{result}");
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main(val: ptr<SomeStruct> (inferred: ptr<SomeStruct>)) -> ptr<i32> (return inferred: ptr<i32>):
+    return {&{{*{val: ptr<SomeStruct>}: SomeStruct}.x: i32}: ptr<i32>}
+struct SomeStruct:
+    x: i32
+";
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn monomprthization_test_simple() {
+    let (.., result, typing_result, errors) = setup_mono(
+        "
+def foo<T>(t: T) -> i32:
+    return 1
+
+def bar() -> i32:
+    x = 1
+    return foo(x)
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def bar() -> i32 (return inferred: i32):
+    x : i32 = {1: i32} [synth]
+    return {{foo[i32,i32]: (i32) -> i32}({x: i32}): i32}
+def foo[i32,i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
+    return {1: i32}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn monomorphization_test_harder() {
+    let (.., result, typing_result, errors) = setup_mono(
+        "
+def foo<T, U>(t: T, u: U) -> i32:
+    return 1 + u + t
+
+def bar() -> i32:
+    x = 1
+    return foo(x, x)
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def bar() -> i32 (return inferred: i32):
+    x : i32 = {1: i32} [synth]
+    return {{foo[i32,i32,i32]: (i32, i32) -> i32}({x: i32}, {x: i32}): i32}
+def foo[i32,i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
+    return {{{1: i32} + {u: i32}: i32} + {t: i32}: i32}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn monomorphization_test_multiple() {
+    let (.., result, typing_result, errors) = setup_mono(
+        "
+def foo<T, U>(t: T, u: U) -> i32:
+    return 1 + t
+
+def bar() -> i32:
+    x = 1
+    y = 3.14
+    r1 = foo(x, y)
+    r2 = foo(y, 'c')
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def bar() -> i32 (return inferred: i32):
+    x : i32 = {1: i32} [synth]
+    y : f32 = {3.14: f32} [synth]
+    r1 : i32 = {{foo[i32,f32,i32]: (i32, f32) -> i32}({x: i32}, {y: f32}): i32} [synth]
+    r2 : i32 = {{foo[f32,char,i32]: (f32, char) -> i32}({y: f32}, {'c': char}): i32} [synth]
+def foo[f32,char,i32](t: T (inferred: f32), u: U (inferred: char)) -> i32 (return inferred: i32):
+    return {{1: i32} + {t: f32}: i32}
+def foo[i32,f32,i32](t: T (inferred: i32), u: U (inferred: f32)) -> i32 (return inferred: i32):
+    return {{1: i32} + {t: i32}: i32}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn monomorphization_test_indirect() {
+    let (.., result, typing_result, errors) = setup_mono(
+        "
+def foo<T, U>(t: T, u: U) -> i32:
+    return baz(u) + t
+
+def baz<T>(t: T) -> i32:
+    return 1 + t
+
+def bar() -> i32:
+    foo(1, 3)
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def bar() -> i32 (return inferred: i32):
+    {foo[i32,i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
+def foo[i32,i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
+    return {{{baz[i32,i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
+def baz[i32,i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
+    return {{1: i32} + {t: i32}: i32}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn monomorphization_tes2_indirect_second_typechecking_run_should_accept_it() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+def foo<T, U>(t: T, u: U) -> i32:
+    return baz(u) + t
+
+def baz<T>(t: T) -> i32:
+    return 1 + t
+
+def bar() -> i32:
+    foo(1, 3)
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def bar() -> i32 (return inferred: i32):
+    {foo[i32,i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
+def foo[i32,i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
+    return {{{baz[i32,i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
+def baz[i32,i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
+    return {{1: i32} + {t: i32}: i32}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+
+    let mut typer = Typer::new(&mut ty_db);
+    typer.assign_types(&mut hir).expect("Typing error");
+
+    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
+    println!("ERRORS: \n{printer}");
+}
+
+#[test]
+fn monomorphization_test_full_generic_indirect_second_typechecking_run_should_accept_it() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+def foo<T, U>(t: T, u: U) -> T:
+    return baz(u) + t
+
+def baz<T>(t: T) -> T:
+    return 1 + t
+
+def bar() -> i32:
+    foo(1, 3)
+",
+    );
+
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def bar() -> i32 (return inferred: i32):
+    {foo[i32,i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
+def foo[i32,i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> T (return inferred: i32):
+    return {{{baz[i32,i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
+def baz[i32,i32](t: T (inferred: i32)) -> T (return inferred: i32):
+    return {{1: i32} + {t: i32}: i32}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+
+    let mut typer = Typer::new(&mut ty_db);
+    typer.assign_types(&mut hir).expect("Typing error");
+    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
+    println!("ERRORS: \n{printer}");
+}
+
+#[test]
+fn struct_usage_monomorphization() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+struct Box<T>:
+    x: T
+
+def box<T>(item: T) -> Box<T>:
+    b = Box<i32>()
+    b.x = item
+    return b
+
+def main():
+    b1 = box(1)
+    b2 = box(3.14)
+    b3 = box('c')
+",
+    );
+
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    b1 : Box<i32> = {{box[i32,Box<i32>]: (i32) -> Box<i32>}({1: i32}): Box<i32>} [synth]
+    b2 : Box<f32> = {{box[f32,Box<f32>]: (f32) -> Box<f32>}({3.14: f32}): Box<f32>} [synth]
+    b3 : Box<char> = {{box[char,Box<char>]: (char) -> Box<char>}({'c': char}): Box<char>} [synth]
+def box[char,Box<char>](item: T (inferred: char)) -> Box<T> (return inferred: Box<char>):
+    b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
+    {{b: Box<i32>}.x: i32} = {item: char}
+    return {b: Box<i32>}
+def box[f32,Box<f32>](item: T (inferred: f32)) -> Box<T> (return inferred: Box<f32>):
+    b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
+    {{b: Box<i32>}.x: i32} = {item: f32}
+    return {b: Box<i32>}
+def box[i32,Box<i32>](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
+    b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
+    {{b: Box<i32>}.x: i32} = {item: i32}
+    return {b: Box<i32>}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+
+    let mut typer = Typer::new(&mut ty_db);
+    typer
+        .assign_types(&mut hir)
+        .expect_err("Should have gotten an error");
+    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
+    println!("ERRORS: \n{printer}");
 }
