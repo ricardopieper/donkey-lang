@@ -109,7 +109,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         original_index: usize,
     ) -> Result<Option<HIRRoot>, ()> {
         log!(
-            "Monomorphizing the following element {polymorphic_root} {positional_type_arguments:?}:"
+            "Monomorphizing the following element {polymorphic_root} {positional_type_arguments:#?}:"
         );
 
         log!(
@@ -151,6 +151,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
             .zip(positional_type_arguments.clone().into_iter())
             .collect::<HashMap<TypeVariable, MonoType>>();
 
+        log!("{polymorphic_root}: Applying substitution {substitution:#?}");
         new_type_table.apply_function_wide_substitution(&substitution);
 
         self.find_function_calls_hir(
@@ -347,6 +348,11 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
 
         log!("Function returns type {return_type:#?}, Function data: {function:#?}");
 
+        let positional_type_args = type_args
+            .iter()
+            .map(|x| type_table[x.resolved_type].mono.clone())
+            .collect::<Vec<_>>();
+
         match function {
             HIRExpr::Variable(name, _meta, ty) => {
                 log!(
@@ -369,7 +375,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
 
                         //generate the new function name
 
-                        let new_function_name_suffix = args
+                        let new_function_name_suffix = positional_type_args
                             .iter()
                             .map(|x| x.print_name(&self.type_db))
                             .collect::<Vec<_>>()
@@ -377,7 +383,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
 
                         self.enqueue(MonomorphizationQueueItem {
                             polymorphic_root: *name,
-                            positional_type_arguments: args.clone(),
+                            positional_type_arguments: positional_type_args.clone(),
                             original_index,
                         });
                         let old_function_name = *name;
@@ -386,6 +392,8 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                         let interned_function_name = InternedString::new(&new_function_name);
 
                         *name = interned_function_name;
+                        //remove quantifiers from call
+                        call.type_args = vec![];
                     }
                     _ => {}
                 }

@@ -7,7 +7,7 @@ use crate::{
     ast::lexer::TokenSpanIndex,
     interner::InternedString,
     report,
-    semantic::hir::{HIRExpr, HIRType},
+    semantic::hir::{HIRExpr, HIRType, HIRUserTypeInfo},
     types::{
         diagnostics::{
             CompilerErrorContext, CompilerErrorList, RootElementType, TypeErrors, TypeNotFound,
@@ -402,9 +402,21 @@ impl<'tydb> Typer<'tydb> {
         }
     }
 
-    fn instantiate_poly(&self, ty: &PolyType, type_table: &mut TypeTable) -> MonoType {
+    //returns the final instantiation of the polytype, and the type variables created for the quantifiers
+    fn instantiate_poly(
+        &self,
+        ty: &PolyType,
+        type_table: &mut TypeTable,
+    ) -> (MonoType, Vec<(TypeParameter, MonoType)>) {
         let quantifiers_indices: Vec<TypeIndex> =
             ty.quantifiers.iter().map(|_| type_table.next()).collect();
+
+        let mut type_variables_created = vec![];
+
+        for (i, q) in ty.quantifiers.iter().enumerate() {
+            type_variables_created
+                .push((q.clone(), type_table[quantifiers_indices[i]].clone().mono));
+        }
 
         let new_variables: Vec<TypeVariable> = quantifiers_indices
             .iter()
@@ -419,7 +431,10 @@ impl<'tydb> Typer<'tydb> {
         let parameters_as_variables: Vec<TypeVariable> =
             ty.quantifiers.iter().map(|q| TypeVariable(q.0)).collect();
 
-        return self.instantiate_mono(&ty.mono, &parameters_as_variables, &new_variables);
+        return (
+            self.instantiate_mono(&ty.mono, &parameters_as_variables, &new_variables),
+            type_variables_created,
+        );
     }
 
     #[must_use]
@@ -852,11 +867,11 @@ impl<'tydb> Typer<'tydb> {
             (fname.clone(), called_function_type_index.clone())
         };
 
-        let function_ty = self
-            .globals
-            .get(&fname)
-            .clone()
-            .expect("Expected function to exist in globals");
+        let function_ty = self.globals.get(&fname).clone();
+        if function_ty.is_none() {
+            panic!("Function {fname} not found in globals");
+        }
+        let function_ty = function_ty.unwrap(); //.expect("Expected function to exist in globals");
 
         let ctor = self.type_database.find(*function_ty);
 
@@ -878,23 +893,30 @@ impl<'tydb> Typer<'tydb> {
 
         if user_wants_specific_type && !user_passed_correct_number_of_type_args {
             panic!(
-                "Expected number of type arguments to match the number of quantifiers in function call"
+                "Expected number of type arguments to match the number of quantifiers in function call: {fname} {type_args} != {generalized_call_type}",
+                fname = fname,
+                type_args = type_args.len(),
+                generalized_call_type = generalized_call_type.quantifiers.len()
             );
         }
 
-        let function_instance = if user_wants_specific_type {
-            let mut substitution_for_function_type_args = HashMap::new();
+        let (function_instance, type_arg_types) = if user_wants_specific_type {
+            let mut substitution_for_function_type_args = HashMap::<TypeParameter, MonoType>::new();
             for (i, type_arg) in type_args.iter().enumerate() {
                 let quantifier = &generalized_call_type.quantifiers[i];
                 let type_arg_ty = type_table[type_arg.resolved_type].clone();
+
+                println!("infer function call type arg ty {type_arg_ty:#?}");
+
                 substitution_for_function_type_args
-                    .insert(quantifier.clone(), type_arg_ty.expect_mono().clone());
+                    .insert(quantifier.clone(), type_arg_ty.mono.clone());
             }
             //respects the desired instantiation
-            self.do_user_specified_instantiation(
+            let func_instance = self.do_user_specified_instantiation(
                 generalized_call_type,
                 &substitution_for_function_type_args,
-            )
+            );
+            (func_instance, vec![])
         } else {
             //full inference
             self.instantiate_poly(&generalized_call_type, type_table)
@@ -920,7 +942,7 @@ impl<'tydb> Typer<'tydb> {
                 type_table,
                 root,
                 coercion_type_hint,
-            )?; //TODO: pass in the argument type
+            )?;
             let idx = arg.get_type();
             let ty = type_table[&idx].clone();
             function_type_application_args.push(ty.expect_mono().clone());
@@ -945,6 +967,33 @@ impl<'tydb> Typer<'tydb> {
                 let new_call_type = call_type.apply_substitution(&substitution);
 
                 println!("New call type: {new_call_type:#?}");
+
+                //if the user didn't provide the specific types, we need to synthesize them for monomorphization to work
+                //properly.
+                //We have the shape of the function and its type arguments, i.e. if we have a f<T>(T) -> T, or f<T>(i32, T) -> i32,
+                //doesn't matter, we know we have a T there.
+                //These Ts got instantiated into something else, and we have tracking information to know what they have become.
+                //inferred_passed_type_args
+                if !user_wants_specific_type {
+                    let mut inferred_passed_type_args = vec![];
+                    for (ty, arg) in type_arg_types {
+                        let substituted = arg.apply_substitution(&substitution);
+                        println!("Substituted: {ty:?} is {substituted:#?}");
+                        inferred_passed_type_args.push(substituted);
+                    }
+                    if !fcall.type_args.is_empty() {
+                        log!("Expected type args to be empty, will clean them up");
+                    }
+                    fcall.type_args.clear();
+                    for arg in inferred_passed_type_args {
+                        let ty = type_table.next();
+                        type_table[ty] = PolyType::mono(arg);
+                        fcall.type_args.push(HIRUserTypeInfo {
+                            resolved_type: ty,
+                            user_given_type: None,
+                        });
+                    }
+                }
 
                 type_table[called_function_type_index] = PolyType::mono(new_call_type);
                 type_table.apply_substitution(&substitution);
@@ -1226,16 +1275,14 @@ impl<'tydb> Typer<'tydb> {
                         }
 
                         for (arg, param) in type_args.iter().zip(poly.quantifiers.iter()) {
-                            arg_map.insert(
-                                param.clone(),
-                                type_table[arg.resolved_type].expect_mono().clone(),
-                            );
+                            arg_map
+                                .insert(param.clone(), type_table[arg.resolved_type].mono.clone());
                         }
 
                         let poly_partially_instantiated =
                             self.do_partial_instantiation_with_args(poly, &arg_map);
 
-                        let instantiated =
+                        let (instantiated, _) =
                             self.instantiate_poly(&poly_partially_instantiated, type_table);
 
                         type_table[*type_index] = PolyType::mono(instantiated.clone());
@@ -1387,7 +1434,7 @@ impl<'tydb> Typer<'tydb> {
                     field_type_partially_instantiated
                 );
 
-                let field_type_instantiated =
+                let (field_type_instantiated, _) =
                     self.instantiate_poly(&field_type_partially_instantiated, type_table);
 
                 println!("Field type instantiated: {:?}", field_type_instantiated);
@@ -1475,7 +1522,7 @@ impl<'tydb> Typer<'tydb> {
             partially_instantiated
         );
         let cloned_obj_type = type_info.mono.clone();
-        let instantiated = self.instantiate_poly(&partially_instantiated, type_table);
+        let (instantiated, _) = self.instantiate_poly(&partially_instantiated, type_table);
         println!("Instantiated call type: {:#?}", instantiated);
         let MonoType::Application(constructor, _) = instantiated else {
             panic!("Expected function to be a type function, not a variable");
@@ -1614,6 +1661,7 @@ impl<'tydb> Typer<'tydb> {
         function_poly: PolyType,
         substitution_for_function_type_args: &HashMap<TypeParameter, MonoType>,
     ) -> MonoType {
+        log!("Doing user specified instantiation. Function poly: {function_poly:#?}\nsubstitution_for_function_type_args: {substitution_for_function_type_args:#?}");
         fn handle_mono(
             mono: MonoType,
             substitution_for_function_type_args: &HashMap<TypeParameter, MonoType>,

@@ -386,7 +386,7 @@ def id<T>(x: ptr<T> (inferred: ptr<T>)) -> T (return inferred: T):
 def bar() -> i32 (return inferred: i32):
     x : i32 = {1: i32} [synth]
     y : ptr<i32> = {&{x: i32}: ptr<i32>} [synth]
-    return {{id: (ptr<i32>) -> i32}({y: ptr<i32>}): i32}
+    return {{id: (ptr<i32>) -> i32}<i32>({y: ptr<i32>}): i32}
 ";
 
     println!("{result}");
@@ -596,7 +596,7 @@ def foo<T>(t: T) -> T:
 def bar<T>(u: T (inferred: T)) -> T (return inferred: T):
     return {u: T}
 def foo<T>(t: T (inferred: T)) -> T (return inferred: T):
-    return {{bar: (T) -> T}({t: T}): T}
+    return {{bar: (T) -> T}<T>({t: T}): T}
 ";
 
     println!("{result}");
@@ -623,7 +623,7 @@ def foo<T>(t: T) -> T:
 def bar<U>(u: U (inferred: U)) -> U (return inferred: U):
     return {u: U}
 def foo<T>(t: T (inferred: T)) -> T (return inferred: T):
-    return {{bar: (T) -> T}({t: T}): T}
+    return {{bar: (T) -> T}<T>({t: T}): T}
 ";
 
     println!("{result}");
@@ -651,7 +651,7 @@ def baz<T, U>(y: ptr<ptr<T>> (inferred: ptr<ptr<T>>), x: ptr<U> (inferred: ptr<U
     return {*{*{y: ptr<ptr<T>>}: ptr<T>}: T}
 def bar<U, T>(u: U (inferred: U), t: T (inferred: T)) -> U (return inferred: U):
     x : ptr<U> = {&{u: U}: ptr<U>} [synth]
-    return {{baz: (ptr<ptr<U>>, ptr<U>) -> U}({&{x: ptr<U>}: ptr<ptr<U>>}, {x: ptr<U>}): U}
+    return {{baz: (ptr<ptr<U>>, ptr<U>) -> U}<U, U>({&{x: ptr<U>}: ptr<ptr<U>>}, {x: ptr<U>}): U}
 ";
 
     println!("{result}");
@@ -927,7 +927,7 @@ def main():
 def make_ptr<TPtr>(val: TPtr (inferred: TPtr)) -> ptr<TPtr> (return inferred: ptr<TPtr>):
     return {&{val: TPtr}: ptr<TPtr>}
 def main() -> Void (return inferred: Void):
-    float_ptr : ptr<f32> = {{make_ptr: (f32) -> ptr<f32>}({1.0: f32}): ptr<f32>} [synth]
+    float_ptr : ptr<f32> = {{make_ptr: (f32) -> ptr<f32>}<f32>({1.0: f32}): ptr<f32>} [synth]
 ";
     assert_eq!(expected.trim(), result.trim());
 }
@@ -1030,8 +1030,8 @@ def bar() -> i32:
     let expected = "
 def bar() -> i32 (return inferred: i32):
     x : i32 = {1: i32} [synth]
-    return {{foo[i32,i32]: (i32) -> i32}({x: i32}): i32}
-def foo[i32,i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
+    return {{foo[i32]: (i32) -> i32}({x: i32}): i32}
+def foo[i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
     return {1: i32}
 ";
 
@@ -1059,8 +1059,8 @@ def bar() -> i32:
     let expected = "
 def bar() -> i32 (return inferred: i32):
     x : i32 = {1: i32} [synth]
-    return {{foo[i32,i32,i32]: (i32, i32) -> i32}({x: i32}, {x: i32}): i32}
-def foo[i32,i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
+    return {{foo[i32,i32]: (i32, i32) -> i32}({x: i32}, {x: i32}): i32}
+def foo[i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
     return {{{1: i32} + {u: i32}: i32} + {t: i32}: i32}
 ";
 
@@ -1091,11 +1091,11 @@ def bar() -> i32:
 def bar() -> i32 (return inferred: i32):
     x : i32 = {1: i32} [synth]
     y : f32 = {3.14: f32} [synth]
-    r1 : i32 = {{foo[i32,f32,i32]: (i32, f32) -> i32}({x: i32}, {y: f32}): i32} [synth]
-    r2 : i32 = {{foo[f32,char,i32]: (f32, char) -> i32}({y: f32}, {'c': char}): i32} [synth]
-def foo[f32,char,i32](t: T (inferred: f32), u: U (inferred: char)) -> i32 (return inferred: i32):
+    r1 : i32 = {{foo[i32,f32]: (i32, f32) -> i32}({x: i32}, {y: f32}): i32} [synth]
+    r2 : i32 = {{foo[f32,char]: (f32, char) -> i32}({y: f32}, {'c': char}): i32} [synth]
+def foo[f32,char](t: T (inferred: f32), u: U (inferred: char)) -> i32 (return inferred: i32):
     return {{1: i32} + {t: f32}: i32}
-def foo[i32,f32,i32](t: T (inferred: i32), u: U (inferred: f32)) -> i32 (return inferred: i32):
+def foo[i32,f32](t: T (inferred: i32), u: U (inferred: f32)) -> i32 (return inferred: i32):
     return {{1: i32} + {t: i32}: i32}
 ";
 
@@ -1124,10 +1124,10 @@ def bar() -> i32:
 
     let expected = "
 def bar() -> i32 (return inferred: i32):
-    {foo[i32,i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
-def foo[i32,i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
-    return {{{baz[i32,i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
-def baz[i32,i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
+    {foo[i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
+def foo[i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
+    return {{{baz[i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
+def baz[i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
     return {{1: i32} + {t: i32}: i32}
 ";
 
@@ -1156,10 +1156,10 @@ def bar() -> i32:
 
     let expected = "
 def bar() -> i32 (return inferred: i32):
-    {foo[i32,i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
-def foo[i32,i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
-    return {{{baz[i32,i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
-def baz[i32,i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
+    {foo[i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
+def foo[i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> i32 (return inferred: i32):
+    return {{{baz[i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
+def baz[i32](t: T (inferred: i32)) -> i32 (return inferred: i32):
     return {{1: i32} + {t: i32}: i32}
 ";
 
@@ -1195,10 +1195,10 @@ def bar() -> i32:
 
     let expected = "
 def bar() -> i32 (return inferred: i32):
-    {foo[i32,i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
-def foo[i32,i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> T (return inferred: i32):
-    return {{{baz[i32,i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
-def baz[i32,i32](t: T (inferred: i32)) -> T (return inferred: i32):
+    {foo[i32,i32]: (i32, i32) -> i32}({1: i32}, {3: i32})
+def foo[i32,i32](t: T (inferred: i32), u: U (inferred: i32)) -> T (return inferred: i32):
+    return {{{baz[i32]: (i32) -> i32}({u: i32}): i32} + {t: i32}: i32}
+def baz[i32](t: T (inferred: i32)) -> T (return inferred: i32):
     return {{1: i32} + {t: i32}: i32}
 ";
 
@@ -1237,18 +1237,18 @@ def main():
 
     let expected = "
 def main() -> Void (return inferred: Void):
-    b1 : Box<i32> = {{box[i32,Box<i32>]: (i32) -> Box<i32>}({1: i32}): Box<i32>} [synth]
-    b2 : Box<f32> = {{box[f32,Box<f32>]: (f32) -> Box<f32>}({3.14: f32}): Box<f32>} [synth]
-    b3 : Box<char> = {{box[char,Box<char>]: (char) -> Box<char>}({'c': char}): Box<char>} [synth]
-def box[char,Box<char>](item: T (inferred: char)) -> Box<T> (return inferred: Box<char>):
+    b1 : Box<i32> = {{box[i32]: (i32) -> Box<i32>}({1: i32}): Box<i32>} [synth]
+    b2 : Box<f32> = {{box[f32]: (f32) -> Box<f32>}({3.14: f32}): Box<f32>} [synth]
+    b3 : Box<char> = {{box[char]: (char) -> Box<char>}({'c': char}): Box<char>} [synth]
+def box[char](item: T (inferred: char)) -> Box<T> (return inferred: Box<char>):
     b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
     {{b: Box<i32>}.x: i32} = {item: char}
     return {b: Box<i32>}
-def box[f32,Box<f32>](item: T (inferred: f32)) -> Box<T> (return inferred: Box<f32>):
+def box[f32](item: T (inferred: f32)) -> Box<T> (return inferred: Box<f32>):
     b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
     {{b: Box<i32>}.x: i32} = {item: f32}
     return {b: Box<i32>}
-def box[i32,Box<i32>](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
+def box[i32](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
     b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
     {{b: Box<i32>}.x: i32} = {item: i32}
     return {b: Box<i32>}
@@ -1265,3 +1265,123 @@ def box[i32,Box<i32>](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i
     let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
     println!("ERRORS: \n{printer}");
 }
+
+#[test]
+fn struct_generic() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+struct Box<T>:
+    x: T
+
+def box<T>(item: T) -> Box<T>:
+    return Box<T>()
+
+def main():
+    x = box(1)
+",
+    );
+
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    x : Box<i32> = {{box[i32]: (i32) -> Box<i32>}({1: i32}): Box<i32>} [synth]
+def box[i32](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
+    return {Box<i32>(): Box<i32>}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+
+    let mut typer = Typer::new(&mut ty_db);
+    typer
+        .assign_types(&mut hir)
+        .expect("Should NOT have gotten an error");
+    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
+    println!("ERRORS: \n{printer}");
+}
+
+#[test]
+fn list_test_specific_instantiation() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+struct List<T>:
+    buf: ptr<T>
+
+# Creates a new list
+def list_new<T>() -> List<T>:
+    return List<T>()
+
+def main():
+    list = list_new<i32>()
+",
+    );
+
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    list : List<i32> = {{list_new[i32]: () -> List<i32>}(): List<i32>} [synth]
+def list_new[i32]() -> List<T> (return inferred: List<i32>):
+    return {List<i32>(): List<i32>}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+
+    let mut typer = Typer::new(&mut ty_db);
+    typer
+        .assign_types(&mut hir)
+        .expect("Should have NOT gotten an error");
+    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
+    println!("ERRORS: \n{printer}");
+}
+
+#[test]
+fn list_test_fully_inferred() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+struct List<T>:
+    buf: ptr<T>
+
+# Creates a new list
+def list_new<T>(i: T) -> List<T>:
+    return List<T>()
+
+def main():
+    list = list_new(99)
+",
+    );
+
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    list : List<i32> = {{list_new[i32]: (i32) -> List<i32>}({99: i32}): List<i32>} [synth]
+def list_new[i32](i: T (inferred: i32)) -> List<T> (return inferred: List<i32>):
+    return {List<i32>(): List<i32>}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+
+    let mut typer = Typer::new(&mut ty_db);
+    typer
+        .assign_types(&mut hir)
+        .expect("Should NOT have gotten an error");
+    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
+    println!("ERRORS: \n{printer}");
+}
+/*
+
+
+*/
