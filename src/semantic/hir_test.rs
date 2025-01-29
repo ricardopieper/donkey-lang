@@ -1381,7 +1381,113 @@ def list_new[i32](i: T (inferred: i32)) -> List<T> (return inferred: List<i32>):
     let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
     println!("ERRORS: \n{printer}");
 }
-/*
 
+#[test]
+fn list_test_full() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+struct List<T>:
+    buf: ptr<T>
+    len: u64
+    cap: u64
 
-*/
+# Creates a new list
+def list_new<T>() -> List<T>:
+    list = List<T>()
+    list.len = 0
+    list.cap = 0
+
+    return list
+
+def mem_alloc<T>(size: u64) -> ptr<T>:
+    intrinsic
+
+def mem_free<T>(ptr: ptr<T>):
+    intrinsic
+
+# Adds an item to the list
+def list_add<T>(list: ptr<List<T>>, item: T):
+    len = (*list).len
+    cap = (*list).cap
+    if len == cap:
+        if len == 0:
+            (*list).cap = 4
+        else:
+            (*list).cap = cap * 2
+
+        new_allocation = mem_alloc<T>((*list).cap)
+        if len > 0:
+            i: u64 = 0
+            while i < len:
+                new_allocation[i] = (*list).buf[i]
+                i = i + 1
+            mem_free<T>((*list).buf)
+
+        (*list).buf = new_allocation
+
+    (*list).buf[len] = item
+    (*list).len = len + 1
+
+def list_get<T>(list: ptr<List<T>>, index: u64) -> T:
+    return (*list).buf[index]
+
+def main():
+    list = list_new()
+    list_add(&list, 1)
+    x = list_get(&list, 0)
+",
+    );
+
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    list : List<i32> = {{list_new[i32]: () -> List<i32>}(): List<i32>} [synth]
+    {list_add[i32]: (ptr<List<i32>>, i32) -> Void}({&{list: List<i32>}: ptr<List<i32>>}, {1: i32})
+    x : i32 = {{list_get[i32]: (ptr<List<i32>>, u64) -> i32}({&{list: List<i32>}: ptr<List<i32>>}, {0: u64}): i32} [synth]
+def list_get[i32](list: ptr<List<T>> (inferred: ptr<List<i32>>), index: u64 (inferred: u64)) -> T (return inferred: i32):
+    return {*{{{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>}.__index_ptr__({index: u64}): ptr<i32>}: i32}
+def list_add[i32](list: ptr<List<T>> (inferred: ptr<List<i32>>), item: T (inferred: i32)) -> Void (return inferred: Void):
+    len : u64 = {{*{list: ptr<List<i32>>}: List<i32>}.len: u64} [synth]
+    cap : u64 = {{*{list: ptr<List<i32>>}: List<i32>}.cap: u64} [synth]
+    if {{len: u64} == {cap: u64}: bool}:
+        if {{len: u64} == {0: i32}: bool}:
+            {{*{list: ptr<List<i32>>}: List<i32>}.cap: u64} = {4: u64}
+        else:
+            {{*{list: ptr<List<i32>>}: List<i32>}.cap: u64} = {{cap: u64} * {2: u64}: u64}
+        new_allocation : ptr<i32> = {{mem_alloc[i32]: (u64) -> ptr<i32>}({{*{list: ptr<List<i32>>}: List<i32>}.cap: u64}): ptr<i32>} [synth]
+        if {{len: u64} > {0: i32}: bool}:
+            i : u64 = {0: u64} (inferred: u64)
+            while {{i: u64} < {len: u64}: bool}:
+                {*{{new_allocation: ptr<i32>}.__index_ptr__({i: u64}): ptr<i32>}: i32} = {*{{{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>}.__index_ptr__({i: u64}): ptr<i32>}: i32}
+                {i: u64} = {{i: u64} + {1: u64}: u64}
+            {mem_free[i32]: (ptr<i32>) -> Void}({{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>})
+        else:
+            pass
+        {{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>} = {new_allocation: ptr<i32>}
+    else:
+        pass
+    {*{{{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>}.__index_ptr__({len: u64}): ptr<i32>}: i32} = {item: i32}
+    {{*{list: ptr<List<i32>>}: List<i32>}.len: u64} = {{len: u64} + {1: u64}: u64}
+def mem_free[i32](ptr: ptr<T> (inferred: ptr<i32>)) -> Void (return inferred: Void):
+def mem_alloc[i32](size: u64 (inferred: u64)) -> ptr<T> (return inferred: ptr<i32>):
+def list_new[i32]() -> List<T> (return inferred: List<i32>):
+    list : List<i32> = {List<i32>(): List<i32>} [synth]
+    {{list: List<i32>}.len: u64} = {0: u64}
+    {{list: List<i32>}.cap: u64} = {0: u64}
+    return {list: List<i32>}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+
+    let mut typer = Typer::new(&mut ty_db);
+    typer
+        .assign_types(&mut hir)
+        .expect("Should NOT have gotten an error");
+    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
+    println!("ERRORS: \n{printer}");
+}

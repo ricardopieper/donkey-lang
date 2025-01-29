@@ -32,17 +32,17 @@ def print_f32(f: f32):
 def print_f64(f: f64):
     printf("%d\n".buf, f)
 
-def reinterpret_ptr<T, U>(p: ptr<T>) -> ptr<U>:
+def ptr_cast<T, U>(p: ptr<T>) -> ptr<U>:
     intrinsic
 
 def mem_alloc<T>(elems: u64) -> ptr<T>:
     num_bytes = elems * T.size
     printf("mem_alloc: Allocating %d bytes\n".buf, num_bytes)
     new_allocation = malloc(elems * T.size)
-    return reinterpret_ptr<u8, T>(new_allocation)
+    return ptr_cast<u8, T>(new_allocation)
 
 def mem_free<T>(p: ptr<T>):
-    as_u8 = reinterpret_ptr<T, u8>(p)
+    as_u8 = ptr_cast<T, u8>(p)
     printf("mem_free: Freeing ptr...\n".buf)
     free(as_u8)
 
