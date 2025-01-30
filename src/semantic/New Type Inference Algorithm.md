@@ -107,5 +107,3 @@ This is a work in progress, but it's promising.
 Another change is that now I'm using a completely separate data structure for typing the HIR. Instead
 of storing the types in the HIR, I'm storing "type indices" in the tree, and the actual types are stored
 in a table separately. This way I can apply substitution to the types without having to modify the HIR.
-
-Yes it relies on functions performing "side effects", functional people hate it ¯\_(ツ)_/¯.
