@@ -262,7 +262,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                 }
                 HIR::FunctionCall(fcall, location) => {
                     log!("Monomorphizing function call (HIR, not expr)");
-                    let mono_fcall = self.monomorphize_fcall(
+                    self.monomorphize_fcall(
                         RootElementType::Function(function_name),
                         fcall,
                         original_index,
@@ -333,7 +333,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         &mut self,
         on_function: RootElementType,
         call: &mut FunctionCall,
-        original_index: usize, //that are completely different.
+        original_index: usize,
         type_table: &TypeTable,
     ) -> Result<(), ()> {
         let FunctionCall {
@@ -352,6 +352,10 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
             .iter()
             .map(|x| type_table[x.resolved_type].mono.clone())
             .collect::<Vec<_>>();
+
+        if positional_type_args.is_empty() {
+            return Ok(());
+        }
 
         match function {
             HIRExpr::Variable(name, _meta, ty) => {

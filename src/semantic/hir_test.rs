@@ -1305,6 +1305,50 @@ def box[i32](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
 }
 
 #[test]
+fn test_intrinsic() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+def print(x: i32):
+    intrinsic
+
+def main() -> i32:
+    x = 0
+    if x == 0:
+        print(1)
+    else:
+        return x
+    return x
+",
+    );
+
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def print(x: i32 (inferred: i32)) -> Void (return inferred: Void):
+def main() -> i32 (return inferred: i32):
+    x : i32 = {0: i32} [synth]
+    if {{x: i32} == {0: i32}: bool}:
+        {print: (i32) -> Void}({1: i32})
+    else:
+        return {x: i32}
+    return {x: i32}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+
+    let mut typer = Typer::new(&mut ty_db);
+    typer
+        .assign_types(&mut hir)
+        .expect("Should have NOT gotten an error");
+    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
+    println!("ERRORS: \n{printer}");
+}
+
+#[test]
 fn list_test_specific_instantiation() {
     let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
         "

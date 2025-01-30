@@ -98,7 +98,7 @@ pub enum HIRExpr {
     TypeName {
         type_variable: TypeIndex, //the actual contents of the metadata of the TypeData instance
         type_data: TypeIndex,     //always the metadata type TypeData
-        meta: NodeIndex,
+        location: NodeIndex,
     },
     Cast(Box<HIRExpr>, HIRType, NodeIndex, TypeIndex),
     SelfValue(NodeIndex, TypeIndex),
@@ -324,7 +324,7 @@ impl HIRExpr {
         match self {
             HIRExpr::Literal(_, node_index, _) => *node_index,
             HIRExpr::Variable(_, node_index, _) => *node_index,
-            HIRExpr::TypeName { meta, .. } => *meta,
+            HIRExpr::TypeName { location, .. } => *location,
             HIRExpr::Cast(_, _, node_index, _) => *node_index,
             HIRExpr::SelfValue(node_index, _) => *node_index,
             HIRExpr::BinaryOperation(_, _, _, node_index, _) => *node_index,
@@ -412,6 +412,22 @@ pub enum HIR {
     While(HIRExpr, Vec<HIR>, NodeIndex),
     Return(HIRExpr, NodeIndex),
     EmptyReturn(NodeIndex),
+}
+
+impl HIR {
+    pub fn get_node_index(&self) -> NodeIndex {
+        match self {
+            HIR::Assign { location, .. }
+            | HIR::Declare { location, .. }
+            | HIR::SyntheticDeclare { location, .. }
+            | HIR::FunctionCall(_, location)
+            | HIR::MethodCall(_, location)
+            | HIR::If(_, _, _, location)
+            | HIR::While(_, _, location)
+            | HIR::Return(_, location)
+            | HIR::EmptyReturn(location) => *location,
+        }
+    }
 }
 
 struct IfTreeNode {
@@ -844,7 +860,7 @@ fn expr_to_hir<'source>(
         Expr::StringValue(s) => HIRExpr::Literal(
             LiteralHIRExpr::String(s.0),
             meta.next(s),
-            ty.next_with(load_stdlib_builtin(type_db, "str").expect("String type not found")),
+            ty.next_with(load_stdlib_builtin(type_db, "str").expect("str type not found")),
         ),
         Expr::CharValue(c, span) => HIRExpr::Literal(
             LiteralHIRExpr::Char(*c),
