@@ -37,10 +37,12 @@ use super::typer::UnificationErrorStack;
 #[cfg(test)]
 use super::typer::UnificationMismatchingTypes;
 
+use super::typer::Substitution;
+
 #[cfg(test)]
 fn check(
     ty: &TypeConstructorDatabase,
-    unification_result: &Result<HashMap<TypeVariable, MonoType>, UnificationErrorStack>,
+    unification_result: &Result<Substitution, UnificationErrorStack>,
     expected_left: &str,
     expected_right: &str,
 ) {

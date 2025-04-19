@@ -1,6 +1,7 @@
 #[cfg(test)]
 use crate::semantic::hir_printer::HIRPrinter;
 
+use crate::{types::diagnostics::FunctionName};
 #[cfg(test)]
 use crate::{
     semantic::{hir::MetaTable, typer::Typer},
@@ -292,11 +293,7 @@ def bar(y: i32) -> i32:
     typing_result.expect_err("Expect type error");
 
     assert_eq!(errors.len(), 1);
-    assert_eq!(errors.unify_error.len(), 1);
-    assert_eq!(
-        &errors.unify_error[0].error.context,
-        "On function call to foo"
-    );
+    assert_eq!(errors.function_call_mismatches.len(), 1);
 
     let expected = "
 def foo(x: f32 (inferred: f32)) -> f32 (return inferred: f32):
@@ -674,10 +671,10 @@ def bar<U, T>(u: U, t: T) -> U:
 
     typing_result.expect_err("Expected type error");
     assert_eq!(errors.len(), 1);
-    assert_eq!(errors.unify_error.len(), 1);
+    assert_eq!(errors.function_call_mismatches.len(), 1);
     assert_eq!(
-        &errors.unify_error[0].error.context,
-        "On function call to baz"
+        errors.function_call_mismatches[0].error.context.called_function_name,
+        FunctionName::Function("baz".into())
     );
 
     let expected = "
@@ -1534,4 +1531,26 @@ def list_new[i32]() -> List<T> (return inferred: List<i32>):
         .expect("Should NOT have gotten an error");
     let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
     println!("ERRORS: \n{printer}");
+}
+
+#[test]
+fn array_numbers_test() {
+    let (.., result, typing_result, errors) = setup_mono(
+        "
+def main():
+    x = [1,2,3]
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    x : array<i32> = {[{1: i32}, {2: i32}, {3: i32}]: array<i32>} [synth]
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
 }

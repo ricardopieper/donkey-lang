@@ -6,6 +6,8 @@ pub mod mir;
 pub mod mir_printer;
 pub mod mir_test;
 pub mod monomorph;
+pub mod type_checker;
+pub mod type_checker_test;
 pub mod typer;
 pub mod unification_quickcheck;
 pub mod unification_test;

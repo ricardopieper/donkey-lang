@@ -87,6 +87,7 @@ fn setup(
         compiler_errors,
     )
 }
+
 #[cfg(test)]
 use pretty_assertions::assert_eq;
 

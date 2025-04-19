@@ -32,6 +32,7 @@ impl RootElementType {
 }
 
 use crate::semantic::hir::{HIRTypeDisplayer, MonoType, NodeIndex, PolyType};
+use crate::semantic::typer::UnificationErrorStack;
 use crate::{ast::lexer::Operator, semantic::hir::HIRType};
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -357,7 +358,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypePromotionFailure> {
 }
 
 pub struct UnexpectedTypeFound {
-    pub type_def: String,
+    pub type_def: MonoType,
 }
 impl CompilerErrorData for UnexpectedTypeFound {}
 
@@ -371,16 +372,45 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnexpectedTypeFound> {
             f,
             "{on_element}, unexpected type found in expression: {unexpected_type}",
             on_element = self.on_element.diag_name(),
-            unexpected_type = self.error.type_def
+            unexpected_type = self.error.type_def.print_name(type_db)
         )
     }
 }
 
 pub struct UnificationError {
-    pub stack: Vec<(MonoType, MonoType)>,
+    pub stack: UnificationErrorStack,
     pub context: String,
 }
 impl CompilerErrorData for UnificationError {}
+
+pub fn write_error_stack(
+    stack: &UnificationErrorStack,
+    type_db: &TypeConstructorDatabase,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    for (idx, (t1, t2)) in stack.0.iter().enumerate() {
+        for _ in 0..idx {
+            write!(f, " ")?;
+        }
+
+        if idx == 0 {
+            writeln!(
+                f,
+                "> On unification of {} and {}",
+                t1.print_name(type_db),
+                t2.print_name(type_db)
+            )?;
+        } else {
+            writeln!(
+                f,
+                "> Arising from unification of {} and {}",
+                t1.print_name(type_db),
+                t2.print_name(type_db)
+            )?;
+        }
+    }
+    Ok(())
+}
 
 impl CompilerErrorDisplay for CompilerErrorContext<UnificationError> {
     fn fmt_err(
@@ -404,18 +434,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnificationError> {
         }
         writeln!(f)?;
 
-        for (idx, (t1, t2)) in self.error.stack.iter().enumerate() {
-            for _ in 0..idx {
-                write!(f, " ")?;
-            }
-
-            writeln!(
-                f,
-                "> On unification of {} and {}",
-                t1.print_name(type_db),
-                t2.print_name(type_db)
-            )?;
-        }
+        write_error_stack(&self.error.stack, type_db, f)?;
         Ok(())
     }
 }
@@ -466,27 +485,27 @@ impl CompilerErrorDisplay for CompilerErrorContext<UnificationTypeArgsCountError
 //     }
 // }
 
-// pub struct OutOfTypeBounds<'source> {
-//     pub typ: TypeInstanceId,
-//     pub expr: HIRExprMetadata<'source>,
-// }
-// impl CompilerErrorData for OutOfTypeBounds<'_> {}
+pub struct OutOfTypeBounds {
+    pub typ: MonoType,
+    pub expr: String,
+}
+impl CompilerErrorData for OutOfTypeBounds {}
 
-// impl<'source> CompilerErrorDisplay for CompilerErrorContext<OutOfTypeBounds<'source>> {
-//     fn fmt_err(
-//         &self,
-//         type_db: &TypeConstructorDatabase,
-//         f: &mut std::fmt::Formatter<'_>,
-//     ) -> std::fmt::Result {
-//         write!(
-//             f,
-//             "{on_element}, literal value {expr:?} is out of bounds for type {type}. You can try extracting this value to a different variable and assign a larger type.",
-//             on_element = self.on_element.diag_name(),
-//             expr = self.error.expr,
-//             type = self.error.typ.to_string(type_db),
-//         )
-//     }
-// }
+impl<'source> CompilerErrorDisplay for CompilerErrorContext<OutOfTypeBounds> {
+    fn fmt_err(
+        &self,
+        type_db: &TypeConstructorDatabase,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, literal value {expr:?} is out of bounds for type {type}.",
+            on_element = self.on_element.diag_name(),
+            expr = self.error.expr,
+            type = self.error.typ.print_name(type_db),
+        )
+    }
+}
 
 // pub struct InvalidCast<'source> {
 //     pub expr: MIRExpr<'source>,
@@ -658,31 +677,35 @@ impl CompilerErrorDisplay for CompilerErrorContext<InsufficientTypeInformationFo
     ) -> std::fmt::Result {
         write!(
             f,
-            "{on_element}, array expression failed type inference: Array has no items, and/or variable declaration has no type declaration or type hint.",
+            "{on_element}, array expression failed type inference: Array has no items and no other contextual information to infer the array type.",
             on_element = self.on_element.diag_name()
         )
     }
 }
 
-// pub struct ArrayExpressionsNotAllTheSameType {
-//     pub expected_type: TypeInstanceId,
-// }
-// impl CompilerErrorData for ArrayExpressionsNotAllTheSameType {}
+pub struct ArrayExpressionsNotAllTheSameType {
+    pub expected_type: MonoType,
+    pub found_unexpected_type: MonoType,
+    pub unification_error_stack: UnificationErrorStack,
+}
+impl CompilerErrorData for ArrayExpressionsNotAllTheSameType {}
 
-// impl CompilerErrorDisplay for CompilerErrorContext<ArrayExpressionsNotAllTheSameType> {
-//     fn fmt_err(
-//         &self,
-//         type_db: &TypeConstructorDatabase,
-//         f: &mut std::fmt::Formatter<'_>,
-//     ) -> std::fmt::Result {
-//         write!(
-//             f,
-//             "{on_element}, expressions in array expected to be of type {type_name} but an expression of a different type was found",
-//             on_element = self.on_element.diag_name(),
-//             type_name = self.error.expected_type.to_string(type_db)
-//         )
-//     }
-// }
+impl CompilerErrorDisplay for CompilerErrorContext<ArrayExpressionsNotAllTheSameType> {
+    fn fmt_err(
+        &self,
+        type_db: &TypeConstructorDatabase,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "{on_element}, expressions in array expected to be of type {type_name} but an expression of type {found_type} was found. Unification error:",
+            on_element = self.on_element.diag_name(),
+            type_name = self.error.expected_type.print_name(type_db),
+            found_type = self.error.found_unexpected_type.print_name(type_db)
+        )?;
+        write_error_stack(&self.error.unification_error_stack, type_db, f)
+    }
+}
 
 pub struct IfStatementNotBoolean {
     pub actual_type: PolyType,
@@ -1057,11 +1080,11 @@ make_type_errors!(
     method_not_found = MethodNotFound,
     field_or_method_not_found_in_type_constructor = FieldOrMethodNotFoundInTypeConstructor,
     insufficient_array_type_info = InsufficientTypeInformationForArray,
-    //array_expressions_not_all_the_same_type = ArrayExpressionsNotAllTheSameType,
+    array_expressions_not_all_the_same_type = ArrayExpressionsNotAllTheSameType,
     if_statement_unexpected_type = IfStatementNotBoolean,
     type_inference_failure = TypeInferenceFailure,
     //type_construction_failure = TypeConstructionFailure,
-    //out_of_bounds = OutOfTypeBounds<'source>,
+    out_of_bounds = OutOfTypeBounds,
     //out_of_bounds_constructor = OutOfTypeBoundsTypeConstructor<'source>,
     //invalid_casts = InvalidCast<'source>,
     //type_inference_check_mismatch = UnexpectedTypeInferenceMismatch<'source>,

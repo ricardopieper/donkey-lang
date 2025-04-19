@@ -1,0 +1,15 @@
+impl str:
+    def to_i32() -> i32:
+        intrinsic
+
+    def to_i64() -> i64:
+        intrinsic
+
+def str_to_int(s: str) -> i32:
+    return atoi(s.buf)
+
+def get_str_buf(s: str) -> ptr<u8>:
+    return s.buf
+
+def print(str_to_print: str):
+    puts(str_to_print.buf)

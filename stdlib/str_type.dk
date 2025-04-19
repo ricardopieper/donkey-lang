@@ -1,0 +1,3 @@
+struct str:
+    buf: ptr<u8>
+    len: u64

@@ -1,5 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
+    ops::{Deref, DerefMut},
+    path::Display,
     u8,
 };
 
@@ -10,8 +13,10 @@ use crate::{
     semantic::hir::{HIRExpr, HIRType, HIRUserTypeInfo},
     types::{
         diagnostics::{
-            CompilerErrorContext, CompilerErrorList, RootElementType, TypeErrors, TypeNotFound,
-            UnificationError, UnificationTypeArgsCountError, VariableNotFound,
+            CompilerErrorContext, CompilerErrorList, FunctionCallArgumentCountMismatch,
+            FunctionCallContext, FunctionName, InsufficientTypeInformationForArray,
+            RootElementType, TypeErrors, TypeMismatch, TypeNotFound, UnificationError,
+            UnificationTypeArgsCountError, VariableNotFound,
         },
         type_constructor_db::{
             FunctionSignature, TypeConstructor, TypeConstructorDatabase, TypeConstructorId,
@@ -47,7 +52,7 @@ impl TypingContext {
         self.definitions.get(name)
     }
 
-    pub fn apply_substitution(&mut self, substitution: &HashMap<TypeVariable, MonoType>) {
+    pub fn apply_substitution(&mut self, substitution: &Substitution) {
         for val in self.definitions.values_mut() {
             *val = val.apply_substitution(substitution);
         }
@@ -65,11 +70,274 @@ pub struct Typer<'tydb> {
 pub struct UnificationMismatchingTypes(MonoType, MonoType);
 
 #[derive(Debug)]
-pub struct UnificationErrorStack(Vec<(MonoType, MonoType)>);
+pub struct UnificationErrorStack(pub Vec<(MonoType, MonoType)>);
 
 pub enum FunctionInferenceResult {
     Ok,
     ActuallyThisIsAStructInstantiation(TypeConstructorId),
+}
+
+pub struct Substitution(pub HashMap<TypeVariable, MonoType>);
+impl Deref for Substitution {
+    type Target = HashMap<TypeVariable, MonoType>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Substitution {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Substitution {
+    pub fn print<'a, 'db>(
+        &'a self,
+        type_db: &'db TypeConstructorDatabase,
+    ) -> SubstitutionPrinter<'db, 'a> {
+        SubstitutionPrinter {
+            substitution: self,
+            type_db,
+        }
+    }
+}
+
+pub struct SubstitutionPrinter<'db, 'subs> {
+    type_db: &'db TypeConstructorDatabase,
+    substitution: &'subs Substitution,
+}
+
+impl<'db, 'subs> fmt::Display for SubstitutionPrinter<'db, 'subs> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (k, v) in self.substitution.0.iter() {
+            write!(f, "{} -> {}", k.0, v.print_name(self.type_db))?;
+        }
+        if self.substitution.0.is_empty() {
+            write!(f, "No substitutions")?;
+        }
+        Ok(())
+    }
+}
+
+pub struct Unifier<'ctx> {
+    type_errors: &'ctx mut TypeErrors,
+    type_database: &'ctx TypeConstructorDatabase,
+}
+
+impl<'ctx> Unifier<'ctx> {
+    pub fn new(
+        type_errors: &'ctx mut TypeErrors,
+        type_database: &'ctx TypeConstructorDatabase,
+    ) -> Self {
+        Self {
+            type_errors,
+            type_database,
+        }
+    }
+
+    pub fn combine_substitutions(
+        &self,
+        substitution1: &Substitution,
+        substitution2: &Substitution,
+    ) -> Substitution {
+        let mut new_substitutions = Substitution(HashMap::new());
+        for (key, value) in substitution1.iter() {
+            let new_value = value.apply_substitution(&substitution2);
+            new_substitutions.insert(key.clone(), new_value);
+        }
+        for (key, value) in substitution2.iter() {
+            if new_substitutions.contains_key(key) {
+                continue;
+            }
+            let new_value = value.apply_substitution(&substitution1);
+            new_substitutions.insert(key.clone(), new_value);
+        }
+
+        new_substitutions
+    }
+
+    fn unify_inner(
+        &mut self,
+        original: &MonoType,
+        target: &MonoType,
+        idx: NodeIndex,
+        root: &RootElementType,
+        forgive_skolem_mismatches: bool,
+        err_stack: &mut Vec<(MonoType, MonoType)>,
+    ) -> Result<Substitution, UnificationMismatchingTypes> {
+        // println!("Unifying {:#?} with {:#?}", original, target);
+        let mut substitution = Substitution(HashMap::new());
+
+        match (original, target) {
+            (MonoType::Variable(tv), MonoType::Variable(i2)) if tv == i2 => {
+                return Ok(substitution);
+            }
+            (MonoType::Skolem(skolem1), MonoType::Skolem(skolem2)) if skolem1 == skolem2 => {
+                return Ok(substitution);
+            }
+            (MonoType::Skolem(skolem1), MonoType::Variable(tv2)) if skolem1 == tv2 => {
+                return Ok(substitution);
+            }
+            (MonoType::Variable(skolem1), MonoType::Skolem(tv2)) if skolem1 == tv2 => {
+                return Ok(substitution);
+            }
+            (MonoType::Variable(tv), t2) => {
+                if !t2.contains_type_variable(*tv) {
+                    substitution.insert(*tv, t2.clone());
+                } else {
+                    err_stack.push((original.clone(), target.clone()));
+                    return Err(UnificationMismatchingTypes(original.clone(), t2.clone()));
+                }
+            }
+            (MonoType::Skolem(skolem), MonoType::Variable(tv)) => {
+                substitution.insert(tv.clone(), MonoType::Skolem(skolem.clone()));
+            }
+            (MonoType::Skolem(_), _) => {
+                if forgive_skolem_mismatches {
+                    return Ok(substitution);
+                }
+                err_stack.push((original.clone(), target.clone()));
+                return Err(UnificationMismatchingTypes(
+                    original.clone(),
+                    target.clone(),
+                ));
+            }
+            (_, MonoType::Skolem(_)) => {
+                if forgive_skolem_mismatches {
+                    return Ok(substitution);
+                }
+                err_stack.push((original.clone(), target.clone()));
+                return Err(UnificationMismatchingTypes(
+                    original.clone(),
+                    target.clone(),
+                ));
+            }
+            (t1, MonoType::Variable(i2)) => {
+                match self.unify_inner(
+                    &MonoType::Variable(i2.clone()),
+                    t1,
+                    idx,
+                    root,
+                    forgive_skolem_mismatches,
+                    err_stack,
+                ) {
+                    Ok(sub) => return Ok(sub),
+                    Err(e) => {
+                        err_stack.push((original.clone(), target.clone()));
+                        return Err(e);
+                    }
+                }
+            }
+            (
+                MonoType::Application(constructor, args),
+                MonoType::Application(constructor2, args2),
+            ) => {
+                if constructor != constructor2 {
+                    err_stack.push((original.clone(), target.clone()));
+                    return Err(UnificationMismatchingTypes(
+                        original.clone(),
+                        target.clone(),
+                    ));
+                }
+
+                if args.len() != args2.len() {
+                    self.type_errors
+                        .unify_args_count
+                        .push(CompilerErrorContext {
+                            error: UnificationTypeArgsCountError {
+                                expected: args2.len(),
+                                actual: args.len(),
+                            },
+                            on_element: root.clone(),
+                            location: idx,
+                            compiler_code_location: loc!(),
+                        });
+                    err_stack.push((original.clone(), target.clone()));
+                    return Err(UnificationMismatchingTypes(
+                        original.clone(),
+                        target.clone(),
+                    ));
+                }
+
+                for (a1, a2) in args.iter().zip(args2.iter()) {
+                    let ty1_applied = a1.apply_substitution(&substitution);
+                    let ty2_applied = a2.apply_substitution(&substitution);
+                    let unified_args = self.unify_inner(
+                        &ty1_applied,
+                        &ty2_applied,
+                        idx,
+                        root,
+                        forgive_skolem_mismatches,
+                        err_stack,
+                    );
+
+                    match unified_args {
+                        Ok(sub) => {
+                            let combined = self.combine_substitutions(&substitution, &sub);
+                            substitution = combined;
+                        }
+                        Err(e) => {
+                            err_stack.push((original.clone(), target.clone()));
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(substitution)
+    }
+
+    //Strict just means it does not forgive skolem mismatches
+    pub fn unify_strict(
+        &mut self,
+        original: &MonoType,
+        target: &MonoType,
+        idx: NodeIndex,
+        root: &RootElementType,
+    ) -> Result<Substitution, UnificationErrorStack> {
+        self.unify(original, target, idx, root, false)
+    }
+
+    pub fn unify(
+        &mut self,
+        original: &MonoType,
+        target: &MonoType,
+        idx: NodeIndex,
+        root: &RootElementType,
+        forgive_skolem_mismatches: bool,
+    ) -> Result<Substitution, UnificationErrorStack> {
+        let mut err_stack = vec![];
+        let result = self.unify_inner(
+            original,
+            target,
+            idx,
+            root,
+            forgive_skolem_mismatches,
+            &mut err_stack,
+        );
+        err_stack.reverse();
+        log!(
+            "Unification between {:#?} and {:#?}",
+            original.print_name(self.type_database),
+            target.print_name(self.type_database)
+        );
+
+        match result {
+            Ok(subs) => {
+                for (k, v) in subs.iter() {
+                    log!(
+                        "Substitution: {} -> {}",
+                        k.0,
+                        v.print_name(self.type_database)
+                    );
+                }
+                Ok(subs)
+            }
+            Err(_) => Err(UnificationErrorStack(err_stack)),
+        }
+    }
 }
 
 impl<'tydb> Typer<'tydb> {
@@ -219,154 +487,9 @@ impl<'tydb> Typer<'tydb> {
         target: &MonoType,
         idx: NodeIndex,
         root: &RootElementType,
-    ) -> Result<HashMap<TypeVariable, MonoType>, UnificationErrorStack> {
-        fn unify_inner(
-            original: &MonoType,
-            target: &MonoType,
-            idx: NodeIndex,
-            root: &RootElementType,
-            typer: &mut Typer,
-            err_stack: &mut Vec<(MonoType, MonoType)>,
-        ) -> Result<HashMap<TypeVariable, MonoType>, UnificationMismatchingTypes> {
-            // println!("Unifying {:#?} with {:#?}", original, target);
-            let mut substitution = HashMap::new();
-
-            match (original, target) {
-                (MonoType::Variable(tv), MonoType::Variable(i2)) if tv == i2 => {
-                    return Ok(substitution);
-                }
-                (MonoType::Skolem(skolem1), MonoType::Skolem(skolem2)) if skolem1 == skolem2 => {
-                    return Ok(substitution);
-                }
-                (MonoType::Skolem(skolem1), MonoType::Variable(tv2)) if skolem1 == tv2 => {
-                    return Ok(substitution);
-                }
-                (MonoType::Variable(skolem1), MonoType::Skolem(tv2)) if skolem1 == tv2 => {
-                    return Ok(substitution);
-                }
-                (MonoType::Variable(tv), t2) => {
-                    if !t2.contains_type_variable(*tv) {
-                        substitution.insert(*tv, t2.clone());
-                    } else {
-                        err_stack.push((original.clone(), target.clone()));
-                        return Err(UnificationMismatchingTypes(original.clone(), t2.clone()));
-                    }
-                }
-                (MonoType::Skolem(skolem), MonoType::Variable(tv)) => {
-                    substitution.insert(tv.clone(), MonoType::Skolem(skolem.clone()));
-                }
-                (MonoType::Skolem(_), _) => {
-                    if typer.forgive_skolem_mismatch {
-                        return Ok(substitution);
-                    }
-                    err_stack.push((original.clone(), target.clone()));
-                    return Err(UnificationMismatchingTypes(
-                        original.clone(),
-                        target.clone(),
-                    ));
-                }
-                (_, MonoType::Skolem(_)) => {
-                    if typer.forgive_skolem_mismatch {
-                        return Ok(substitution);
-                    }
-                    err_stack.push((original.clone(), target.clone()));
-                    return Err(UnificationMismatchingTypes(
-                        original.clone(),
-                        target.clone(),
-                    ));
-                }
-                (t1, MonoType::Variable(i2)) => {
-                    match unify_inner(
-                        &MonoType::Variable(i2.clone()),
-                        t1,
-                        idx,
-                        root,
-                        typer,
-                        err_stack,
-                    ) {
-                        Ok(sub) => return Ok(sub),
-                        Err(e) => {
-                            err_stack.push((original.clone(), target.clone()));
-                            return Err(e);
-                        }
-                    }
-                }
-                (
-                    MonoType::Application(constructor, args),
-                    MonoType::Application(constructor2, args2),
-                ) => {
-                    if constructor != constructor2 {
-                        err_stack.push((original.clone(), target.clone()));
-                        return Err(UnificationMismatchingTypes(
-                            original.clone(),
-                            target.clone(),
-                        ));
-                    }
-
-                    if args.len() != args2.len() {
-                        typer
-                            .compiler_errors
-                            .unify_args_count
-                            .push(CompilerErrorContext {
-                                error: UnificationTypeArgsCountError {
-                                    expected: args2.len(),
-                                    actual: args.len(),
-                                },
-                                on_element: RootElementType::Function("unify".into()),
-                                location: idx,
-                                compiler_code_location: loc!(),
-                            });
-                        err_stack.push((original.clone(), target.clone()));
-                        return Err(UnificationMismatchingTypes(
-                            original.clone(),
-                            target.clone(),
-                        ));
-                    }
-
-                    for (a1, a2) in args.iter().zip(args2.iter()) {
-                        let ty1_applied = a1.apply_substitution(&substitution);
-                        let ty2_applied = a2.apply_substitution(&substitution);
-                        let unified_args =
-                            unify_inner(&ty1_applied, &ty2_applied, idx, root, typer, err_stack);
-
-                        match unified_args {
-                            Ok(sub) => {
-                                let combined = typer.combine_substitutions(&substitution, &sub);
-                                substitution = combined;
-                            }
-                            Err(e) => {
-                                err_stack.push((original.clone(), target.clone()));
-                                return Err(e);
-                            }
-                        }
-                    }
-                }
-            }
-
-            Ok(substitution)
-        }
-        let mut err_stack = vec![];
-        let result = unify_inner(original, target, idx, root, self, &mut err_stack);
-        err_stack.reverse();
-        log!(
-            "Unification between {:#?} and {:#?}",
-            original.print_name(self.type_database),
-            target.print_name(self.type_database)
-        );
-
-        match result {
-            Ok(subs) => {
-                for (k, v) in subs.iter() {
-                    log!(
-                        "Substitution: {} -> {}",
-                        k.0,
-                        v.print_name(self.type_database)
-                    );
-                }
-                Ok(subs)
-            }
-            Err(_) => Err(UnificationErrorStack(err_stack)),
-        }
+    ) -> Result<Substitution, UnificationErrorStack> {
+        let mut unifier = Unifier::new(&mut self.compiler_errors, self.type_database);
+        unifier.unify(original, target, idx, root, self.forgive_skolem_mismatch)
     }
 
     fn instantiate_mono(
@@ -519,7 +642,7 @@ impl<'tydb> Typer<'tydb> {
 
                             type_table.apply_substitution(&substitution);
                         }
-                        Err(UnificationErrorStack(stack)) => {
+                        Err(stack) => {
                             self.compiler_errors.unify_error.push(CompilerErrorContext {
                                 error: UnificationError {
                                     stack,
@@ -594,7 +717,7 @@ impl<'tydb> Typer<'tydb> {
                             type_table[expression.get_type()] =
                                 expr_type.apply_substitution(&substitution);
                         }
-                        Err(UnificationErrorStack(stack)) => {
+                        Err(stack) => {
                             self.compiler_errors.unify_error.push(CompilerErrorContext {
                                 error: UnificationError {
                                     stack,
@@ -656,7 +779,7 @@ impl<'tydb> Typer<'tydb> {
 
                             type_table.apply_substitution(&substitution);
                         }
-                        Err(UnificationErrorStack(stack)) => {
+                        Err(stack) => {
                             self.compiler_errors.unify_error.push(CompilerErrorContext {
                                 error: UnificationError {
                                     stack,
@@ -720,7 +843,7 @@ impl<'tydb> Typer<'tydb> {
                                 func_type_parameters,
                             )?;
                         }
-                        Err(UnificationErrorStack(stack)) => {
+                        Err(stack) => {
                             self.compiler_errors.unify_error.push(CompilerErrorContext {
                                 error: UnificationError {
                                     stack,
@@ -763,7 +886,7 @@ impl<'tydb> Typer<'tydb> {
                                 func_type_parameters,
                             )?;
                         }
-                        Err(UnificationErrorStack(stack)) => {
+                        Err(stack) => {
                             self.compiler_errors.unify_error.push(CompilerErrorContext {
                                 error: UnificationError {
                                    stack,
@@ -792,12 +915,10 @@ impl<'tydb> Typer<'tydb> {
 
                     match unify_result {
                         Ok(substitution) => {
-                            println!("Unification result: {:#?}", substitution);
-
                             type_table.apply_substitution(&substitution);
                             typing_context.apply_substitution(&substitution);
                         }
-                        Err(UnificationErrorStack(stack)) => {
+                        Err(stack) => {
                             self.compiler_errors.unify_error.push(CompilerErrorContext {
                                 error: UnificationError {
                                     stack,
@@ -824,7 +945,7 @@ impl<'tydb> Typer<'tydb> {
                             type_table.apply_substitution(&substitution);
                             typing_context.apply_substitution(&substitution);
                         }
-                        Err(UnificationErrorStack(stack)) => {
+                        Err(stack) => {
                             self.compiler_errors.unify_error.push(CompilerErrorContext {
                                 error: UnificationError {
                                     stack,
@@ -963,7 +1084,6 @@ impl<'tydb> Typer<'tydb> {
 
         match unify_result {
             Ok(substitution) => {
-                println!("Unification: {substitution:#?}");
                 let new_call_type = call_type.apply_substitution(&substitution);
 
                 println!("New call type: {new_call_type:#?}");
@@ -999,21 +1119,96 @@ impl<'tydb> Typer<'tydb> {
                 type_table.apply_substitution(&substitution);
                 typing_context.apply_substitution(&substitution);
             }
-            Err(UnificationErrorStack(stack)) => {
-                self.compiler_errors.unify_error.push(CompilerErrorContext {
-                    error: UnificationError {
-                        stack,
-                        context: format!("On function call to {fname}"),
-                    },
-                    on_element: *root,
-                    location: fcall.function.get_node_index(),
-                    compiler_code_location: loc!(),
-                });
+            Err(stack) => {
+                let translation = self.try_translate_error_stack_into_more_human_readable_error_description_for_function_calls(
+                        &fname,
+                        &stack,
+                    );
+
+                if translation.is_empty() {
+                    self.compiler_errors.unify_error.push(CompilerErrorContext {
+                        error: UnificationError {
+                            stack,
+                            context: format!("On function call to {fname}"),
+                        },
+                        on_element: *root,
+                        location: fcall.function.get_node_index(),
+                        compiler_code_location: loc!(),
+                    });
+                } else {
+                    for mismatch in translation {
+                        self.compiler_errors
+                            .function_call_mismatches
+                            .push(CompilerErrorContext {
+                                error: mismatch,
+                                on_element: *root,
+                                location: fcall.function.get_node_index(),
+                                compiler_code_location: loc!(),
+                            });
+                    }
+                }
+
                 return Err(());
             }
         }
 
         Ok(FunctionInferenceResult::Ok)
+    }
+
+    fn try_translate_error_stack_into_more_human_readable_error_description_for_function_calls(
+        &mut self,
+        function_name: &InternedString,
+        stack: &UnificationErrorStack,
+    ) -> Vec<TypeMismatch<FunctionCallContext>> {
+        //check that the first level is talking about a function in both sides
+        let first = stack.0.first();
+        let e = first.unwrap_or_else(|| {
+            panic!("Expected a unification error stack to have at least one element")
+        });
+
+        match (&e.0, &e.1) {
+            (
+                MonoType::Application(left_ctor, left_args),
+                MonoType::Application(right_ctor, right_args),
+            ) => {
+                let left_ctor = self.type_database.find(*left_ctor);
+                let right_ctor = self.type_database.find(*right_ctor);
+
+                if right_ctor.kind == TypeKind::Function && left_ctor.kind == TypeKind::Function {
+                    let mut v = vec![];
+                    for (i, (arg_left, arg_right)) in
+                        left_args.iter().zip(right_args.iter()).enumerate()
+                    {
+                        //attempt unification
+                        let unify_result = self.unify(
+                            arg_left,
+                            arg_right,
+                            NodeIndex::none(),
+                            &RootElementType::Function("".into()),
+                        );
+                        match unify_result {
+                            Err(_) => {
+                                v.push(TypeMismatch {
+                                    context: FunctionCallContext {
+                                        called_function_name: FunctionName::Function(
+                                            *function_name,
+                                        ),
+                                        argument_position: i,
+                                    },
+                                    expected: PolyType::mono(arg_left.clone()),
+                                    actual: PolyType::mono(arg_right.clone()),
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    return v;
+                }
+            }
+            _ => {}
+        };
+
+        return vec![];
     }
 
     #[must_use]
@@ -1323,7 +1518,10 @@ impl<'tydb> Typer<'tydb> {
                 let report_error = |errors: &mut TypeErrors| {
                     errors.unify_error.push(CompilerErrorContext {
                         error: UnificationError {
-                            stack: vec![(mono_ptr_ty.clone(), new_mono.clone())],
+                            stack: UnificationErrorStack(vec![(
+                                mono_ptr_ty.clone(),
+                                new_mono.clone(),
+                            )]),
                             context: format!("On deref expression"),
                         },
                         location: ptr_expr.get_node_index(),
@@ -1336,7 +1534,6 @@ impl<'tydb> Typer<'tydb> {
                     return Err(());
                 };
 
-                println!("Substitution in ptr: {:?}", substitution);
                 typing_context.apply_substitution(&substitution);
                 type_table.apply_substitution(&substitution);
 
@@ -1354,7 +1551,6 @@ impl<'tydb> Typer<'tydb> {
                     return Err(());
                 };
 
-                println!("Second Substitution in ptr: {:?}", substitution);
                 typing_context.apply_substitution(&substitution);
                 type_table.apply_substitution(&substitution);
             }
@@ -1450,11 +1646,10 @@ impl<'tydb> Typer<'tydb> {
 
                 match unify_result {
                     Ok(substitution) => {
-                        println!("Substitution in member access: {:?}", substitution);
                         type_table.apply_substitution(&substitution);
                         typing_context.apply_substitution(&substitution);
                     }
-                    Err(UnificationErrorStack(stack)) => {
+                    Err(stack) => {
                         self.compiler_errors.unify_error.push(CompilerErrorContext {
                             error: UnificationError {
                                 stack,
@@ -1468,7 +1663,72 @@ impl<'tydb> Typer<'tydb> {
                     }
                 };
             }
-            super::hir::HIRExpr::Array(..) => {}
+            super::hir::HIRExpr::Array(items, node, ty) => {
+                log!("Array inferred type: {items:?}");
+
+                if items.is_empty() && coercion_hint.is_none() {
+                    self.compiler_errors
+                        .insufficient_array_type_info
+                        .push(CompilerErrorContext {
+                            error: InsufficientTypeInformationForArray {},
+                            on_element: *root,
+                            location: *node,
+                            compiler_code_location: loc!(),
+                        });
+                    return Err(());
+                }
+                log!("Items: {items:?}");
+                for item in items.iter_mut() {
+                    self.infer_type_for_expression(
+                        item,
+                        typing_context,
+                        type_table,
+                        root,
+                        coercion_hint,
+                    )?;
+                }
+
+                //likely a type variable
+                let inferred_type_of_array = type_table[ty].expect_mono().clone();
+                log!("Array inferred type: {items:?}");
+
+                let found_item_type = if let Some(first_item) = items.first() {
+                    let first_item_type = first_item.get_type();
+                    &type_table[first_item_type].expect_mono()
+                } else {
+                    coercion_hint.unwrap()
+                };
+
+                let found_type = MonoType::Application(
+                    self.type_database.common_types.array,
+                    vec![found_item_type.clone()],
+                );
+
+                let unify_result = self.unify(&inferred_type_of_array, &found_type, *node, root);
+
+                match unify_result {
+                    Ok(substitution) => {
+                        log!(
+                            "Array substitution type: {}",
+                            substitution.print(self.type_database)
+                        );
+                        type_table.apply_substitution(&substitution);
+                        typing_context.apply_substitution(&substitution);
+                    }
+                    Err(stack) => {
+                        self.compiler_errors.unify_error.push(CompilerErrorContext {
+                            error: UnificationError {
+                                stack,
+                                context: format!("On method call"),
+                            },
+                            on_element: *root,
+                            location: *node,
+                            compiler_code_location: loc!(),
+                        });
+                        return Err(());
+                    }
+                };
+            }
         }
         Ok(())
     }
@@ -1493,7 +1753,10 @@ impl<'tydb> Typer<'tydb> {
         let type_index = mcall.object.get_type();
         let type_info = &type_table[type_index];
         let MonoType::Application(type_ctor_id, args) = &type_info.mono else {
-            todo!("Proper diagnostics for unresolved type variable");
+            todo!(
+                "Proper diagnostics for unresolved type variable {:?}",
+                &type_info
+            );
         };
         println!("type args {args:?}");
         let root_tc = self.type_database.find(*type_ctor_id);
@@ -1555,7 +1818,7 @@ impl<'tydb> Typer<'tydb> {
                 type_table.apply_substitution(&substitution);
                 typing_context.apply_substitution(&substitution);
             }
-            Err(UnificationErrorStack(stack)) => {
+            Err(stack) => {
                 self.compiler_errors.unify_error.push(CompilerErrorContext {
                     error: UnificationError {
                         stack,
@@ -1572,10 +1835,10 @@ impl<'tydb> Typer<'tydb> {
 
     fn combine_substitutions(
         &self,
-        substitution1: &HashMap<TypeVariable, MonoType>,
-        substitution2: &HashMap<TypeVariable, MonoType>,
-    ) -> HashMap<TypeVariable, MonoType> {
-        let mut new_substitutions = HashMap::new();
+        substitution1: &Substitution,
+        substitution2: &Substitution,
+    ) -> Substitution {
+        let mut new_substitutions = Substitution(HashMap::new());
         for (key, value) in substitution1.iter() {
             let new_value = value.apply_substitution(&substitution2);
             new_substitutions.insert(key.clone(), new_value);

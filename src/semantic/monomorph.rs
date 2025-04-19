@@ -6,6 +6,7 @@ use crate::{
     semantic::{
         hir::{HIRUserTypeInfo, MethodCall, TypeVariable},
         hir_printer::{self, HIRPrinter},
+        typer::Substitution,
     },
     types::{
         diagnostics::{
@@ -144,14 +145,19 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
 
         let mut new_type_table = type_table.clone();
 
-        let substitution = type_parameters
-            .clone()
-            .into_iter()
-            .map(|x| TypeVariable(x.0))
-            .zip(positional_type_arguments.clone().into_iter())
-            .collect::<HashMap<TypeVariable, MonoType>>();
+        let substitution = Substitution(
+            type_parameters
+                .clone()
+                .into_iter()
+                .map(|x| TypeVariable(x.0))
+                .zip(positional_type_arguments.clone().into_iter())
+                .collect::<HashMap<TypeVariable, MonoType>>(),
+        );
 
-        log!("{polymorphic_root}: Applying substitution {substitution:#?}");
+        log!(
+            "{polymorphic_root}: Applying substitution {}",
+            substitution.print(self.type_db)
+        );
         new_type_table.apply_function_wide_substitution(&substitution);
 
         self.find_function_calls_hir(

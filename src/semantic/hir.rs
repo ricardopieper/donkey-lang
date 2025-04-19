@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -24,6 +23,8 @@ use crate::types::type_constructor_db::TypeConstructor;
 use crate::types::type_constructor_db::TypeConstructorDatabase;
 use crate::types::type_constructor_db::TypeConstructorId;
 use crate::types::type_constructor_db::TypeKind;
+
+use super::typer::Substitution;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LiteralHIRExpr {
@@ -452,7 +453,14 @@ pub enum MonoType {
 }
 
 impl MonoType {
-    pub fn apply_substitution(&self, substitution: &HashMap<TypeVariable, MonoType>) -> MonoType {
+    pub fn get_ctor_id(&self) -> TypeConstructorId {
+        match self {
+            MonoType::Application(id, _) => *id,
+            _ => panic!("Expected an application type"),
+        }
+    }
+
+    pub fn apply_substitution(&self, substitution: &Substitution) -> MonoType {
         match self {
             MonoType::Variable(var) => {
                 if let Some(sub) = substitution.get(&var) {
@@ -623,7 +631,7 @@ impl PolyType {
         );
     }
 
-    pub fn apply_substitution(&self, substitution: &HashMap<TypeVariable, MonoType>) -> PolyType {
+    pub fn apply_substitution(&self, substitution: &Substitution) -> PolyType {
         if !self.quantifiers.is_empty() {
             return PolyType::poly(
                 self.quantifiers.clone(),
@@ -690,7 +698,7 @@ impl TypeTable {
         TypeIndex(usize::MAX)
     }
 
-    pub fn apply_substitution(&mut self, substitution: &HashMap<TypeVariable, MonoType>) {
+    pub fn apply_substitution(&mut self, substitution: &Substitution) {
         if substitution.len() == 0 {
             return;
         }
@@ -716,10 +724,7 @@ impl TypeTable {
 
     //used by monomorphization to do a function-wide substitution. Includes skolems,
     //and includes type variables that are deep inside type applications (the arguments of type applications)
-    pub fn apply_function_wide_substitution(
-        &mut self,
-        substitution: &HashMap<TypeVariable, MonoType>,
-    ) {
+    pub fn apply_function_wide_substitution(&mut self, substitution: &Substitution) {
         if substitution.len() == 0 {
             return;
         }
