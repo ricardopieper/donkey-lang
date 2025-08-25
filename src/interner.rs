@@ -3,7 +3,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-#[derive(Hash, Eq, PartialEq, Clone, Copy)]
+#[derive(Hash, Eq, PartialEq, Clone, Copy, PartialOrd, Ord)]
 pub struct InternedString {
     pub index: usize,
     #[cfg(test)]

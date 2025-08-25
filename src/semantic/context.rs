@@ -79,7 +79,11 @@ impl Source {
     }
 
     pub fn load_file(&mut self, file_location: &str) -> bool {
-        //println!("LOADING FILE {file_location}");
+        let current = std::env::current_dir()
+            .expect("no current dir")
+            .to_string_lossy()
+            .into_owned();
+        println!("LOADING FILE {current}/{file_location}");
         let input = fs::read_to_string(file_location)
             .unwrap_or_else(|_| panic!("Could not read file {file_location}"));
         self.load(file_location.to_string(), input)

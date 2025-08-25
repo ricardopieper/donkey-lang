@@ -1,6 +1,6 @@
 use super::hir::{HIRRoot, TypeTable};
 use crate::{
-    semantic::hir::{FunctionCall, HIRExpr, LiteralHIRExpr, HIR},
+    semantic::hir::{FunctionCall, HIR, HIRExpr, LiteralHIRExpr},
     types::type_constructor_db::TypeConstructorDatabase,
 };
 
@@ -284,9 +284,14 @@ impl<'type_db> HIRPrinter<'type_db> {
                 return_type,
                 type_parameters,
                 type_table,
+                method_of,
                 ..
             } => {
-                let parameters = parameters
+                let mut parameters_printed = vec![];
+                if let Some(_) = method_of {
+                    parameters_printed.push("self".into());
+                }
+                parameters
                     .iter()
                     .map(|param| {
                         format!(
@@ -300,8 +305,9 @@ impl<'type_db> HIRPrinter<'type_db> {
                                 .print_name(type_table, self.type_db)
                         )
                     })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                    .collect_into::<Vec<_>>(&mut parameters_printed);
+
+                let parameters = parameters_printed.join(", ");
 
                 let mut args = type_parameters
                     .iter()
@@ -333,16 +339,23 @@ impl<'type_db> HIRPrinter<'type_db> {
             HIRRoot::StructDeclaration {
                 struct_name,
                 fields: body,
+                type_table,
                 ..
             } => {
                 let mut structdecl = format!("{}struct {}:\n", indent, struct_name);
+                let mut printed_fields = vec![];
 
                 for field in body {
-                    structdecl.push_str(&format!(
+                    let ty = &type_table[field.type_data.type_variable];
+
+                    printed_fields.push(format!(
                         "{}    {}: {}",
-                        indent, field.name, field.type_data.hir_type
+                        indent,
+                        field.name,
+                        ty.mono.print_name(self.type_db)
                     ));
                 }
+                structdecl.push_str(&printed_fields.join("\n"));
                 structdecl.push('\n');
 
                 structdecl

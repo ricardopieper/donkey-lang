@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::semantic::hir_printer::HIRPrinter;
 
-use crate::{types::diagnostics::FunctionName};
+use crate::types::diagnostics::FunctionName;
 #[cfg(test)]
 use crate::{
     semantic::{hir::MetaTable, typer::Typer},
@@ -673,7 +673,10 @@ def bar<U, T>(u: U, t: T) -> U:
     assert_eq!(errors.len(), 1);
     assert_eq!(errors.function_call_mismatches.len(), 1);
     assert_eq!(
-        errors.function_call_mismatches[0].error.context.called_function_name,
+        errors.function_call_mismatches[0]
+            .error
+            .context
+            .called_function_name,
         FunctionName::Function("baz".into())
     );
 
@@ -1217,7 +1220,7 @@ struct Box<T>:
     x: T
 
 def box<T>(item: T) -> Box<T>:
-    b = Box<i32>()
+    b = Box<T>()
     b.x = item
     return b
 
@@ -1238,29 +1241,28 @@ def main() -> Void (return inferred: Void):
     b2 : Box<f32> = {{box[f32]: (f32) -> Box<f32>}({3.14: f32}): Box<f32>} [synth]
     b3 : Box<char> = {{box[char]: (char) -> Box<char>}({'c': char}): Box<char>} [synth]
 def box[char](item: T (inferred: char)) -> Box<T> (return inferred: Box<char>):
-    b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
-    {{b: Box<i32>}.x: i32} = {item: char}
-    return {b: Box<i32>}
+    b : Box<char> = {Box<char>(): Box<char>} [synth]
+    {{b: Box<char>}.x: char} = {item: char}
+    return {b: Box<char>}
+struct Box[char]:
+    x: char
 def box[f32](item: T (inferred: f32)) -> Box<T> (return inferred: Box<f32>):
-    b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
-    {{b: Box<i32>}.x: i32} = {item: f32}
-    return {b: Box<i32>}
+    b : Box<f32> = {Box<f32>(): Box<f32>} [synth]
+    {{b: Box<f32>}.x: f32} = {item: f32}
+    return {b: Box<f32>}
+struct Box[f32]:
+    x: f32
 def box[i32](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
     b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
     {{b: Box<i32>}.x: i32} = {item: i32}
     return {b: Box<i32>}
+struct Box[i32]:
+    x: i32
 ";
 
     println!("{result}");
 
     assert_eq!(expected.trim(), result.trim());
-
-    let mut typer = Typer::new(&mut ty_db);
-    typer
-        .assign_types(&mut hir)
-        .expect_err("Should have gotten an error");
-    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
-    println!("ERRORS: \n{printer}");
 }
 
 #[test]
@@ -1287,6 +1289,8 @@ def main() -> Void (return inferred: Void):
     x : Box<i32> = {{box[i32]: (i32) -> Box<i32>}({1: i32}): Box<i32>} [synth]
 def box[i32](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
     return {Box<i32>(): Box<i32>}
+struct Box[i32]:
+    x: i32
 ";
 
     println!("{result}");
@@ -1370,6 +1374,8 @@ def main() -> Void (return inferred: Void):
     list : List<i32> = {{list_new[i32]: () -> List<i32>}(): List<i32>} [synth]
 def list_new[i32]() -> List<T> (return inferred: List<i32>):
     return {List<i32>(): List<i32>}
+struct List[i32]:
+    buf: ptr<i32>
 ";
 
     println!("{result}");
@@ -1409,6 +1415,8 @@ def main() -> Void (return inferred: Void):
     list : List<i32> = {{list_new[i32]: (i32) -> List<i32>}({99: i32}): List<i32>} [synth]
 def list_new[i32](i: T (inferred: i32)) -> List<T> (return inferred: List<i32>):
     return {List<i32>(): List<i32>}
+struct List[i32]:
+    buf: ptr<i32>
 ";
 
     println!("{result}");
@@ -1462,7 +1470,7 @@ def list_add<T>(list: ptr<List<T>>, item: T):
             while i < len:
                 new_allocation[i] = (*list).buf[i]
                 i = i + 1
-            mem_free<T>((*list).buf)
+            mem_free((*list).buf)
 
         (*list).buf = new_allocation
 
@@ -1519,6 +1527,10 @@ def list_new[i32]() -> List<T> (return inferred: List<i32>):
     {{list: List<i32>}.len: u64} = {0: u64}
     {{list: List<i32>}.cap: u64} = {0: u64}
     return {list: List<i32>}
+struct List[i32]:
+    buf: ptr<i32>
+    len: u64
+    cap: u64
 ";
 
     println!("{result}");
@@ -1548,6 +1560,124 @@ def main():
     let expected = "
 def main() -> Void (return inferred: Void):
     x : array<i32> = {[{1: i32}, {2: i32}, {3: i32}]: array<i32>} [synth]
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+}
+/**
+ * #[test]
+fn unary_works() {
+    no_errors!(
+        "
+def main():
+    x = 1
+    y = -x
+    x = +x
+
+    a = 1.3
+    b = -a
+    c = +a
+"
+    );
+}
+
+ */
+
+#[test]
+fn unary_expr() {
+    let (.., result, typing_result, errors) = setup_mono(
+        "
+def main():
+    x = 1
+    y = -x
+    x = +x
+
+    a = 1.3
+    b = -a
+    c = +a
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    x : i32 = {1: i32} [synth]
+    y : i32 = {-{x: i32}: i32} [synth]
+    {x: i32} = {+{x: i32}: i32}
+    a : f32 = {1.3: f32} [synth]
+    b : f32 = {-{a: f32}: f32} [synth]
+    c : f32 = {+{a: f32}: f32} [synth]
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn impl_test() {
+    let (.., result, typing_result, errors) = setup_mono(
+        "
+struct SomeStruct:
+    x: i32
+
+impl SomeStruct:
+    def foo(self) -> i32:
+        return (*self).x
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct SomeStruct:
+    x: i32
+impl SomeStruct:
+    def foo(self) -> i32 (return inferred: i32):
+        return {{*{self: ptr<SomeStruct>}: SomeStruct}.x: i32}
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn impl_generic_different_args_test() {
+    let (.., result, typing_result, errors) = setup_mono(
+        "
+struct SomeStruct<T>:
+    x: T
+
+impl SomeStruct<F>:
+    def foo(self) -> F:
+        return (*self).x
+
+def main():
+    s = SomeStruct<i32>()
+    s.x = 1
+    y = s.foo()
+",
+    );
+
+    typing_result.expect("Typing error");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    s : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
+    {{s: SomeStruct<i32>}.x: i32} = {1: i32}
+    y : i32 = {{s: SomeStruct<i32>}.foo(): i32} [synth]
+struct SomeStruct[i32]:
+    x: i32
+impl SomeStruct[i32]:
+    def foo[i32](self) -> F (return inferred: i32):
+        return {{*{self: ptr<SomeStruct<i32>>}: SomeStruct<i32>}.x: i32}
 ";
 
     println!("{result}");

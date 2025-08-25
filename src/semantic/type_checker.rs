@@ -77,7 +77,8 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
             MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, location)) => Ok(()),
 
             MIRExpr::RValue(MIRExprRValue::UnaryExpression(op, rhs, inferred_type, location)) => {
-                //self.check_expr_unary(*rhs, op, inferred_type, location)
+                //Type inference would not work
+                //if the unary operator is not found, so we can assume it is correct.
                 Ok(())
             }
 
@@ -433,42 +434,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
            ))
        }
     */
-    /*
-    fn check_expr_unary(
-        &mut self,
-        rhs: TypecheckPendingExpression,
-        op: SpannedOperator,
-        inferred_type: TypeInstanceId,
-        location: NodeIndex,
-    ) -> Result<(), CompilerError> {
-        let checked_rhs = self.typecheck(rhs)?;
-        let rhs_type = self.type_db.get_instance(checked_rhs.get_type());
-        let found_op = rhs_type
-            .rhs_binary_ops
-            .iter()
-            .find(|(rhs_op, rhs_type, result_type)| {
-                *rhs_op == op.0
-                    && *rhs_type == checked_rhs.get_type()
-                    && *result_type == inferred_type
-            });
-        if found_op.is_some() {
-            Ok(MIRExpr::RValue(MIRExprRValue::UnaryExpression(
-                op,
-                checked_rhs.into(),
-                inferred_type,
-                location,
-            )))
-        } else {
-            return self.errors.unary_op_not_found.push_typecheck_error(
-                UnaryOperatorNotFound {
-                    rhs: checked_rhs.get_type(),
-                    operator: op.0,
-                }
-                .at_spanned(self.on_element, &op.1, loc!()),
-            );
-        }
-    } */
-
+    
     /*
     fn check_fun_expr_bin_op(
         &mut self,

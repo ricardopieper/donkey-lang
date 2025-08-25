@@ -341,3 +341,19 @@ def main():
 "
     );
 }
+
+#[test]
+fn unary_works() {
+    no_errors!(
+        "
+def main():
+    x = 1
+    y = -x
+    x = +x
+
+    a = 1.3
+    b = -a
+    c = +a
+"
+    );
+}

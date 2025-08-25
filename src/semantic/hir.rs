@@ -16,7 +16,7 @@ use crate::ast::parser::Spanned;
 use crate::ast::parser::SpannedOperator;
 use crate::ast::parser::StringSpan;
 use crate::ast::parser::TypeBoundName;
-use crate::ast::parser::{ASTType, Expr, AST};
+use crate::ast::parser::{AST, ASTType, Expr};
 use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 use crate::types::type_constructor_db::TypeConstructor;
@@ -441,11 +441,22 @@ struct IfTreeNode {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeParameter(pub InternedString);
 
+impl TypeParameter {
+    pub fn apply_substitution(&self, substitution: &Substitution) -> TypeParameter {
+        if let Some(MonoType::Skolem(sub)) | Some(MonoType::Variable(sub)) =
+            substitution.get(&TypeVariable(self.0))
+        {
+            return TypeParameter(sub.0);
+        }
+        return self.clone();
+    }
+}
+
 //Refers to type variables, i.e. 't0, 't1, etc but they could also refer to type quantifiers
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeVariable(pub InternedString);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MonoType {
     Variable(TypeVariable),
     Skolem(TypeVariable),
@@ -656,6 +667,7 @@ pub struct TypeTable {
     ty_var_current: u64,
     param_current: u64,
     frozen_indices: BTreeSet<TypeIndex>,
+    self_type: Option<TypeIndex>,
 }
 
 impl TypeTable {
@@ -666,7 +678,25 @@ impl TypeTable {
             ty_var_current: 0,
             param_current: 0,
             frozen_indices: BTreeSet::new(),
+            self_type: None,
         }
+    }
+
+    pub fn get_self_type(&self) -> Option<TypeIndex> {
+        self.self_type
+    }
+
+    pub fn make_self(&mut self) -> TypeIndex {
+        if let Some(self_type) = self.self_type {
+            return self_type;
+        }
+        let var_name = format!("'self{}", self.ty_var_current);
+        let r = self.next_with(PolyType::mono(MonoType::Variable(TypeVariable(
+            InternedString::new(&var_name),
+        ))));
+        self.ty_var_current += 1;
+        self.self_type = Some(r);
+        r
     }
 
     pub fn next(&mut self) -> TypeIndex {
@@ -722,7 +752,7 @@ impl TypeTable {
         }
     }
 
-    //used by monomorphization to do a function-wide substitution. Includes skolems,
+    //used by monomorphization to do a function-wide and impl-wide substitution. Includes skolems,
     //and includes type variables that are deep inside type applications (the arguments of type applications)
     pub fn apply_function_wide_substitution(&mut self, substitution: &Substitution) {
         if substitution.len() == 0 {
@@ -1032,7 +1062,7 @@ fn expr_to_hir<'source>(
             ));
             HIRExpr::Cast(casted_expr, typ, meta.next(span), ty.next())
         }
-        Expr::SelfValue(span) => HIRExpr::SelfValue(meta.next(span), ty.next()),
+        Expr::SelfValue(span) => HIRExpr::SelfValue(meta.next(span), ty.make_self()),
     }
 }
 
@@ -1189,6 +1219,7 @@ fn ast_decl_function_to_hir<'source>(
     accum: &mut Vec<HIRRoot>,
     decls: &mut HashMap<InternedString, TypeIndex>,
     meta: &mut MetaTable,
+    is_method: bool,
 ) {
     let mut ty = TypeTable::new();
     let type_parameters: Vec<_> = type_parameters.iter().map(|x| TypeParameter(x.0)).collect();
@@ -1199,10 +1230,10 @@ fn ast_decl_function_to_hir<'source>(
     };
 
     let return_ty = ty.next_param_or_return(); /*(PolyType::mono(hir_return.make_mono(
-                                                   type_db,
-                                                   &type_parameters,
-                                                   true,
-                                               )));*/
+    type_db,
+    &type_parameters,
+    true,
+    )));*/
 
     let return_type = HIRTypeWithTypeVariable {
         hir_type: hir_return,
@@ -1220,7 +1251,7 @@ fn ast_decl_function_to_hir<'source>(
                 is_external: false,
                 is_varargs,
                 return_type,
-                method_of: Some(ty.next()),
+                method_of: if is_method { Some(ty.next()) } else { None },
                 type_table: ty,
                 has_been_monomorphized: false,
             });
@@ -1237,7 +1268,7 @@ fn ast_decl_function_to_hir<'source>(
                 is_external: true,
                 is_varargs,
                 return_type,
-                method_of: None,
+                method_of: if is_method { Some(ty.next()) } else { None },
                 type_table: ty,
                 has_been_monomorphized: false,
             });
@@ -1267,7 +1298,7 @@ fn ast_decl_function_to_hir<'source>(
         is_external: false,
         is_varargs,
         return_type,
-        method_of: None,
+        method_of: if is_method { Some(ty.next()) } else { None },
         type_table: ty,
         has_been_monomorphized: false,
     };
@@ -1552,6 +1583,7 @@ fn ast_impl_to_hir<'source>(
             &mut functions,
             &mut decls,
             meta,
+            true,
         );
     }
 
@@ -1668,6 +1700,7 @@ pub fn ast_globals_to_hir<'source>(
                 &mut accum,
                 &mut decls,
                 meta,
+                false,
             );
         }
         AST::Root(ast_nodes) => {

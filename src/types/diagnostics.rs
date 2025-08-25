@@ -3,6 +3,7 @@ use crate::ast::parser::Spanned;
 use crate::interner::InternedString;
 use crate::semantic::context::FileTableEntry;
 use crate::semantic::hir::MetaTable;
+
 #[derive(Copy, Clone)]
 pub enum RootElementType {
     Struct(InternedString),

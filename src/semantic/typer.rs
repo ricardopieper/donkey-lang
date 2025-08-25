@@ -15,8 +15,9 @@ use crate::{
         diagnostics::{
             CompilerErrorContext, CompilerErrorList, FunctionCallArgumentCountMismatch,
             FunctionCallContext, FunctionName, InsufficientTypeInformationForArray,
-            RootElementType, TypeErrors, TypeMismatch, TypeNotFound, UnificationError,
-            UnificationTypeArgsCountError, VariableNotFound,
+            RootElementType, TypeErrors, TypeMismatch, TypeNamePrinter, TypeNotFound,
+            UnaryOperatorNotFound, UnificationError, UnificationTypeArgsCountError,
+            VariableNotFound,
         },
         type_constructor_db::{
             FunctionSignature, TypeConstructor, TypeConstructorDatabase, TypeConstructorId,
@@ -27,20 +28,29 @@ use crate::{
 
 use super::{
     hir::{
-        FunctionCall, HIRRoot, HIRTypeWithTypeVariable, HIRTypedBoundName, LiteralHIRExpr,
-        MonoType, NodeIndex, PolyType, TypeIndex, TypeParameter, TypeTable, TypeVariable, HIR,
+        FunctionCall, HIR, HIRRoot, HIRTypeWithTypeVariable, HIRTypedBoundName, LiteralHIRExpr,
+        MonoType, NodeIndex, PolyType, TypeIndex, TypeParameter, TypeTable, TypeVariable,
     },
     hir_printer::{HIRExprPrinter, HIRPrinter},
 };
 
 pub struct TypingContext {
     pub definitions: HashMap<InternedString, PolyType>,
+    pub self_type: Option<PolyType>,
 }
 
 impl TypingContext {
     pub fn new() -> Self {
         Self {
             definitions: HashMap::new(),
+            self_type: None,
+        }
+    }
+
+    pub fn new_for_impl(self_type: PolyType) -> Self {
+        Self {
+            definitions: HashMap::new(),
+            self_type: Some(self_type),
         }
     }
 
@@ -106,6 +116,15 @@ impl Substitution {
 pub struct SubstitutionPrinter<'db, 'subs> {
     type_db: &'db TypeConstructorDatabase,
     substitution: &'subs Substitution,
+}
+
+impl<'db, 'subs> SubstitutionPrinter<'db, 'subs> {
+    pub fn new(type_db: &'db TypeConstructorDatabase, substitution: &'subs Substitution) -> Self {
+        Self {
+            type_db,
+            substitution,
+        }
+    }
 }
 
 impl<'db, 'subs> fmt::Display for SubstitutionPrinter<'db, 'subs> {
@@ -904,12 +923,18 @@ impl<'tydb> Typer<'tydb> {
                     self.infer_type_for_expression(expr, typing_context, type_table, root, None)?; //TODO add return type
                     let ty = type_table[expr.get_type()].clone();
                     let ty_mono = ty.expect_mono();
-                    println!("Return expression type mono: {:#?}", ty);
+                    log!(
+                        "Return expression type mono: {}",
+                        ty.print_name(self.type_database)
+                    );
 
                     let ret = type_table[func_return_type].clone();
                     let ret = ret.expect_mono();
 
-                    println!("Return type declared mono: {:#?}", ret);
+                    log!(
+                        "Return type declared mono: {:#?}",
+                        ret.print_name(self.type_database)
+                    );
 
                     let unify_result = self.unify(&ret, &ty_mono, *location, root);
 
@@ -1228,9 +1253,8 @@ impl<'tydb> Typer<'tydb> {
                     type_table,
                     has_been_monomorphized: _,
                 } => {
-                    let mut typing_context = TypingContext {
-                        definitions: HashMap::new(),
-                    };
+                    let mut typing_context = TypingContext::new();
+
                     self.infer_type_for_function(
                         function_name,
                         type_parameters,
@@ -1258,7 +1282,187 @@ impl<'tydb> Typer<'tydb> {
                     type_parameters,
                     methods,
                     has_been_monomorphized: _,
-                } => {}
+                } => {
+                    //find type by name
+                    let type_ctor = self
+                        .type_database
+                        .find_by_name(*struct_name)
+                        .expect("TODO proper error handling for impl for type that does not exist");
+
+                    let type_ctor_id = type_ctor.id;
+                    let poly_db_type = PolyType::poly_from_constructor(type_ctor);
+
+                    if type_parameters.len() != type_ctor.type_params.len() {
+                        panic!("Proper error handling for impl for type with different arg counts");
+                    }
+
+                    let self_type_in_methods = PolyType::mono(MonoType::Application(
+                        self.type_database.common_types.ptr,
+                        vec![MonoType::Application(
+                            type_ctor_id,
+                            type_parameters
+                                .iter()
+                                .map(|t| MonoType::Variable(TypeVariable(t.0)))
+                                .collect(),
+                        )],
+                    ));
+
+                    for method in methods.iter_mut() {
+                        let mut typing_context =
+                            TypingContext::new_for_impl(self_type_in_methods.clone());
+
+                        let HIRRoot::DeclareFunction {
+                            function_name,
+                            type_parameters,
+                            parameters,
+                            body,
+                            return_type,
+                            method_of,
+                            is_intrinsic,
+                            is_external,
+                            is_varargs,
+                            type_table,
+                            has_been_monomorphized,
+                        } = method
+                        else {
+                            panic!("Expected a function declaration in impl block");
+                        };
+
+                        //add the self type
+                        if let Some(self_type_idx) = type_table.get_self_type() {
+                            type_table[self_type_idx] = self_type_in_methods.clone();
+                        }
+
+                        if !*has_been_monomorphized {
+                            for param in parameters.iter_mut() {
+                                //it reached this point with a type variable,
+                                //now we actually make a poly from the hirtype
+
+                                let mono = param.type_data.hir_type.make_mono(
+                                    &self.type_database,
+                                    &type_parameters,
+                                    true, //use skolem
+                                );
+                                let poly = PolyType::mono(mono);
+
+                                type_table[param.type_data.type_variable] = poly;
+                            }
+
+                            let mono_return_type = return_type.hir_type.make_mono(
+                                &self.type_database,
+                                &type_parameters,
+                                true, //use skolem
+                            );
+                            let poly_return = PolyType::mono(mono_return_type);
+
+                            type_table[return_type.type_variable] = poly_return;
+                        }
+
+                        let mut method_parameters: Vec<_> = parameters
+                            .iter()
+                            .map(|p| type_table[p.type_data.type_variable].expect_mono().clone())
+                            .collect();
+                        log!(
+                            "Added method self type: {}",
+                            self_type_in_methods.to_string(&self.type_database)
+                        );
+                        method_parameters.insert(0, self_type_in_methods.mono.clone());
+
+                        //TODO: Unify ty's self with the type in the type database,
+                        //and change the signature accordingly
+
+                        log!(
+                            "Poly db type: {}",
+                            poly_db_type.to_string(&self.type_database)
+                        );
+
+                        let poly_db_type = PolyType::poly(
+                            poly_db_type.quantifiers.clone(),
+                            MonoType::Application(
+                                self.type_database.common_types.ptr,
+                                vec![poly_db_type.mono.clone()],
+                            ),
+                        );
+                        log!(
+                            "Poly db type but ptr: {}",
+                            poly_db_type.to_string(&self.type_database)
+                        );
+
+                        log!(
+                            "Self type: {}",
+                            self_type_in_methods.to_string(&self.type_database)
+                        );
+
+                        /*let (tb_type_instantiated, _created_vars) = self
+                            .instantiate_poly(&poly_db_type, type_table);
+
+                        let (self_type_instantiated, _created_vars_self) = self
+                            .instantiate_poly(&self_type, type_table);
+                        */
+
+                        //log!("Instanced db type: {:#?}", tb_type_instantiated);
+                        //log!("Instanced Self type: {:#?}", self_type_instantiated);
+
+                        let unify = self
+                            .unify(
+                                &self_type_in_methods.mono,
+                                &poly_db_type.mono,
+                                NodeIndex::none(),
+                                &RootElementType::ImplMethod(
+                                    struct_name.clone(),
+                                    function_name.clone(),
+                                ),
+                            )
+                            .expect(
+                                "Unification of self types failed, this is likely a compiler bug",
+                            );
+
+                        log!(
+                            "Substitution for self type: {}",
+                            SubstitutionPrinter::new(self.type_database, &unify)
+                        );
+
+                        let ty = FunctionSignature {
+                            type_parameters: type_parameters.clone(),
+                            return_type: type_table[return_type.type_variable]
+                                .expect_mono()
+                                .clone(),
+                            parameters: method_parameters,
+                            variadic: Variadic(*is_varargs),
+                        };
+
+                        let ty_substituted = ty.apply_substitution(&unify);
+
+                        log!("Substituted function signature: {:#?}", ty_substituted);
+
+                        let new_type_id = self.type_database.add_function_to_type(
+                            type_ctor_id,
+                            *function_name,
+                            ty_substituted,
+                        );
+
+                        if *is_intrinsic {
+                            self.type_database.mark_as_intrisic(new_type_id)
+                        }
+
+                        if *is_external {
+                            self.type_database.mark_as_external(new_type_id)
+                        }
+
+                        self.infer_type_for_function(
+                            function_name,
+                            type_parameters,
+                            parameters,
+                            body,
+                            return_type,
+                            is_intrinsic,
+                            is_external,
+                            is_varargs,
+                            type_table,
+                            &mut typing_context,
+                        )?;
+                    }
+                }
             }
         }
 
@@ -1348,10 +1552,10 @@ impl<'tydb> Typer<'tydb> {
                 use super::hir::PolyType;
                 match lhs_ty.expect_mono() {
                     super::hir::MonoType::Variable(type_variable) => {
-                        //leave as is to solve later
+                        //leave as is to solve later during monomorphization
                     }
                     super::hir::MonoType::Skolem(type_variable) => {
-                        //leave as is to solve later
+                        //leave as is to solve later during monomorphization
                     }
                     super::hir::MonoType::Application(lhs_app, _) => {
                         let mono_rhs = rhs_ty.expect_mono();
@@ -1413,7 +1617,8 @@ impl<'tydb> Typer<'tydb> {
                 None => {}
             },
             super::hir::HIRExpr::Variable(name, node, ty) => {
-                //find variable in typing context
+                //find variable in typing context, but no need to do anything with it
+                //because the type is already assigned
                 if let None = typing_context.get(name) {
                     self.compiler_errors
                         .variable_not_found
@@ -1434,7 +1639,9 @@ impl<'tydb> Typer<'tydb> {
                 ..
             } => {}
             super::hir::HIRExpr::Cast(_, _, _, _) => {}
-            super::hir::HIRExpr::SelfValue(_, _) => {}
+            super::hir::HIRExpr::SelfValue(_, _) => {
+                //self type is already solved
+            }
             super::hir::HIRExpr::MethodCall(mcall, node_index) => {
                 self.infer_method_call(
                     mcall,
@@ -1570,7 +1777,40 @@ impl<'tydb> Typer<'tydb> {
                     vec![expr_ty.expect_mono().clone()],
                 ));
             }
-            super::hir::HIRExpr::UnaryExpression(..) => {}
+            super::hir::HIRExpr::UnaryExpression(op, expr, node, ty) => {
+                self.infer_type_for_expression(
+                    expr,
+                    typing_context,
+                    type_table,
+                    root,
+                    coercion_hint,
+                )?;
+                let expr_ty = type_table[expr.get_type()].clone();
+                let mono_expr_ty = expr_ty.expect_mono();
+                let type_data_expr = self.type_database.find(mono_expr_ty.get_ctor_id());
+
+                let unary_op = type_data_expr
+                    .unary_ops
+                    .iter()
+                    .find(|(unary_op, _)| *unary_op == op.0);
+
+                if let Some((_, result)) = unary_op {
+                    type_table[*ty] = PolyType::mono(result.clone());
+                } else {
+                    self.compiler_errors
+                        .unary_op_not_found
+                        .push(CompilerErrorContext {
+                            error: UnaryOperatorNotFound {
+                                operator: op.0,
+                                rhs: expr_ty.clone(),
+                            },
+                            on_element: *root,
+                            location: *node,
+                            compiler_code_location: loc!(),
+                        });
+                    return Err(());
+                }
+            }
             super::hir::HIRExpr::MemberAccess(obj, member, node, ty) => {
                 log!("Inferring member access, member: {member}");
                 self.infer_type_for_expression(
@@ -1590,6 +1830,29 @@ impl<'tydb> Typer<'tydb> {
                         "Proper error reporting here, member access obj application, {expr_ty:?}"
                     );
                 };
+
+                /*
+                //@TODO: Support derefing pointers automatically on member access.
+                //Or create a member access operator that derefs the pointer.
+                //Perhaps we will want to add members to the pointer type itself someday,
+                //and this will be a problem.
+                if *tc_id == self.type_database.common_types.ptr {
+                    //wrap the type in a deref
+                    let next_type = type_table.next();
+                    *obj = super::hir::HIRExpr::Deref(
+                        obj.clone(),
+                        *node,
+                        next_type,
+                    ).into();
+                    //infer again, next_type will be T inside ptr<T>
+                    self.infer_type_for_expression(
+                        obj,
+                        typing_context,
+                        type_table,
+                        root,
+                        coercion_hint,
+                    )?;
+                }*/
 
                 let object_type_data = self.type_database.find(*tc_id);
                 let Some(field) = object_type_data.find_field(*member) else {
@@ -1612,48 +1875,60 @@ impl<'tydb> Typer<'tydb> {
                     generalized_field_type.to_string(self.type_database)
                 );
 
-                let mut substitution_for_function_type_args = HashMap::new();
+                let mut substitution_for_struct_type_args = HashMap::new();
 
                 for (i, type_arg) in type_args.iter().enumerate() {
                     let quantifier = &generalized_object_type.quantifiers[i];
-                    substitution_for_function_type_args
-                        .insert(quantifier.clone(), type_arg.clone());
+                    substitution_for_struct_type_args.insert(quantifier.clone(), type_arg.clone());
                 }
+
+                log!(
+                    "Substitution for struct type args in member access: {:?}",
+                    substitution_for_struct_type_args
+                );
 
                 let field_type_partially_instantiated = self.do_partial_instantiation_with_args(
                     generalized_field_type,
-                    &substitution_for_function_type_args,
+                    &substitution_for_struct_type_args,
                 );
 
-                println!(
-                    "Field type partially instantiated: {:?}",
-                    field_type_partially_instantiated
+                log!(
+                    "Field type partially instantiated: {}",
+                    field_type_partially_instantiated.to_string(&self.type_database)
                 );
 
                 let (field_type_instantiated, _) =
                     self.instantiate_poly(&field_type_partially_instantiated, type_table);
 
-                println!("Field type instantiated: {:?}", field_type_instantiated);
+                log!(
+                    "Field type instantiated: {}",
+                    field_type_instantiated.print_name(&self.type_database)
+                );
                 //likely a type variable
                 let inferred_type_of_field = type_table[ty].expect_mono().clone();
 
                 let unify_result = self.unify(
-                    &field_type_instantiated,
                     &inferred_type_of_field,
+                    &field_type_instantiated,
                     *node,
                     root,
                 );
 
                 match unify_result {
                     Ok(substitution) => {
+                        log!(
+                            "Member access substitution type: {}",
+                            substitution.print(self.type_database)
+                        );
                         type_table.apply_substitution(&substitution);
+                        log!("Type table: {type_table:#?}");
                         typing_context.apply_substitution(&substitution);
                     }
                     Err(stack) => {
                         self.compiler_errors.unify_error.push(CompilerErrorContext {
                             error: UnificationError {
                                 stack,
-                                context: format!("On method call"),
+                                context: format!("On member access"),
                             },
                             on_element: *root,
                             location: *node,
@@ -1768,9 +2043,12 @@ impl<'tydb> Typer<'tydb> {
         };
         let method_signature = &actual_method.signature;
         let method_tc = self.type_database.find(*method_signature);
-        println!("Method TC: {method_tc:?}");
+        log!("Method TC: {method_tc:?}");
         let generalized_call_type = PolyType::poly_from_constructor(method_tc);
-        println!("Generalized call type: {:#?}", generalized_call_type);
+        log!(
+            "Generalized call type: {}",
+            generalized_call_type.print_name(self.type_database)
+        );
         let mut substitution_for_function_type_args = HashMap::new();
         for (i, type_arg) in args.iter().enumerate() {
             let quantifier = &generalized_call_type.quantifiers[i];
@@ -1780,13 +2058,20 @@ impl<'tydb> Typer<'tydb> {
             generalized_call_type,
             &substitution_for_function_type_args,
         );
-        println!(
-            "Partially instantiated call type: {:#?}",
-            partially_instantiated
+        log!(
+            "Partially instantiated call type: {}",
+            partially_instantiated.print_name(self.type_database)
         );
-        let cloned_obj_type = type_info.mono.clone();
+        //TODO this needs to become a ptr<cloned_obj_type>!
+        let cloned_obj_type = MonoType::Application(
+            self.type_database.common_types.ptr,
+            vec![type_info.mono.clone()],
+        );
         let (instantiated, _) = self.instantiate_poly(&partially_instantiated, type_table);
-        println!("Instantiated call type: {:#?}", instantiated);
+        log!(
+            "Instantiated call type: {}",
+            instantiated.print_name(self.type_database)
+        );
         let MonoType::Application(constructor, _) = instantiated else {
             panic!("Expected function to be a type function, not a variable");
         };
@@ -1819,10 +2104,12 @@ impl<'tydb> Typer<'tydb> {
                 typing_context.apply_substitution(&substitution);
             }
             Err(stack) => {
+                let ty = &type_table[mcall.object.get_type()];
+                let ty_name = ty.print_name(self.type_database);
                 self.compiler_errors.unify_error.push(CompilerErrorContext {
                     error: UnificationError {
                         stack,
-                        context: format!("On method call"),
+                        context: format!("On method call to {}::{}", ty_name, mcall.method_name),
                     },
                     on_element: *root,
                     location: *node_index,
@@ -1924,7 +2211,9 @@ impl<'tydb> Typer<'tydb> {
         function_poly: PolyType,
         substitution_for_function_type_args: &HashMap<TypeParameter, MonoType>,
     ) -> MonoType {
-        log!("Doing user specified instantiation. Function poly: {function_poly:#?}\nsubstitution_for_function_type_args: {substitution_for_function_type_args:#?}");
+        log!(
+            "Doing user specified instantiation. Function poly: {function_poly:#?}\nsubstitution_for_function_type_args: {substitution_for_function_type_args:#?}"
+        );
         fn handle_mono(
             mono: MonoType,
             substitution_for_function_type_args: &HashMap<TypeParameter, MonoType>,

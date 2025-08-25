@@ -1,14 +1,15 @@
 use crate::semantic::hir::{MonoType, TypeParameter, TypeVariable};
+use crate::semantic::typer::Substitution;
 use crate::{ast::lexer::Operator, semantic::hir::PolyType};
 
 use crate::interner::InternedString;
 
 #[cfg(not(test))]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeConstructorId(pub usize);
 
 #[cfg(test)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeConstructorId(pub usize, pub InternedString);
 
 impl TypeConstructorId {
@@ -77,6 +78,25 @@ impl FunctionSignature {
         name.push_str(") -> ");
         name.push_str(&self.return_type.print_name(type_db));
         name
+    }
+
+    pub fn apply_substitution(&self, substitution: &Substitution) -> Self {
+        let mut new_params = vec![];
+        for param in self.parameters.iter() {
+            new_params.push(param.apply_substitution(substitution));
+        }
+        let new_return_type = self.return_type.apply_substitution(substitution);
+        let new_type_parameters = self
+            .type_parameters
+            .iter()
+            .map(|p| p.apply_substitution(substitution))
+            .collect();
+        Self {
+            type_parameters: new_type_parameters,
+            parameters: new_params,
+            return_type: new_return_type,
+            variadic: self.variadic,
+        }
     }
 }
 
@@ -605,7 +625,10 @@ impl TypeConstructorDatabase {
                 parameters: vec![
                     MonoType::Application(
                         ptr_type,
-                        vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
+                        vec![MonoType::Application(
+                            ptr_type,
+                            vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
+                        )],
                     ), //self
                     MonoType::simple(self.common_types.u64), /*index*/
                     MonoType::Variable(TypeVariable(istr("TPtr"))), /*item to write*/
@@ -622,8 +645,13 @@ impl TypeConstructorDatabase {
                 parameters: vec![
                     MonoType::Application(
                         ptr_type,
-                        vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
-                    ), //self
+                        vec![
+                            MonoType::Application(
+                                ptr_type,
+                                vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
+                            ), //self
+                        ],
+                    ),
                     MonoType::simple(self.common_types.u64),
                 ], /* offset * sizeof(TPtr) */
                 return_type: MonoType::Variable(TypeVariable(istr("TPtr"))).into(),
@@ -654,8 +682,13 @@ impl TypeConstructorDatabase {
                 parameters: vec![
                     MonoType::Application(
                         ptr_type,
-                        vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
-                    ), //self
+                        vec![
+                            MonoType::Application(
+                                ptr_type,
+                                vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
+                            ), //self
+                        ],
+                    ),
                     MonoType::simple(self.common_types.u64),
                 ], /* offset * sizeof(TPtr) */
                 return_type: MonoType::Application(
@@ -683,9 +716,14 @@ impl TypeConstructorDatabase {
             FunctionSignature {
                 parameters: vec![
                     MonoType::Application(
-                        arr_type,
-                        vec![MonoType::Variable(TypeVariable(istr("TItem")))],
-                    ), //self
+                        ptr_type,
+                        vec![
+                            MonoType::Application(
+                                arr_type,
+                                vec![MonoType::Variable(TypeVariable(istr("TItem")))],
+                            ), //self
+                        ],
+                    ),
                     MonoType::simple(u32_type),
                 ],
                 return_type: MonoType::Application(
@@ -704,9 +742,14 @@ impl TypeConstructorDatabase {
             FunctionSignature {
                 parameters: vec![
                     MonoType::Application(
-                        arr_type,
-                        vec![MonoType::Variable(TypeVariable(istr("TItem")))],
-                    ), //self
+                        ptr_type,
+                        vec![
+                            MonoType::Application(
+                                arr_type,
+                                vec![MonoType::Variable(TypeVariable(istr("TItem")))],
+                            ), //self
+                        ],
+                    ),
                     MonoType::simple(u32_type),
                 ],
                 return_type: MonoType::Application(u32_type, vec![]).into(),
