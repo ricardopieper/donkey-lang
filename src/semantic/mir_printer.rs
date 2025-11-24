@@ -246,6 +246,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeConstructorDatabase) -> S
             scopes,
             return_type,
             type_table,
+            struct_name,
         } => {
             let parameters = parameters
                 .iter()
@@ -258,9 +259,13 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeConstructorDatabase) -> S
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
+
+            let fully_qualified_function_name = struct_name
+                .map_or_else(|| function_name.into(), |f| format!("{f}::{function_name}"));
+
             let mut function = format!(
                 "def {}({}) -> {}:\n",
-                function_name,
+                fully_qualified_function_name,
                 parameters,
                 &return_type.print_name(type_table, type_db)
             );

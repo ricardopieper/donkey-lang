@@ -835,7 +835,7 @@ impl<'tok> Parser<'tok> {
                 return self.grammar_fail(ParsingErrorDetails::ContextForError(
                     "Expected expression for if statement".into(),
                     e.into(),
-                ))
+                ));
             }
         };
 
@@ -986,10 +986,10 @@ impl<'tok> Parser<'tok> {
                         break;
                     }
                     ParsingEvent::GrammarRuleFail(details, token) => {
-                        return ParsingEvent::GrammarRuleFail(details, token)
+                        return ParsingEvent::GrammarRuleFail(details, token);
                     }
                     ParsingEvent::NonRecoverable(details, token) => {
-                        return ParsingEvent::NonRecoverable(details, token)
+                        return ParsingEvent::NonRecoverable(details, token);
                     }
                 }
             }
@@ -1103,7 +1103,7 @@ impl<'tok> Parser<'tok> {
                 return self.grammar_fail(ParsingErrorDetails::ContextForError(
                     "Expected expression for while statement".into(),
                     e.into(),
-                ))
+                ));
             }
         };
 
@@ -1131,7 +1131,7 @@ impl<'tok> Parser<'tok> {
                 return self.grammar_fail(ParsingErrorDetails::ContextForError(
                     "Expected expression for iterable in for statement".into(),
                     e.into(),
-                ))
+                ));
             }
         };
 
@@ -1249,7 +1249,9 @@ impl<'tok> Parser<'tok> {
             has_self = true;
             self.next();
         }
-
+        if has_self && let Token::Comma = self.peek().token {
+            self.next();
+        }
         while let Token::Identifier(_) = self.peek().token {
             let param = self.parse_type_bound_name().unwrap().unwrap();
             params.push(param);
@@ -1330,7 +1332,7 @@ impl<'tok> Parser<'tok> {
                         return self.grammar_fail(ParsingErrorDetails::ContextForError(
                             "Expected expression on return statement".into(),
                             e.into(),
-                        ))
+                        ));
                     }
                 };
 
@@ -1385,13 +1387,13 @@ impl<'tok> Parser<'tok> {
             Ok(result) => {
                 return ParsingEvent::Success(
                     AST::StandaloneExpr(result.resulting_expr).self_spanning(),
-                )
+                );
             }
             Err(e) => {
                 return self.grammar_fail(ParsingErrorDetails::ContextForError(
                     "Expected expression".into(),
                     e.into(),
-                ))
+                ));
             }
         }
     }
@@ -1972,7 +1974,7 @@ impl<'tok> Parser<'tok> {
                                 return Err(ParsingErrorDetails::ExprError(
                                     "Cast expression failed: expected type name after `as` keyword"
                                         .into(),
-                                ))
+                                ));
                             }
                         }
                     }
@@ -2141,7 +2143,9 @@ impl<'tok> Parser<'tok> {
             && !type_parameters.is_empty()
             && self.peek().token != Token::OpenParen
         {
-            todo!("Make error reporting work here: expected ( for parameter list after generic types, type params: {type_parameters:?}");
+            todo!(
+                "Make error reporting work here: expected ( for parameter list after generic types, type params: {type_parameters:?}"
+            );
         }
 
         if self.peek().token != Token::OpenParen && type_parameters.is_empty() {
@@ -2301,7 +2305,7 @@ mod tests {
     use crate::{
         ast::ast_printer::{print_ast, print_fully_parenthesized_ast},
         interner::StringInterner,
-        semantic::context::{test_utils::istr, FileTableIndex},
+        semantic::context::{FileTableIndex, test_utils::istr},
     };
 
     use super::*;
@@ -2414,6 +2418,22 @@ impl SomeStruct:
 
 def not_method():
     print(1)
+    ",
+        );
+    }
+
+    #[test]
+    fn method_with_params() {
+        parse_and_compare(
+            "
+impl SomeStruct:
+    def method(self, param: i32):
+        print(self)
+    ",
+            "
+impl SomeStruct:
+    def method(self, param: i32):
+        print(self)
     ",
         );
     }
@@ -3223,7 +3243,6 @@ print(x)"
         );
     }
 
-
     #[test]
     fn struct_definition_set_field() {
         parse_and_print_back_to_original(
@@ -3238,7 +3257,6 @@ def main():
     ",
         );
     }
-
 
     #[test]
     fn access_at_index() {
@@ -3444,26 +3462,26 @@ struct SomeStruct<T>:
     }
 
     #[test]
-    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params(
-    ) {
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params()
+     {
         parse_and_print_back_to_original("make_fn<T, U, V>(x, y, z)(1, \"abc\")");
     }
 
     #[test]
-    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing(
-    ) {
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing()
+     {
         parse_and_print_back_to_original("make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]");
     }
 
     #[test]
-    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary(
-    ) {
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary()
+     {
         parse_and_print_back_to_original("& make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]");
     }
 
     #[test]
-    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary_ref_minus(
-    ) {
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary_ref_minus()
+     {
         parse_and_print_back_to_original("- & make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]");
     }
 

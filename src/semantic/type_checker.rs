@@ -434,7 +434,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
            ))
        }
     */
-    
+
     /*
     fn check_fun_expr_bin_op(
         &mut self,
@@ -993,6 +993,7 @@ pub fn typecheck(
     for node in top_nodes {
         match node {
             MIRTopLevelNode::DeclareFunction {
+                struct_name,
                 function_name,
                 parameters,
                 body,

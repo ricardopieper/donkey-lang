@@ -56,7 +56,8 @@ fn setup(
         let mut mono = Monomorphizer::new(&mut type_db);
 
         mono.run(&mut parsed).unwrap();
-        parsed = mono.get_result();
+        let (monomorphized, _) = mono.get_result();
+        parsed = monomorphized;
         tc_result
     };
 
@@ -1260,5 +1261,82 @@ def main() -> i32:
         y = y + 1
         gotoblock 3
 ";
+    assert_eq!(expected.trim(), final_result.trim());
+}
+
+#[test]
+fn simple_struct() {
+    let (_, final_result, ..) = setup(
+        "
+struct MyStruct:
+    x: i32
+
+def main():
+    s = MyStruct()
+    s.x = 1",
+    );
+
+    println!("{final_result}");
+    let expected = "
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+        s : MyStruct
+    defscope 1:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        s = MyStruct()
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        s.x = 1
+        return";
+
+    assert_eq!(expected.trim(), final_result.trim());
+}
+
+#[test]
+fn simple_struct_impl() {
+    let (_, final_result, ..) = setup(
+        "
+struct MyStruct:
+    x: i32
+
+impl MyStruct:
+    def get_x(self) -> i32:
+        return (*self).x
+
+def main():
+    s = MyStruct()
+    s.x = 1
+    s.get_x()
+",
+    );
+
+    println!("{final_result}");
+    let expected = "
+def MyStruct::get_x() -> i32:
+    defscope 0:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        return *self.x
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+        s : MyStruct
+    defscope 1:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        s = MyStruct()
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        s.x = 1
+        s.get_x()
+        return";
+
     assert_eq!(expected.trim(), final_result.trim());
 }

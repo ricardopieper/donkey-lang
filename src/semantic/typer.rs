@@ -380,7 +380,18 @@ impl<'tydb> Typer<'tydb> {
     #[must_use]
     pub fn assign_types(&mut self, hir: &mut [HIRRoot]) -> Result<(), ()> {
         self.collect_globals(hir);
-        self.infer_types_for_roots(hir)
+
+        let hir_after_globals = HIRPrinter::new(true, &self.type_database).print_hir(hir);
+
+        log!("HIR After Globals: {hir_after_globals}");
+        let r = self.infer_types_for_roots(hir);
+
+        let hir_after_inference = HIRPrinter::new(true, &self.type_database).print_hir(hir);
+
+        log!("HIR After Inference: {hir_after_inference}");
+
+        return r
+
     }
 
     fn collect_globals(&mut self, hir: &mut [HIRRoot]) {
@@ -920,11 +931,16 @@ impl<'tydb> Typer<'tydb> {
                     }
                 }
                 HIR::Return(expr, location) => {
+                    
                     self.infer_type_for_expression(expr, typing_context, type_table, root, None)?; //TODO add return type
+                    log!(
+                        "Type table on return: {type_table:#?}",
+                    );
                     let ty = type_table[expr.get_type()].clone();
                     let ty_mono = ty.expect_mono();
                     log!(
-                        "Return expression type mono: {}",
+                        "Return expression type mono: {:?} {}",
+                        expr.get_type(),
                         ty.print_name(self.type_database)
                     );
 
@@ -932,7 +948,7 @@ impl<'tydb> Typer<'tydb> {
                     let ret = ret.expect_mono();
 
                     log!(
-                        "Return type declared mono: {:#?}",
+                        "Return type declared mono: {func_return_type:?} {:#?}",
                         ret.print_name(self.type_database)
                     );
 

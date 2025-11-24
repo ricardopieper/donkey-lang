@@ -5,7 +5,7 @@ use crate::{
     interner::*,
     semantic::{
         hir::{HIRUserTypeInfo, MethodCall, TypeVariable},
-        hir_printer::{self, HIRPrinter},
+        hir_printer::{self, HIRExprPrinter, HIRPrinter},
         typer::Substitution,
     },
     types::{
@@ -48,6 +48,12 @@ impl Display for PolymorphicRoot {
     }
 }
 
+pub struct MonomorphizedStruct {
+    pub struct_name: InternedString,
+    pub positional_type_arguments: Vec<MonoType>,
+    pub resulting_name: InternedString,
+}
+
 struct MonomorphizationQueueItem {
     polymorphic_root: PolymorphicRoot,
     positional_type_arguments: Vec<MonoType>,
@@ -65,6 +71,7 @@ pub struct Monomorphizer<'compiler_state> {
     queue: Vec<MonomorphizationQueueItem>,
     type_db: &'compiler_state TypeConstructorDatabase,
     result: Vec<(HIRRoot, usize)>,
+    monomorphized_structs: Vec<MonomorphizedStruct>,
 }
 
 impl<'compiler_state> Monomorphizer<'compiler_state> {
@@ -75,6 +82,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
             queue: vec![],
             type_db,
             result: vec![],
+            monomorphized_structs: vec![],
         }
     }
 
@@ -127,8 +135,8 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                     ..
                 } => {
                     let ty_data = self.type_db.find_by_name(*struct_name).unwrap();
-
-                    //hack: add each impl one by one...
+                    let id = ty_data.id;
+                    //add each impl one by one...
                     if type_parameters.len() == 0 {
                         for (j, method) in methods.iter().enumerate() {
                             let HIRRoot::DeclareFunction {
@@ -150,7 +158,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                                 polymorphic_root: PolymorphicRoot::ImplMethod {
                                     struct_name: *struct_name,
                                     method_name: *function_name,
-                                    type_of_struct: ty_data.id,
+                                    type_of_struct: id,
                                 },
                                 positional_type_arguments: vec![],
                                 original_index: i,
@@ -183,13 +191,32 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                 queue_item.positional_type_arguments.clone(),
                 queue_item.original_index,
             )?;
+
             if let Some(hir) = result {
                 match &queue_item.polymorphic_root {
                     PolymorphicRoot::Function(..) => {
                         self.result.push((hir, queue_item.original_index))
                     }
-                    PolymorphicRoot::Struct(..) => {
-                        self.result.push((hir, queue_item.original_index))
+                    PolymorphicRoot::Struct(struct_name) => {
+                        match &hir {
+                            HIRRoot::StructDeclaration {
+                                struct_name: resulting_name,
+                                ..
+                            } => {
+                                self.monomorphized_structs.push(MonomorphizedStruct {
+                                    positional_type_arguments: queue_item
+                                        .positional_type_arguments
+                                        .clone(),
+                                    struct_name: *struct_name,
+                                    resulting_name: *resulting_name,
+                                });
+                            }
+                            _ => {
+                                panic!("Returned non-struct when struct was expected")
+                            }
+                        }
+
+                        self.result.push((hir, queue_item.original_index));
                     }
                     PolymorphicRoot::ImplMethod {
                         type_of_struct,
@@ -238,10 +265,10 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         Ok(())
     }
 
-    pub fn get_result(mut self) -> Vec<HIRRoot> {
+    pub fn get_result(mut self) -> (Vec<HIRRoot>, Vec<MonomorphizedStruct>) {
         self.result.sort_by(|a, b| a.1.cmp(&b.1));
         let mono_hir = self.result.into_iter().map(|(hir, _)| hir).collect();
-        return mono_hir;
+        return (mono_hir, self.monomorphized_structs);
     }
 
     fn monomorphize(
@@ -661,9 +688,12 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                     self.find_poly_instantiations_in_hir(root, body, original_index, type_table)?;
                 }
                 HIR::Return(expr, meta) => {
-                    log!("Monomorphizing return statement");
+                    log!("Monomorphizing return statement {expr:?}");
                     self.find_poly_instantiations_in_exprs(root, expr, original_index, type_table)?;
-                    log!("Monomorphizing return statement OK");
+                    log!("Monomorphizing return statement OK {expr:?} {type_table:#?}");
+                    let printed_return =
+                        HIRExprPrinter::new(true, self.type_db).print(expr, type_table);
+                    log!("Result: {printed_return}");
                 }
                 HIR::EmptyReturn(meta) => {}
             }
@@ -767,7 +797,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         let object_type = type_table[object.get_type()].mono.clone();
         let (ctor, object_positional_type_args) = match object_type {
             MonoType::Application(ctor, args) => (ctor, args),
-            _ => panic!("Handle this case where the object is a type argument."),
+            _ => panic!("Handle this case where the object is a type argument. {object_type:?}"),
         };
         if object_positional_type_args.is_empty() {
             return Ok(());
@@ -859,16 +889,17 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                 let old_function_name = *name;
                 let new_struct_name = format!("{}[{}]", old_function_name, new_struct_name_suffix);
                 let interned_struct_name = InternedString::new(&new_struct_name);*/
-
-                self.enqueue(MonomorphizationQueueItem {
-                    polymorphic_root: PolymorphicRoot::Struct(*name),
-                    positional_type_arguments: hir_type_args
-                        .iter()
-                        .map(|x| type_table[x.resolved_type].mono.clone())
-                        .collect::<Vec<_>>(),
-                    original_index,
-                    secondary_original_index: 0,
-                });
+                if !hir_type_args.is_empty() {
+                    self.enqueue(MonomorphizationQueueItem {
+                        polymorphic_root: PolymorphicRoot::Struct(*name),
+                        positional_type_arguments: hir_type_args
+                            .iter()
+                            .map(|x| type_table[x.resolved_type].mono.clone())
+                            .collect::<Vec<_>>(),
+                        original_index,
+                        secondary_original_index: 0,
+                    });
+                }
             }
             HIRExpr::Deref(derrefed_expr, ty, meta) => {
                 log!("Monomorphizing deref");

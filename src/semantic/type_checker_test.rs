@@ -57,6 +57,8 @@ fn setup(
     let mut parsed = ast_globals_to_hir(&original_src.file_table[0].ast, &type_db, &mut meta_table);
 
     let (mut compiler_errors, tc_result) = {
+        use crate::semantic::uniformizer;
+
         let tc_result = {
             let mut typer = Typer::new(&mut type_db);
             typer.forgive_skolem_mismatches();
@@ -66,7 +68,9 @@ fn setup(
         let mut mono = Monomorphizer::new(&mut type_db);
 
         mono.run(&mut parsed).unwrap();
-        parsed = mono.get_result();
+        let (mut monomorphized, mono_structs) = mono.get_result();
+        uniformizer::uniformize(&mut type_db, &mut monomorphized, mono_structs);
+        parsed = monomorphized;
         tc_result
     };
 
@@ -354,6 +358,84 @@ def main():
     a = 1.3
     b = -a
     c = +a
+"
+    );
+}
+
+#[test]
+fn toyota_corolla_test() {
+    let (.., err) = setup(
+        "
+struct ToyotaCorolla:
+    year: u32
+
+def sum<T>(i: i32, u: T) -> T:
+    return i + u
+
+def main():
+    corolla = ToyotaCorolla()
+    corolla.year = 2025
+    sum(69, corolla)
+",
+    );
+
+    assert_eq!(1, err.len());
+    assert_eq!(1, err.return_type_mismatches.len());
+}
+
+#[test]
+fn list_test() {
+    no_errors!(
+        "
+struct List<T>:
+    buf: ptr<T>
+    len: u64
+    cap: u64
+
+# Creates a new list
+def list_new<T>() -> List<T>:
+    list = List<T>()
+    list.len = 0
+    list.cap = 0
+
+    return list
+
+def mem_alloc<T>(size: u64) -> ptr<T>:
+    intrinsic
+
+def mem_free<T>(ptr: ptr<T>):
+    intrinsic
+
+# Adds an item to the list
+def list_add<T>(list: ptr<List<T>>, item: T):
+    len = (*list).len
+    cap = (*list).cap
+    if len == cap:
+        if len == 0:
+            (*list).cap = 4
+        else:
+            (*list).cap = cap * 2
+
+        new_allocation = mem_alloc<T>((*list).cap)
+        if len > 0:
+            i: u64 = 0
+            while i < len:
+                new_allocation[i] = (*list).buf[i]
+                i = i + 1
+            mem_free((*list).buf)
+
+        (*list).buf = new_allocation
+
+    (*list).buf[len] = item
+    (*list).len = len + 1
+
+def list_get<T>(list: ptr<List<T>>, index: u64) -> T:
+    return (*list).buf[index]
+
+def main():
+    list = list_new()
+    list_add(&list, 1)
+    x = list_get(&list, 0)
 "
     );
 }

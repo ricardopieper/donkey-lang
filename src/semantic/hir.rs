@@ -471,6 +471,22 @@ impl MonoType {
         }
     }
 
+    //recurses through application arguments and substitutes everything it can find
+    pub fn apply_mono_substitution(&mut self, find: &MonoType, target: &MonoType) {
+        if self == find {
+            *self = target.clone();
+            return;
+        }
+        match self {
+            MonoType::Application(_, args) => {
+                for arg in args.iter_mut() {
+                    arg.apply_mono_substitution(find, target);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn apply_substitution(&self, substitution: &Substitution) -> MonoType {
         match self {
             MonoType::Variable(var) => {
@@ -776,6 +792,14 @@ impl TypeTable {
             }
         }
     }
+
+    //used after monomorphization to normalize all types to their monomorphic version.
+    //
+    pub fn apply_function_wide_mono_substitution(&mut self, find: &MonoType, target: &MonoType) {
+        for (_, entry) in self.table.iter_mut().enumerate() {
+            entry.mono.apply_mono_substitution(find, target);
+        }
+    }
 }
 
 impl Index<TypeIndex> for TypeTable {
@@ -993,7 +1017,10 @@ fn expr_to_hir<'source>(
             //*(array.__index_ptr__(index))
 
             let idx = InternedString::new("__index_ptr__");
-
+            let meta_next = meta.next(span);
+            let return_type = ty.next();
+            let deref_result = ty.next();
+            log!("Generated return type {return_type:?} and deref {deref_result:?}");
             let method_call = MethodCall {
                 object: Box::new(expr_to_hir(
                     type_db,
@@ -1014,13 +1041,12 @@ fn expr_to_hir<'source>(
                     decls,
                     generics_in_context,
                 )],
-                return_type: ty.next(),
+                return_type: return_type,
             };
-            let next = meta.next(span);
             HIRExpr::Deref(
-                HIRExpr::MethodCall(method_call, next).into(),
-                next,
-                ty.next(),
+                HIRExpr::MethodCall(method_call, meta_next).into(),
+                meta_next,
+                deref_result,
             )
         }
         Expr::BinaryOperation(lhs, op, rhs) => {

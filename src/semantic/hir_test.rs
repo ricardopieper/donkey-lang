@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::semantic::hir_printer::HIRPrinter;
+use crate::semantic::{hir_printer::HIRPrinter, monomorph::MonomorphizedStruct};
 
 use crate::types::diagnostics::FunctionName;
 #[cfg(test)]
@@ -86,33 +86,27 @@ fn setup_mono(
     Result<(), ()>,
     TypeErrors,
 ) {
-    use crate::semantic::monomorph::Monomorphizer;
+    use crate::semantic::uniformizer;
 
     let mut type_db = TypeConstructorDatabase::new();
     let mut meta_table = MetaTable::new();
     let original_src = test_utils::parse_no_stdlib(src);
 
-    let mut parsed = ast_globals_to_hir(&original_src.file_table[0].ast, &type_db, &mut meta_table);
+    let parsed = ast_globals_to_hir(&original_src.file_table[0].ast, &type_db, &mut meta_table);
 
-    let (compiler_errors, tc_result) = {
-        let tc_result = {
-            let mut typer = Typer::new(&mut type_db);
-            typer.forgive_skolem_mismatches();
-            let tc_result = typer.assign_types(&mut parsed);
-            (typer.compiler_errors, tc_result)
-        };
-        let mut mono = Monomorphizer::new(&mut type_db);
+    //Run type check + monomorphization
+    let (compiler_errors, mut new_hir, tc_result, monomorphized_structs) =
+        run_type_checker(&mut type_db, parsed, true);
 
-        mono.run(&mut parsed).unwrap();
-        parsed = mono.get_result();
-        tc_result
-    };
+    uniformizer::uniformize(&mut type_db, &mut new_hir, monomorphized_structs);
 
     let hir_string = {
         let printer = HIRPrinter::new(true, &type_db);
-        printer.print_hir(&parsed)
-    };
+        let s = printer.print_hir(&new_hir);
+        log!("should be correct here!\n{s}");
 
+        s
+    };
     let printer = TypeErrorPrinter::new(
         &compiler_errors,
         &type_db,
@@ -125,11 +119,56 @@ fn setup_mono(
         type_db,
         meta_table,
         original_src,
-        parsed,
+        new_hir,
         hir_string,
         tc_result,
         compiler_errors,
     )
+}
+
+#[cfg(test)]
+fn run_type_checker(
+    type_db: &mut TypeConstructorDatabase,
+    mut parsed: Vec<HIRRoot>,
+    monomorphize: bool,
+) -> (
+    TypeErrors,
+    Vec<HIRRoot>,
+    Result<(), ()>,
+    Vec<MonomorphizedStruct>,
+) {
+    use crate::semantic::monomorph::Monomorphizer;
+
+    {
+        let printer = HIRPrinter::new(true, type_db);
+        let s = printer.print_hir(&parsed);
+        log!("Right before assigning types!\n{s}");
+    };
+    let mut typer = Typer::new(type_db);
+    typer.forgive_skolem_mismatches();
+
+    let tc_result = typer.assign_types(&mut parsed);
+
+    let compiler_errors = typer.compiler_errors;
+    if !monomorphize {
+        {
+            let printer = HIRPrinter::new(true, type_db);
+            let s = printer.print_hir(&parsed);
+            log!("Right after assigning types!\n{s}");
+        };
+        return (compiler_errors, parsed, tc_result, vec![]);
+    }
+
+    let mut mono = Monomorphizer::new(type_db);
+    mono.run(&parsed).unwrap();
+    let (new_parsed, monomorphized_structs) = mono.get_result();
+
+    return (
+        compiler_errors,
+        new_parsed,
+        tc_result,
+        monomorphized_structs,
+    );
 }
 
 #[test]
@@ -1237,25 +1276,25 @@ def main():
 
     let expected = "
 def main() -> Void (return inferred: Void):
-    b1 : Box<i32> = {{box[i32]: (i32) -> Box<i32>}({1: i32}): Box<i32>} [synth]
-    b2 : Box<f32> = {{box[f32]: (f32) -> Box<f32>}({3.14: f32}): Box<f32>} [synth]
-    b3 : Box<char> = {{box[char]: (char) -> Box<char>}({'c': char}): Box<char>} [synth]
-def box[char](item: T (inferred: char)) -> Box<T> (return inferred: Box<char>):
-    b : Box<char> = {Box<char>(): Box<char>} [synth]
-    {{b: Box<char>}.x: char} = {item: char}
-    return {b: Box<char>}
+    b1 : Box[i32] = {{box[i32]: (i32) -> Box[i32]}({1: i32}): Box[i32]} [synth]
+    b2 : Box[f32] = {{box[f32]: (f32) -> Box[f32]}({3.14: f32}): Box[f32]} [synth]
+    b3 : Box[char] = {{box[char]: (char) -> Box[char]}({'c': char}): Box[char]} [synth]
+def box[char](item: T (inferred: char)) -> Box<T> (return inferred: Box[char]):
+    b : Box[char] = {Box[char](): Box[char]} [synth]
+    {{b: Box[char]}.x: char} = {item: char}
+    return {b: Box[char]}
 struct Box[char]:
     x: char
-def box[f32](item: T (inferred: f32)) -> Box<T> (return inferred: Box<f32>):
-    b : Box<f32> = {Box<f32>(): Box<f32>} [synth]
-    {{b: Box<f32>}.x: f32} = {item: f32}
-    return {b: Box<f32>}
+def box[f32](item: T (inferred: f32)) -> Box<T> (return inferred: Box[f32]):
+    b : Box[f32] = {Box[f32](): Box[f32]} [synth]
+    {{b: Box[f32]}.x: f32} = {item: f32}
+    return {b: Box[f32]}
 struct Box[f32]:
     x: f32
-def box[i32](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
-    b : Box<i32> = {Box<i32>(): Box<i32>} [synth]
-    {{b: Box<i32>}.x: i32} = {item: i32}
-    return {b: Box<i32>}
+def box[i32](item: T (inferred: i32)) -> Box<T> (return inferred: Box[i32]):
+    b : Box[i32] = {Box[i32](): Box[i32]} [synth]
+    {{b: Box[i32]}.x: i32} = {item: i32}
+    return {b: Box[i32]}
 struct Box[i32]:
     x: i32
 ";
@@ -1276,9 +1315,12 @@ def box<T>(item: T) -> Box<T>:
     return Box<T>()
 
 def main():
-    x = box(1)
+    y = 1
+    x = box(&y)
+    x.x = &y
 ",
     );
+    println!("{result}");
 
     //ignorable error
     typing_result.expect("Compiler should be forgiving skolem mismatches for now");
@@ -1286,23 +1328,16 @@ def main():
 
     let expected = "
 def main() -> Void (return inferred: Void):
-    x : Box<i32> = {{box[i32]: (i32) -> Box<i32>}({1: i32}): Box<i32>} [synth]
-def box[i32](item: T (inferred: i32)) -> Box<T> (return inferred: Box<i32>):
-    return {Box<i32>(): Box<i32>}
-struct Box[i32]:
-    x: i32
+    y : i32 = {1: i32} [synth]
+    x : Box[ptr<i32>] = {{box[ptr<i32>]: (ptr<i32>) -> Box[ptr<i32>]}({&{y: i32}: ptr<i32>}): Box[ptr<i32>]} [synth]
+    {{x: Box[ptr<i32>]}.x: ptr<i32>} = {&{y: i32}: ptr<i32>}
+def box[ptr<i32>](item: T (inferred: ptr<i32>)) -> Box<T> (return inferred: Box[ptr<i32>]):
+    return {Box[ptr<i32>](): Box[ptr<i32>]}
+struct Box[ptr<i32>]:
+    x: ptr<i32>
 ";
 
-    println!("{result}");
-
-    assert_eq!(expected.trim(), result.trim());
-
-    let mut typer = Typer::new(&mut ty_db);
-    typer
-        .assign_types(&mut hir)
-        .expect("Should NOT have gotten an error");
-    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
-    println!("ERRORS: \n{printer}");
+    pretty_assertions::assert_eq!(expected.trim(), result.trim());
 }
 
 #[test]
@@ -1350,47 +1385,6 @@ def main() -> i32 (return inferred: i32):
 }
 
 #[test]
-fn list_test_specific_instantiation() {
-    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
-        "
-struct List<T>:
-    buf: ptr<T>
-
-# Creates a new list
-def list_new<T>() -> List<T>:
-    return List<T>()
-
-def main():
-    list = list_new<i32>()
-",
-    );
-
-    //ignorable error
-    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
-    assert_eq!(errors.len(), 0);
-
-    let expected = "
-def main() -> Void (return inferred: Void):
-    list : List<i32> = {{list_new[i32]: () -> List<i32>}(): List<i32>} [synth]
-def list_new[i32]() -> List<T> (return inferred: List<i32>):
-    return {List<i32>(): List<i32>}
-struct List[i32]:
-    buf: ptr<i32>
-";
-
-    println!("{result}");
-
-    assert_eq!(expected.trim(), result.trim());
-
-    let mut typer = Typer::new(&mut ty_db);
-    typer
-        .assign_types(&mut hir)
-        .expect("Should have NOT gotten an error");
-    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
-    println!("ERRORS: \n{printer}");
-}
-
-#[test]
 fn list_test_fully_inferred() {
     let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
         "
@@ -1412,9 +1406,9 @@ def main():
 
     let expected = "
 def main() -> Void (return inferred: Void):
-    list : List<i32> = {{list_new[i32]: (i32) -> List<i32>}({99: i32}): List<i32>} [synth]
-def list_new[i32](i: T (inferred: i32)) -> List<T> (return inferred: List<i32>):
-    return {List<i32>(): List<i32>}
+    list : List[i32] = {{list_new[i32]: (i32) -> List[i32]}({99: i32}): List[i32]} [synth]
+def list_new[i32](i: T (inferred: i32)) -> List<T> (return inferred: List[i32]):
+    return {List[i32](): List[i32]}
 struct List[i32]:
     buf: ptr<i32>
 ";
@@ -1422,17 +1416,10 @@ struct List[i32]:
     println!("{result}");
 
     assert_eq!(expected.trim(), result.trim());
-
-    let mut typer = Typer::new(&mut ty_db);
-    typer
-        .assign_types(&mut hir)
-        .expect("Should NOT have gotten an error");
-    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
-    println!("ERRORS: \n{printer}");
 }
 
 #[test]
-fn list_test_full() {
+fn list_test_with_impl() {
     let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
         "
 struct List<T>:
@@ -1454,36 +1441,40 @@ def mem_alloc<T>(size: u64) -> ptr<T>:
 def mem_free<T>(ptr: ptr<T>):
     intrinsic
 
-# Adds an item to the list
-def list_add<T>(list: ptr<List<T>>, item: T):
-    len = (*list).len
-    cap = (*list).cap
-    if len == cap:
-        if len == 0:
-            (*list).cap = 4
-        else:
-            (*list).cap = cap * 2
+impl List<T>:
+    def add(self, item: T):
+        len = (*self).len
+        cap = (*self).cap
+        if len == cap:
+            if len == 0:
+                (*self).cap = 4
+            else:
+                (*self).cap = cap * 2
 
-        new_allocation = mem_alloc<T>((*list).cap)
-        if len > 0:
-            i: u64 = 0
-            while i < len:
-                new_allocation[i] = (*list).buf[i]
-                i = i + 1
-            mem_free((*list).buf)
+            new_allocation = mem_alloc<T>((*self).cap)
+            if len > 0:
+                i: u64 = 0
+                while i < len:
+                    new_allocation[i] = (*self).buf[i]
+                    i = i + 1
+                mem_free((*self).buf)
 
-        (*list).buf = new_allocation
+            (*self).buf = new_allocation
 
-    (*list).buf[len] = item
-    (*list).len = len + 1
+        (*self).buf[len] = item
+        (*self).len = len + 1
 
-def list_get<T>(list: ptr<List<T>>, index: u64) -> T:
-    return (*list).buf[index]
+    def get(self, index: u64) -> T:
+        return (*self).buf[index]
+
+    def __index_ptr__(self, index: u64) -> ptr<T>:
+        return &(*self).buf[index]
 
 def main():
     list = list_new()
-    list_add(&list, 1)
-    x = list_get(&list, 0)
+    list.add(1)
+    x = list.get(0)
+    y = list[0]
 ",
     );
 
@@ -1493,56 +1484,90 @@ def main():
 
     let expected = "
 def main() -> Void (return inferred: Void):
-    list : List<i32> = {{list_new[i32]: () -> List<i32>}(): List<i32>} [synth]
-    {list_add[i32]: (ptr<List<i32>>, i32) -> Void}({&{list: List<i32>}: ptr<List<i32>>}, {1: i32})
-    x : i32 = {{list_get[i32]: (ptr<List<i32>>, u64) -> i32}({&{list: List<i32>}: ptr<List<i32>>}, {0: u64}): i32} [synth]
-def list_get[i32](list: ptr<List<T>> (inferred: ptr<List<i32>>), index: u64 (inferred: u64)) -> T (return inferred: i32):
-    return {*{{{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>}.__index_ptr__({index: u64}): ptr<i32>}: i32}
-def list_add[i32](list: ptr<List<T>> (inferred: ptr<List<i32>>), item: T (inferred: i32)) -> Void (return inferred: Void):
-    len : u64 = {{*{list: ptr<List<i32>>}: List<i32>}.len: u64} [synth]
-    cap : u64 = {{*{list: ptr<List<i32>>}: List<i32>}.cap: u64} [synth]
-    if {{len: u64} == {cap: u64}: bool}:
-        if {{len: u64} == {0: i32}: bool}:
-            {{*{list: ptr<List<i32>>}: List<i32>}.cap: u64} = {4: u64}
-        else:
-            {{*{list: ptr<List<i32>>}: List<i32>}.cap: u64} = {{cap: u64} * {2: u64}: u64}
-        new_allocation : ptr<i32> = {{mem_alloc[i32]: (u64) -> ptr<i32>}({{*{list: ptr<List<i32>>}: List<i32>}.cap: u64}): ptr<i32>} [synth]
-        if {{len: u64} > {0: i32}: bool}:
-            i : u64 = {0: u64} (inferred: u64)
-            while {{i: u64} < {len: u64}: bool}:
-                {*{{new_allocation: ptr<i32>}.__index_ptr__({i: u64}): ptr<i32>}: i32} = {*{{{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>}.__index_ptr__({i: u64}): ptr<i32>}: i32}
-                {i: u64} = {{i: u64} + {1: u64}: u64}
-            {mem_free[i32]: (ptr<i32>) -> Void}({{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>})
-        else:
-            pass
-        {{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>} = {new_allocation: ptr<i32>}
-    else:
-        pass
-    {*{{{*{list: ptr<List<i32>>}: List<i32>}.buf: ptr<i32>}.__index_ptr__({len: u64}): ptr<i32>}: i32} = {item: i32}
-    {{*{list: ptr<List<i32>>}: List<i32>}.len: u64} = {{len: u64} + {1: u64}: u64}
+    list : List[i32] = {{list_new[i32]: () -> List[i32]}(): List[i32]} [synth]
+    {list: List[i32]}.add({1: i32})
+    x : i32 = {{list: List[i32]}.get({0: u64}): i32} [synth]
+    y : i32 = {*{{list: List[i32]}.__index_ptr__({0: u64}): ptr<i32>}: i32} [synth]
 def mem_free[i32](ptr: ptr<T> (inferred: ptr<i32>)) -> Void (return inferred: Void):
 def mem_alloc[i32](size: u64 (inferred: u64)) -> ptr<T> (return inferred: ptr<i32>):
-def list_new[i32]() -> List<T> (return inferred: List<i32>):
-    list : List<i32> = {List<i32>(): List<i32>} [synth]
-    {{list: List<i32>}.len: u64} = {0: u64}
-    {{list: List<i32>}.cap: u64} = {0: u64}
-    return {list: List<i32>}
+def list_new[i32]() -> List<T> (return inferred: List[i32]):
+    list : List[i32] = {List[i32](): List[i32]} [synth]
+    {{list: List[i32]}.len: u64} = {0: u64}
+    {{list: List[i32]}.cap: u64} = {0: u64}
+    return {list: List[i32]}
 struct List[i32]:
     buf: ptr<i32>
     len: u64
     cap: u64
+impl List[i32]:
+    def __index_ptr__[i32](self,     index: u64 (inferred: u64)) -> ptr<T> (return inferred: ptr<i32>):
+        return {&{*{{{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>}.__index_ptr__({index: u64}): ptr<i32>}: i32}: ptr<i32>}
+    def get[i32](self,     index: u64 (inferred: u64)) -> T (return inferred: i32):
+        return {*{{{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>}.__index_ptr__({index: u64}): ptr<i32>}: i32}
+    def add[i32](self,     item: T (inferred: i32)) -> Void (return inferred: Void):
+        len : u64 = {{*{self: ptr<List[i32]>}: List[i32]}.len: u64} [synth]
+        cap : u64 = {{*{self: ptr<List[i32]>}: List[i32]}.cap: u64} [synth]
+        if {{len: u64} == {cap: u64}: bool}:
+            if {{len: u64} == {0: i32}: bool}:
+                {{*{self: ptr<List[i32]>}: List[i32]}.cap: u64} = {4: u64}
+            else:
+                {{*{self: ptr<List[i32]>}: List[i32]}.cap: u64} = {{cap: u64} * {2: u64}: u64}
+            new_allocation : ptr<i32> = {{mem_alloc[i32]: (u64) -> ptr<i32>}({{*{self: ptr<List[i32]>}: List[i32]}.cap: u64}): ptr<i32>} [synth]
+            if {{len: u64} > {0: i32}: bool}:
+                i : u64 = {0: u64} (inferred: u64)
+                while {{i: u64} < {len: u64}: bool}:
+                    {*{{new_allocation: ptr<i32>}.__index_ptr__({i: u64}): ptr<i32>}: i32} = {*{{{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>}.__index_ptr__({i: u64}): ptr<i32>}: i32}
+                    {i: u64} = {{i: u64} + {1: u64}: u64}
+                {mem_free[i32]: (ptr<i32>) -> Void}({{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>})
+            else:
+                pass
+            {{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>} = {new_allocation: ptr<i32>}
+        else:
+            pass
+        {*{{{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>}.__index_ptr__({len: u64}): ptr<i32>}: i32} = {item: i32}
+        {{*{self: ptr<List[i32]>}: List[i32]}.len: u64} = {{len: u64} + {1: u64}: u64}
 ";
 
     println!("{result}");
 
     assert_eq!(expected.trim(), result.trim());
+}
 
-    let mut typer = Typer::new(&mut ty_db);
-    typer
-        .assign_types(&mut hir)
-        .expect("Should NOT have gotten an error");
-    let printer = TypeErrorPrinter::new(&typer.compiler_errors, &ty_db, &meta, &source.file_table);
-    println!("ERRORS: \n{printer}");
+#[test]
+fn index_ptr_test() {
+    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+        "
+struct List:
+    cap: i32
+
+impl List:
+    def __index_ptr__(self, index: u64) -> ptr<i32>:
+        return &0
+
+def main():
+    list = List()
+    y = list[0]
+",
+    );
+
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct List:
+    cap: i32
+impl List:
+    def __index_ptr__(self,     index: u64 (inferred: u64)) -> ptr<i32> (return inferred: ptr<i32>):
+        return {&{0: i32}: ptr<i32>}
+def main() -> Void (return inferred: Void):
+    list : List = {List(): List} [synth]
+    y : i32 = {*{{list: List}.__index_ptr__({0: u64}): ptr<i32>}: i32} [synth]
+";
+
+    println!("{result}");
+
+    assert_eq!(expected.trim(), result.trim());
 }
 
 #[test]
@@ -1664,23 +1689,58 @@ def main():
     y = s.foo()
 ",
     );
-
+    println!("{result}");
     typing_result.expect("Typing error");
     assert_eq!(errors.len(), 0);
 
     let expected = "
 def main() -> Void (return inferred: Void):
-    s : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
-    {{s: SomeStruct<i32>}.x: i32} = {1: i32}
-    y : i32 = {{s: SomeStruct<i32>}.foo(): i32} [synth]
+    s : SomeStruct[i32] = {SomeStruct[i32](): SomeStruct[i32]} [synth]
+    {{s: SomeStruct[i32]}.x: i32} = {1: i32}
+    y : i32 = {{s: SomeStruct[i32]}.foo(): i32} [synth]
 struct SomeStruct[i32]:
     x: i32
 impl SomeStruct[i32]:
     def foo[i32](self) -> F (return inferred: i32):
-        return {{*{self: ptr<SomeStruct<i32>>}: SomeStruct<i32>}.x: i32}
+        return {{*{self: ptr<SomeStruct[i32]>}: SomeStruct[i32]}.x: i32}
+";
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
+/**
+ * This is because errors of this kind are caught in MIR type checker.
+ */
+#[test]
+fn no_type_errors_on_hir_after_mono() {
+    let (.., result, _, errors) = setup_mono(
+        "
+struct ToyotaCorolla:
+    year: u32
+
+def sum<T>(i: i32, u: T) -> T:
+    return i + u
+
+def main():
+    corolla = ToyotaCorolla()
+    corolla.year = 2025
+    sum(69, corolla)
+",
+    );
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct ToyotaCorolla:
+    year: u32
+def main() -> Void (return inferred: Void):
+    corolla : ToyotaCorolla = {ToyotaCorolla(): ToyotaCorolla} [synth]
+    {{corolla: ToyotaCorolla}.year: u32} = {2025: u32}
+    {sum[ToyotaCorolla]: (i32, ToyotaCorolla) -> ToyotaCorolla}({69: i32}, {corolla: ToyotaCorolla})
+def sum[ToyotaCorolla](i: i32 (inferred: i32), u: T (inferred: ToyotaCorolla)) -> T (return inferred: ToyotaCorolla):
+    return {{i: i32} + {u: ToyotaCorolla}: i32}
 ";
 
     println!("{result}");
 
-    assert_eq!(expected.trim(), result.trim());
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
 }

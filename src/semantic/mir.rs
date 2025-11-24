@@ -2,14 +2,14 @@ use std::any::Any;
 use std::collections::VecDeque;
 
 use super::hir::{
-    FunctionCall, HIRExpr, HIRRoot, HIRTypedBoundName, LiteralHIRExpr, MethodCall, NodeIndex,
-    TypeIndex, TypeTable, HIR,
+    FunctionCall, HIR, HIRExpr, HIRRoot, HIRTypedBoundName, LiteralHIRExpr, MethodCall, NodeIndex,
+    TypeIndex, TypeTable,
 };
 use crate::ast::parser::SpannedOperator;
 use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 
-use crate::ast::parser::{Expr, AST};
+use crate::ast::parser::{AST, Expr};
 use crate::types::diagnostics::{
     CompilerErrorContext, ContextualizedCompilerError, DerefOnNonPointerError, RootElementType,
     TypeErrors,
@@ -158,6 +158,7 @@ pub enum MIRTopLevelNode {
         scopes: Vec<MIRScope>,
         return_type: TypeIndex,
         type_table: TypeTable,
+        struct_name: Option<InternedString>,
     },
 }
 
@@ -1173,6 +1174,7 @@ pub fn hir_to_mir(
                         scopes: mir_emitter.scopes,
                         return_type: return_type.type_variable,
                         type_table,
+                        struct_name: None,
                     };
                     top_levels.push(result);
                 }
@@ -1186,8 +1188,60 @@ pub fn hir_to_mir(
             } => {
                 //ignored, useless in MIR because the type db should be used instead
             }
-            HIRRoot::ImplDeclaration { .. } => {
-                todo!()
+            HIRRoot::ImplDeclaration {
+                struct_name,
+                type_parameters,
+                methods,
+                has_been_monomorphized,
+            } => {
+                for method in methods.into_iter() {
+                    match method {
+                        HIRRoot::DeclareFunction {
+                            function_name,
+                            type_parameters: _,
+                            parameters,
+                            body,
+                            return_type,
+                            is_intrinsic,
+                            is_varargs,
+                            is_external,
+                            method_of: _,
+                            type_table,
+                            has_been_monomorphized: _,
+                        } => {
+                            let mir_parameters = parameters
+                                .iter()
+                                .map(|x| MIRTypedBoundName {
+                                    name: x.name,
+                                    type_instance: x.type_data.type_variable,
+                                })
+                                .collect::<Vec<_>>();
+
+                            let mut mir_emitter = MIRFunctionEmitter::new(
+                                function_name,
+                                errors,
+                                type_table.clone(),
+                                body[0].get_node_index(),
+                            );
+
+                            mir_emitter.run(body, parameters)?;
+
+                            let result = MIRTopLevelNode::DeclareFunction {
+                                function_name: function_name,
+                                parameters: mir_parameters,
+                                body: mir_emitter.blocks,
+                                scopes: mir_emitter.scopes,
+                                return_type: return_type.type_variable,
+                                type_table: type_table.clone(),
+                                struct_name: Some(struct_name),
+                            };
+                            top_levels.push(result);
+                        }
+                        _ => {
+                            panic!("Unsupported")
+                        }
+                    }
+                }
             }
         }
     }

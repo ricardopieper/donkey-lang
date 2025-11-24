@@ -150,7 +150,7 @@ impl<'type_db> HIRPrinter<'type_db> {
         }
     }
 
-    fn print_hir_body_str(&self, node: &HIR, indent: &str, type_table: &TypeTable) -> String {
+    pub fn print_hir_body_str(&self, node: &HIR, indent: &str, type_table: &TypeTable) -> String {
         match node {
             HIR::Assign {
                 path, expression, ..
