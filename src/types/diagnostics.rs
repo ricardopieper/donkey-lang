@@ -1000,6 +1000,17 @@ macro_rules! make_type_errors {
                     self.$field.len() +
                 )* 0
             }
+
+            pub fn merge(mut self, other: TypeErrors) -> TypeErrors {
+                $(
+                   for item in other.$field.errors {
+                       self.$field.errors.push(item);
+                   }
+                )*
+
+                return self;
+            }
+
         }
 
         impl<'errors, 'callargs, 'type_db,'meta, 'files> Display for TypeErrorPrinter<'errors, 'type_db,'meta, 'files> {
@@ -1058,7 +1069,7 @@ impl<'errors, 'callargs, 'type_db, 'meta, 'files>
     }
 }
 
-pub const REPORT_COMPILER_ERR_LOCATION: bool = false;
+pub const REPORT_COMPILER_ERR_LOCATION: bool = true;
 
 make_type_errors!(
     unify_error = UnificationError,

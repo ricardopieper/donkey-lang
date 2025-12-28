@@ -17,7 +17,7 @@ use crate::{
         type_instance_db::{TypeInstanceId, TypeInstanceManager},
     },
 };
-
+use crate::semantic::typer::Typer;
 use super::hir::{
     FunctionCall, HIR, HIRExpr, HIRRoot, HIRTypedBoundName, MonoType, NodeIndex, PolyType,
     TypeParameter, TypeTable,
@@ -193,6 +193,11 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
             )?;
 
             if let Some(hir) = result {
+
+                //Run typer again
+                //Typer::new(self.type_db);
+
+
                 match &queue_item.polymorphic_root {
                     PolymorphicRoot::Function(..) => {
                         self.result.push((hir, queue_item.original_index))
@@ -202,7 +207,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                             HIRRoot::StructDeclaration {
                                 struct_name: resulting_name,
                                 ..
-                            } => {
+                            } if !queue_item.positional_type_arguments.is_empty() => {
                                 self.monomorphized_structs.push(MonomorphizedStruct {
                                     positional_type_arguments: queue_item
                                         .positional_type_arguments
@@ -211,6 +216,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                                     resulting_name: *resulting_name,
                                 });
                             }
+                            HIRRoot::StructDeclaration {..} => {},
                             _ => {
                                 panic!("Returned non-struct when struct was expected")
                             }
@@ -248,9 +254,9 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                     .map(|x| x.print_name(&self.type_db))
                     .collect::<Vec<_>>()
                     .join(",");
-                let old_function_name = impl_key.struct_name.to_string();
-                let new_function_name = format!("{}[{}]", old_function_name, impl_name_suffix);
-                InternedString::new(&new_function_name)
+                let old_struct_name = impl_key.struct_name.to_string();
+                let new_struct_name = format!("{}[{}]", old_struct_name, impl_name_suffix);
+                InternedString::new(&new_struct_name)
             };
 
             let mono_impl = HIRRoot::ImplDeclaration {
@@ -526,46 +532,20 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                     &mut new_type_table,
                 )?;
 
-                if positional_type_arguments.len() > 0 {
-                    //foo<i32, i32>(...) -> foo[i32,i32](...) (unnameable function, parser wont let you call a monomorphizer-generated function directly)
-                    let new_function_name_suffix = positional_type_arguments
-                        .iter()
-                        .map(|x| x.print_name(&self.type_db))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let old_function_name = function_name.to_string();
-                    let new_function_name =
-                        format!("{}[{}]", old_function_name, new_function_name_suffix);
-                    let interned_function_name = InternedString::new(&new_function_name);
+                Ok(Some(HIRRoot::DeclareFunction {
+                    function_name: function_name.clone(),
+                    type_parameters: vec![],
+                    parameters: parameters.clone(),
+                    body: body.clone(),
+                    return_type: return_type.clone(),
+                    is_intrinsic: *is_intrinsic,
+                    is_varargs: *is_varargs,
+                    is_external: *is_external,
+                    method_of: method_of.clone(),
+                    type_table: new_type_table,
+                    has_been_monomorphized: true,
+                }))
 
-                    Ok(Some(HIRRoot::DeclareFunction {
-                        function_name: interned_function_name,
-                        type_parameters: vec![],
-                        parameters: parameters.clone(),
-                        body: body.clone(),
-                        return_type: return_type.clone(),
-                        is_intrinsic: *is_intrinsic,
-                        is_varargs: *is_varargs,
-                        is_external: *is_external,
-                        method_of: method_of.clone(),
-                        type_table: new_type_table,
-                        has_been_monomorphized: true,
-                    }))
-                } else {
-                    Ok(Some(HIRRoot::DeclareFunction {
-                        function_name: *function_name,
-                        type_parameters: vec![],
-                        parameters: parameters.clone(),
-                        body: body.clone(),
-                        return_type: return_type.clone(),
-                        type_table: new_type_table,
-                        is_intrinsic: *is_intrinsic,
-                        is_varargs: *is_varargs,
-                        is_external: *is_external,
-                        method_of: method_of.clone(),
-                        has_been_monomorphized: true,
-                    }))
-                }
             }
         }
     }
@@ -826,6 +806,8 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         //remove quantifiers from call
         //call.type_args = vec![];
 
+        //@TODO generate new method name here and replace, like functions already do (???)
+
         Ok(())
     }
 
@@ -912,7 +894,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                 )?
             }
             HIRExpr::Ref(derrefed_expr, ty, meta) => {
-                log!("Monomorphizing deref");
+                log!("Monomorphizing ref");
 
                 self.find_poly_instantiations_in_exprs(
                     on_function,

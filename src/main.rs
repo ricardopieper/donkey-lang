@@ -1,6 +1,5 @@
 #![allow(incomplete_features)]
 #![feature(assert_matches)]
-#![feature(let_chains)]
 #![feature(generic_const_exprs)]
 #![feature(const_trait_impl)]
 #![feature(thread_local)]

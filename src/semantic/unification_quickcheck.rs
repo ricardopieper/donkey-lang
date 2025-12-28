@@ -89,19 +89,16 @@ mod tests {
         println!("m1: {:#?}", m1);
         let mut db = TypeConstructorDatabase::new();
         let mut sut = Typer::new(&mut db);
-        match sut.unify(
+        if let Ok(uni) = sut.unify(
             &m1,
             &m2,
             NodeIndex::none(),
             &RootElementType::Function("test".into()),
         ) {
-            Ok(uni) => {
-                let uni_m1 = m1.apply_substitution(&uni);
-                let uni_m2 = m1.apply_substitution(&uni);
+            let uni_m1 = m1.apply_substitution(&uni);
+            let uni_m2 = m1.apply_substitution(&uni);
 
-                assert_eq!(uni_m1, uni_m2);
-            }
-            Err(_) => {}
+            assert_eq!(uni_m1, uni_m2);
         };
         true
     }

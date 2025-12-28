@@ -472,18 +472,25 @@ impl MonoType {
     }
 
     //recurses through application arguments and substitutes everything it can find
-    pub fn apply_mono_substitution(&mut self, find: &MonoType, target: &MonoType) {
+    pub fn apply_mono_substitution(&mut self, find: &MonoType, target: &MonoType) -> bool {
         if self == find {
             *self = target.clone();
-            return;
+            return true;
         }
         match self {
             MonoType::Application(_, args) => {
+                let mut any = false;
                 for arg in args.iter_mut() {
-                    arg.apply_mono_substitution(find, target);
+                    let r = arg.apply_mono_substitution(find, target);
+                    if r {
+                        any = true;
+                    }
                 }
+                return any;
             }
-            _ => {}
+            _ => {
+                return false;
+            }
         }
     }
 
@@ -717,6 +724,7 @@ impl TypeTable {
 
     pub fn next(&mut self) -> TypeIndex {
         let var_name = format!("'t{}", self.ty_var_current);
+        log!("PRODUCED {var_name}");
         let r = self.next_with(PolyType::mono(MonoType::Variable(TypeVariable(
             InternedString::new(&var_name),
         ))));
@@ -796,8 +804,11 @@ impl TypeTable {
     //used after monomorphization to normalize all types to their monomorphic version.
     //
     pub fn apply_function_wide_mono_substitution(&mut self, find: &MonoType, target: &MonoType) {
-        for (_, entry) in self.table.iter_mut().enumerate() {
-            entry.mono.apply_mono_substitution(find, target);
+        for (i, entry) in self.table.iter_mut().enumerate() {
+            let replaced = entry.mono.apply_mono_substitution(find, target);
+            if replaced {
+                log!("Replaced at index {i}");
+            }
         }
     }
 }

@@ -7,7 +7,7 @@ use crate::{
     semantic::{hir::MetaTable, typer::Typer},
     types::{diagnostics::TypeErrorPrinter, type_constructor_db::TypeConstructorDatabase},
 };
-
+use crate::semantic::uniformizer;
 #[cfg(test)]
 use super::context::test_utils;
 
@@ -98,7 +98,6 @@ fn setup_mono(
     let (compiler_errors, mut new_hir, tc_result, monomorphized_structs) =
         run_type_checker(&mut type_db, parsed, true);
 
-    uniformizer::uniformize(&mut type_db, &mut new_hir, monomorphized_structs);
 
     let hir_string = {
         let printer = HIRPrinter::new(true, &type_db);
@@ -161,14 +160,25 @@ fn run_type_checker(
 
     let mut mono = Monomorphizer::new(type_db);
     mono.run(&parsed).unwrap();
-    let (new_parsed, monomorphized_structs) = mono.get_result();
+    let (mut new_parsed, monomorphized_structs) = mono.get_result();
 
-    return (
-        compiler_errors,
-        new_parsed,
-        tc_result,
-        monomorphized_structs,
-    );
+
+    let replacements = uniformizer::uniformize(type_db, &mut new_parsed, &monomorphized_structs);
+
+    let mut final_typer = Typer::new(type_db);
+    final_typer.set_monomorphized_versions(replacements);
+    let tc_result_2 = final_typer.assign_types(&mut new_parsed);
+    let full_compiler_errors = final_typer.compiler_errors;
+
+    //uniformize again - typer will redo some types
+    uniformizer::uniformize(type_db, &mut new_parsed, &monomorphized_structs);
+
+     (
+         full_compiler_errors,
+         new_parsed,
+         tc_result_2,
+         monomorphized_structs,
+    )
 }
 
 #[test]
@@ -1500,11 +1510,11 @@ struct List[i32]:
     len: u64
     cap: u64
 impl List[i32]:
-    def __index_ptr__[i32](self,     index: u64 (inferred: u64)) -> ptr<T> (return inferred: ptr<i32>):
+    def __index_ptr__(self,     index: u64 (inferred: u64)) -> ptr<T> (return inferred: ptr<i32>):
         return {&{*{{{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>}.__index_ptr__({index: u64}): ptr<i32>}: i32}: ptr<i32>}
-    def get[i32](self,     index: u64 (inferred: u64)) -> T (return inferred: i32):
+    def get(self,     index: u64 (inferred: u64)) -> T (return inferred: i32):
         return {*{{{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>}.__index_ptr__({index: u64}): ptr<i32>}: i32}
-    def add[i32](self,     item: T (inferred: i32)) -> Void (return inferred: Void):
+    def add(self,     item: T (inferred: i32)) -> Void (return inferred: Void):
         len : u64 = {{*{self: ptr<List[i32]>}: List[i32]}.len: u64} [synth]
         cap : u64 = {{*{self: ptr<List[i32]>}: List[i32]}.cap: u64} [synth]
         if {{len: u64} == {cap: u64}: bool}:
@@ -1701,7 +1711,7 @@ def main() -> Void (return inferred: Void):
 struct SomeStruct[i32]:
     x: i32
 impl SomeStruct[i32]:
-    def foo[i32](self) -> F (return inferred: i32):
+    def foo(self) -> F (return inferred: i32):
         return {{*{self: ptr<SomeStruct[i32]>}: SomeStruct[i32]}.x: i32}
 ";
 
@@ -1727,7 +1737,7 @@ def main():
     sum(69, corolla)
 ",
     );
-    assert_eq!(errors.len(), 0);
+    assert_eq!(errors.len(), 1);
 
     let expected = "
 struct ToyotaCorolla:

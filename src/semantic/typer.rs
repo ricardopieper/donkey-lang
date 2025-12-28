@@ -25,7 +25,7 @@ use crate::{
         },
     },
 };
-
+use crate::semantic::uniformizer::UniformizedTypes;
 use super::{
     hir::{
         FunctionCall, HIR, HIRRoot, HIRTypeWithTypeVariable, HIRTypedBoundName, LiteralHIRExpr,
@@ -74,6 +74,7 @@ pub struct Typer<'tydb> {
     pub type_database: &'tydb mut TypeConstructorDatabase,
     pub compiler_errors: TypeErrors,
     pub forgive_skolem_mismatch: bool,
+    pub monomorphized_versions: Vec<UniformizedTypes>
 }
 
 #[derive(Debug)]
@@ -142,6 +143,7 @@ impl<'db, 'subs> fmt::Display for SubstitutionPrinter<'db, 'subs> {
 pub struct Unifier<'ctx> {
     type_errors: &'ctx mut TypeErrors,
     type_database: &'ctx TypeConstructorDatabase,
+    forgive_list: &'ctx [UniformizedTypes]
 }
 
 impl<'ctx> Unifier<'ctx> {
@@ -152,6 +154,18 @@ impl<'ctx> Unifier<'ctx> {
         Self {
             type_errors,
             type_database,
+            forgive_list: &[]
+        }
+    }
+    pub fn new_with_forgive_list(
+        type_errors: &'ctx mut TypeErrors,
+        type_database: &'ctx TypeConstructorDatabase,
+        forgive_list: &'ctx [UniformizedTypes]
+    ) -> Self {
+        Self {
+            type_errors,
+            type_database,
+            forgive_list
         }
     }
 
@@ -187,6 +201,14 @@ impl<'ctx> Unifier<'ctx> {
     ) -> Result<Substitution, UnificationMismatchingTypes> {
         // println!("Unifying {:#?} with {:#?}", original, target);
         let mut substitution = Substitution(HashMap::new());
+
+        //find pair in forgive list
+        for UniformizedTypes {original: forgive_original, replaced: forgive_replaced} in self.forgive_list {
+            if (original == forgive_original && target == forgive_replaced)
+                || (original == forgive_replaced && target == forgive_original) {
+                return Ok(substitution);
+            }
+        }
 
         match (original, target) {
             (MonoType::Variable(tv), MonoType::Variable(i2)) if tv == i2 => {
@@ -366,7 +388,12 @@ impl<'tydb> Typer<'tydb> {
             type_database,
             compiler_errors: TypeErrors::new(),
             forgive_skolem_mismatch: false,
+            monomorphized_versions: vec![]
         }
+    }
+
+    pub fn set_monomorphized_versions(&mut self, monomorphized_versions: Vec<UniformizedTypes>) {
+        self.monomorphized_versions = monomorphized_versions;
     }
 
     pub fn forgive_skolem_mismatches(&mut self) {
@@ -384,6 +411,7 @@ impl<'tydb> Typer<'tydb> {
         let hir_after_globals = HIRPrinter::new(true, &self.type_database).print_hir(hir);
 
         log!("HIR After Globals: {hir_after_globals}");
+        //TODO: Monomorphizer output in same order
         let r = self.infer_types_for_roots(hir);
 
         let hir_after_inference = HIRPrinter::new(true, &self.type_database).print_hir(hir);
@@ -404,14 +432,29 @@ impl<'tydb> Typer<'tydb> {
                     type_parameters,
                     fields,
                     type_table,
-                    has_been_monomorphized: _,
+                    has_been_monomorphized,
                 } => {
-                    let ty = self.type_database.add_generic(
-                        TypeKind::Struct,
-                        *struct_name,
-                        type_parameters.clone(),
-                    );
+                    //TODO: Check for existing ones if they have been monomorphized
 
+                    let ty = if *has_been_monomorphized {
+                        let found = self.type_database.find_by_name(*struct_name);
+                        if let Some(found_type) = found {
+                            found_type.id
+                        } else {
+                            self.type_database.add_generic(
+                                TypeKind::Struct,
+                                *struct_name,
+                                type_parameters.clone(),
+                            )
+                        }
+
+                    } else {
+                        self.type_database.add_generic(
+                            TypeKind::Struct,
+                            *struct_name,
+                            type_parameters.clone(),
+                        )
+                    };
                     self.globals.insert(*struct_name, ty);
                 }
                 _ => {}
@@ -518,7 +561,9 @@ impl<'tydb> Typer<'tydb> {
         idx: NodeIndex,
         root: &RootElementType,
     ) -> Result<Substitution, UnificationErrorStack> {
-        let mut unifier = Unifier::new(&mut self.compiler_errors, self.type_database);
+        let mut unifier = Unifier::new_with_forgive_list(
+            &mut self.compiler_errors, self.type_database, &self.monomorphized_versions);
+        //unifier.set_forgive_list(&self.monomorphized_versions);
         unifier.unify(original, target, idx, root, self.forgive_skolem_mismatch)
     }
 
@@ -1254,45 +1299,9 @@ impl<'tydb> Typer<'tydb> {
 
     #[must_use]
     fn infer_types_for_roots(&mut self, hir: &mut [HIRRoot]) -> Result<(), ()> {
+        //Infer methods and impls first so that they don't need to be pre-declared
         for root in hir.iter_mut() {
             match root {
-                HIRRoot::DeclareFunction {
-                    function_name,
-                    type_parameters,
-                    parameters,
-                    body,
-                    return_type,
-                    method_of: _,
-                    is_intrinsic,
-                    is_external,
-                    is_varargs,
-                    type_table,
-                    has_been_monomorphized: _,
-                } => {
-                    let mut typing_context = TypingContext::new();
-
-                    self.infer_type_for_function(
-                        function_name,
-                        type_parameters,
-                        parameters,
-                        body,
-                        return_type,
-                        is_intrinsic,
-                        is_external,
-                        is_varargs,
-                        type_table,
-                        &mut typing_context,
-                    )?;
-                }
-                HIRRoot::StructDeclaration {
-                    struct_name,
-                    type_parameters,
-                    fields,
-                    type_table,
-                    has_been_monomorphized: _,
-                } => {
-                    //already handled
-                }
                 HIRRoot::ImplDeclaration {
                     struct_name,
                     type_parameters,
@@ -1478,7 +1487,43 @@ impl<'tydb> Typer<'tydb> {
                             &mut typing_context,
                         )?;
                     }
+                },
+                _ => {}
+            }
+        }
+
+
+        for root in hir.iter_mut() {
+            match root {
+                HIRRoot::DeclareFunction {
+                    function_name,
+                    type_parameters,
+                    parameters,
+                    body,
+                    return_type,
+                    method_of: _,
+                    is_intrinsic,
+                    is_external,
+                    is_varargs,
+                    type_table,
+                    has_been_monomorphized: _,
+                } => {
+                    let mut typing_context = TypingContext::new();
+
+                    self.infer_type_for_function(
+                        function_name,
+                        type_parameters,
+                        parameters,
+                        body,
+                        return_type,
+                        is_intrinsic,
+                        is_external,
+                        is_varargs,
+                        type_table,
+                        &mut typing_context,
+                    )?;
                 }
+                _ => {}
             }
         }
 
@@ -1738,14 +1783,17 @@ impl<'tydb> Typer<'tydb> {
                 let new_mono = MonoType::Application(ptr_ctor, vec![mono_of_variable]);
 
                 let unify_result = self.unify(&new_mono, mono_ptr_ty, *location, root);
-                let report_error = |errors: &mut TypeErrors| {
+                let report_error = |
+                    left: MonoType,
+                    right: MonoType,
+                    errors: &mut TypeErrors| {
                     errors.unify_error.push(CompilerErrorContext {
                         error: UnificationError {
                             stack: UnificationErrorStack(vec![(
-                                mono_ptr_ty.clone(),
-                                new_mono.clone(),
+                                left,
+                                right,
                             )]),
-                            context: format!("On deref expression"),
+                            context: format!("On deref expression, trying to extract pointee"),
                         },
                         location: ptr_expr.get_node_index(),
                         compiler_code_location: loc!(),
@@ -1753,7 +1801,7 @@ impl<'tydb> Typer<'tydb> {
                     });
                 };
                 let Ok(substitution) = unify_result else {
-                    report_error(&mut self.compiler_errors);
+                    report_error(new_mono,mono_ptr_ty.clone(), &mut self.compiler_errors);
                     return Err(());
                 };
 
@@ -1770,7 +1818,9 @@ impl<'tydb> Typer<'tydb> {
                 );
 
                 let Ok(substitution) = unify_result else {
-                    report_error(&mut self.compiler_errors);
+                    report_error(inferred_type_of_deref.expect_mono().clone(),
+                                 deref_type.expect_mono().clone(),
+                                 &mut self.compiler_errors);
                     return Err(());
                 };
 

@@ -10,14 +10,21 @@ use crate::{
     types::type_constructor_db::{TypeConstructorDatabase, TypeKind},
 };
 
+#[derive(Debug)]
+pub struct UniformizedTypes {
+    pub original: MonoType,
+    pub replaced: MonoType,
+}
+
 pub fn uniformize(
     type_db: &mut TypeConstructorDatabase,
     hir: &mut [HIRRoot],
-    monomorphized_structs: Vec<MonomorphizedStruct>,
-) {
+    monomorphized_structs: &[MonomorphizedStruct],
+) -> Vec<UniformizedTypes> {
+    let mut result = vec![];
     let mut new_type_ids = HashMap::new();
     //first collect all the new struct names, then add the fields later
-    for monomorphized_struct in &monomorphized_structs {
+    for monomorphized_struct in monomorphized_structs {
         for root in hir.iter() {
             match root {
                 HIRRoot::StructDeclaration { struct_name, .. }
@@ -32,7 +39,7 @@ pub fn uniformize(
     }
 
     //now add the fields
-    for monomorphized_struct in &monomorphized_structs {
+    /*for monomorphized_struct in monomorphized_structs {
         for root in hir.iter() {
             match root {
                 HIRRoot::StructDeclaration {
@@ -50,13 +57,13 @@ pub fn uniformize(
                 _ => {}
             }
         }
-    }
+    }*/
 
     //now we need to find all of the originals and know how to translate them to the monomorphized version in
     //all type tables.
     //find the struct name by its name - the database will contain the generic version
 
-    for monomorphized_struct in &monomorphized_structs {
+    for monomorphized_struct in monomorphized_structs {
         let original_type = type_db
             .find_by_name(monomorphized_struct.struct_name)
             .expect("Should be impossible to not find it at this point");
@@ -70,6 +77,11 @@ pub fn uniformize(
             MonoType::Application(id, monomorphized_struct.positional_type_arguments.clone());
 
         let mono_target = MonoType::Application(ty, vec![]);
+
+        result.push(UniformizedTypes {
+            original: mono_to_find.clone(),
+            replaced: mono_target.clone(),
+        });
 
         for root in hir.iter_mut() {
             match root {
@@ -100,4 +112,8 @@ pub fn uniformize(
             }
         }
     }
+
+    log!("Uniformization done");
+
+    return result;
 }

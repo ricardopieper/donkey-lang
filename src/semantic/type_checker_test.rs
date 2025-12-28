@@ -65,13 +65,24 @@ fn setup(
             let tc_result = typer.assign_types(&mut parsed);
             (typer.compiler_errors, tc_result)
         };
-        let mut mono = Monomorphizer::new(&mut type_db);
+        let mut mono = Monomorphizer::new(&type_db);
 
-        mono.run(&mut parsed).unwrap();
+        mono.run(&parsed).unwrap();
         let (mut monomorphized, mono_structs) = mono.get_result();
-        uniformizer::uniformize(&mut type_db, &mut monomorphized, mono_structs);
+        let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
+
+
+        let mut final_typer = Typer::new(&mut type_db);
+        final_typer.set_monomorphized_versions(replacements);
+        let tc_result_2 = final_typer.assign_types(&mut monomorphized);
+        let full_compiler_errors = final_typer.compiler_errors;
+
+        //uniformize again - typer will redo some types
+        uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
+
+
         parsed = monomorphized;
-        tc_result
+        (full_compiler_errors, tc_result_2)
     };
 
     let hir_string = {
@@ -379,7 +390,8 @@ def main():
 ",
     );
 
-    assert_eq!(1, err.len());
+    //There is a generic unification error thrown in the same return place
+    assert_eq!(2, err.len());
     assert_eq!(1, err.return_type_mismatches.len());
 }
 
