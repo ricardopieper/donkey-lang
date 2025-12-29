@@ -1,13 +1,11 @@
 #[cfg(test)]
 use crate::semantic::{hir_printer::HIRPrinter, monomorph::MonomorphizedStruct};
 
-use crate::types::diagnostics::FunctionName;
 #[cfg(test)]
 use crate::{
     semantic::{hir::MetaTable, typer::Typer},
     types::{diagnostics::TypeErrorPrinter, type_constructor_db::TypeConstructorDatabase},
 };
-use crate::semantic::uniformizer;
 #[cfg(test)]
 use super::context::test_utils;
 
@@ -86,7 +84,7 @@ fn setup_mono(
     Result<(), ()>,
     TypeErrors,
 ) {
-    use crate::semantic::uniformizer;
+    
 
     let mut type_db = TypeConstructorDatabase::new();
     let mut meta_table = MetaTable::new();
@@ -95,14 +93,13 @@ fn setup_mono(
     let parsed = ast_globals_to_hir(&original_src.file_table[0].ast, &type_db, &mut meta_table);
 
     //Run type check + monomorphization
-    let (compiler_errors, mut new_hir, tc_result, monomorphized_structs) =
+    let (compiler_errors, new_hir, tc_result, monomorphized_structs) =
         run_type_checker(&mut type_db, parsed, true);
 
 
     let hir_string = {
         let printer = HIRPrinter::new(true, &type_db);
         let s = printer.print_hir(&new_hir);
-        log!("should be correct here!\n{s}");
 
         s
     };
@@ -137,11 +134,11 @@ fn run_type_checker(
     Vec<MonomorphizedStruct>,
 ) {
     use crate::semantic::monomorph::Monomorphizer;
+    use crate::semantic::uniformizer;
 
     {
         let printer = HIRPrinter::new(true, type_db);
         let s = printer.print_hir(&parsed);
-        log!("Right before assigning types!\n{s}");
     };
     let mut typer = Typer::new(type_db);
     typer.forgive_skolem_mismatches();
@@ -153,7 +150,6 @@ fn run_type_checker(
         {
             let printer = HIRPrinter::new(true, type_db);
             let s = printer.print_hir(&parsed);
-            log!("Right after assigning types!\n{s}");
         };
         return (compiler_errors, parsed, tc_result, vec![]);
     }
@@ -707,6 +703,7 @@ def bar<U, T>(u: U (inferred: U), t: T (inferred: T)) -> U (return inferred: U):
 
 #[test]
 fn generic_args_tests3_fails_because_needs_more_ptr() {
+    use crate::types::diagnostics::FunctionName;
     let (.., result, typing_result, errors) = setup(
         "
 def baz<T, U>(x: ptr<ptr<T>>, y: ptr<U>) -> U:
@@ -1263,7 +1260,7 @@ def baz[i32](t: T (inferred: i32)) -> T (return inferred: i32):
 
 #[test]
 fn struct_usage_monomorphization() {
-    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
         "
 struct Box<T>:
     x: T
@@ -1316,7 +1313,7 @@ struct Box[i32]:
 
 #[test]
 fn struct_generic() {
-    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
         "
 struct Box<T>:
     x: T
@@ -1396,7 +1393,7 @@ def main() -> i32 (return inferred: i32):
 
 #[test]
 fn list_test_fully_inferred() {
-    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
         "
 struct List<T>:
     buf: ptr<T>
@@ -1430,7 +1427,7 @@ struct List[i32]:
 
 #[test]
 fn list_test_with_impl() {
-    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
         "
 struct List<T>:
     buf: ptr<T>
@@ -1545,7 +1542,7 @@ impl List[i32]:
 
 #[test]
 fn index_ptr_test() {
-    let (mut ty_db, meta, source, mut hir, result, typing_result, errors) = setup_mono(
+    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
         "
 struct List:
     cap: i32

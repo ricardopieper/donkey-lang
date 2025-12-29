@@ -4,7 +4,6 @@ mod tests {
     extern crate quickcheck;
 
     use crate::{
-        interner::InternedString,
         semantic::{
             hir::{MonoType, NodeIndex, TypeVariable},
             typer::Typer,
@@ -68,7 +67,6 @@ mod tests {
 
     #[quickcheck]
     fn type_always_unifies_with_itself(m1: MonoType) -> bool {
-        println!("m1: {:#?}", m1);
         let mut db = TypeConstructorDatabase::new();
         let mut sut = Typer::new(&mut db);
         sut.unify(
@@ -86,7 +84,6 @@ mod tests {
         m1: MonoType,
         m2: MonoType,
     ) -> bool {
-        println!("m1: {:#?}", m1);
         let mut db = TypeConstructorDatabase::new();
         let mut sut = Typer::new(&mut db);
         if let Ok(uni) = sut.unify(

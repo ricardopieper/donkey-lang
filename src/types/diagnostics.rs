@@ -35,7 +35,6 @@ impl RootElementType {
 use crate::semantic::hir::{HIRTypeDisplayer, MonoType, NodeIndex, PolyType};
 use crate::semantic::typer::UnificationErrorStack;
 use crate::{ast::lexer::Operator, semantic::hir::HIRType};
-use std::borrow::Cow;
 use std::fmt::Display;
 
 use super::type_constructor_db::{TypeConstructorDatabase, TypeConstructorId};
@@ -126,7 +125,7 @@ impl TypeNamePrinter for MonoType {
 
 impl TypeNamePrinter for TypeConstructorId {
     fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
-        type_db.get_name(*self).into()
+        type_db.get_name(*self)
     }
 }
 
@@ -353,7 +352,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypePromotionFailure> {
             f,
             "{on_element}, type promotion failure: Cannot promote an integer literal to type: {target_type_name}",
             on_element = self.on_element.diag_name(),
-            target_type_name = self.error.target_type.to_string(&type_db),
+            target_type_name = self.error.target_type.to_string(type_db),
         )
     }
 }
@@ -573,8 +572,8 @@ impl CompilerErrorDisplay for CompilerErrorContext<BinaryOperatorNotFoundForType
             "{on_element}, binary operator {operator} not found for types: {lhs_type} {operator} {rhs_type}",
             on_element = self.on_element.diag_name(),
             operator = self.error.operator.to_string(),
-            lhs_type = self.error.lhs.to_string(&type_db),
-            rhs_type = self.error.rhs.to_string(&type_db)
+            lhs_type = self.error.lhs.to_string(type_db),
+            rhs_type = self.error.rhs.to_string(type_db)
         )
     }
 }
@@ -662,7 +661,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<FieldOrMethodNotFoundInTypeCo
             "{on_element}, tried to access field/method {field_or_method} on type {type_name} but no such field or method exists.",
             on_element = self.on_element.diag_name(),
             field_or_method = self.error.field_or_method,
-            type_name = self.error.object_type.to_string(&type_db)
+            type_name = self.error.object_type.to_string(type_db)
         )
     }
 }
@@ -892,7 +891,7 @@ impl CompilerErrorDisplay for CompilerErrorContext<DerefOnNonPointerErrorUnconst
             f,
             "{on_element}, Attempted to deref a non-pointer type: {attempted_type}",
             on_element = self.on_element.diag_name(),
-            attempted_type = self.error.attempted_type.to_string(&type_db)
+            attempted_type = self.error.attempted_type.to_string(type_db)
         )
     }
 }
@@ -974,7 +973,7 @@ where
     type Output = Idx::Output;
 
     fn index(&self, index: Idx) -> &Self::Output {
-        return &self.errors[index];
+        &self.errors[index]
     }
 }
 

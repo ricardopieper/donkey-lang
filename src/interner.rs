@@ -86,21 +86,21 @@ impl std::fmt::Debug for InternedString {
     }
 }
 
-impl Into<String> for &InternedString {
-    fn into(self) -> String {
-        StringInterner::get().get_string(*self)
+impl From<&InternedString> for String {
+    fn from(val: &InternedString) -> Self {
+        StringInterner::get().get_string(*val)
     }
 }
 
-impl Into<InternedString> for &str {
-    fn into(self) -> InternedString {
-        StringInterner::get().intern(self)
+impl From<&str> for InternedString {
+    fn from(val: &str) -> Self {
+        StringInterner::get().intern(val)
     }
 }
 
-impl Into<InternedString> for String {
-    fn into(self) -> InternedString {
-        StringInterner::get().intern(&self)
+impl From<String> for InternedString {
+    fn from(val: String) -> Self {
+        StringInterner::get().intern(&val)
     }
 }
 

@@ -1,26 +1,13 @@
-use std::{collections::HashMap, fmt::Display};
+use std::collections::HashMap;
 
 use crate::{
-    ast::parser::SpannedOperator,
     interner::*,
-    semantic::{
-        hir::{HIRUserTypeInfo, MethodCall, TypeVariable},
-        hir_printer::{self, HIRPrinter},
-        typer::{Substitution, Typer},
-    },
-    types::{
-        diagnostics::{
-            BinaryOperatorNotFound, FieldNotFound, RootElementType, TypeErrors,
-            UnaryOperatorNotFound,
-        },
-        type_constructor_db::{TypeConstructorDatabase, TypeConstructorId},
-        type_instance_db::{TypeInstanceId, TypeInstanceManager},
-    },
+    semantic::typer::Typer,
+    types::type_constructor_db::TypeConstructorDatabase,
 };
 
 use super::hir::{
-    FunctionCall, HIR, HIRExpr, HIRRoot, HIRTypedBoundName, MonoType, NodeIndex, PolyType,
-    TypeParameter, TypeTable,
+    HIRRoot, MonoType, TypeTable,
 };
 
 type CompilerError = ();
@@ -64,14 +51,11 @@ impl<'compiler_state> InstantiateTypesPass<'compiler_state> {
         //for all elements
         for root in all_roots {
             match root {
-                HIRRoot::DeclareFunction { type_table, .. } => todo!(),
-                HIRRoot::StructDeclaration { type_table, .. } => todo!(),
+                HIRRoot::DeclareFunction {  .. } => todo!(),
+                HIRRoot::StructDeclaration {  .. } => todo!(),
                 HIRRoot::ImplDeclaration { methods, .. } => {
                     for method in methods {
-                        match method {
-                            HIRRoot::DeclareFunction { type_table, .. } => todo!(),
-                            _ => {}
-                        }
+                        if let HIRRoot::DeclareFunction {  .. } = method { todo!() }
                     }
                 }
             }
@@ -82,7 +66,7 @@ impl<'compiler_state> InstantiateTypesPass<'compiler_state> {
 
     pub fn get_result(mut self) -> Vec<HIRRoot> {
         self.result.sort_by(|a, b| a.1.cmp(&b.1));
-        let mono_hir = self.result.into_iter().map(|(hir, _)| hir).collect();
-        return mono_hir;
+        
+        self.result.into_iter().map(|(hir, _)| hir).collect()
     }
 }

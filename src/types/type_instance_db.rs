@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use crate::interner::InternedString;
-use crate::{ast::lexer::Operator, semantic::hir::TypeParameter};
+use crate::semantic::hir::TypeParameter;
 
 use super::type_constructor_db::{
-    Bytes, TypeConstructor, TypeConstructorDatabase, TypeConstructorFunctionDeclaration,
-    TypeConstructorId, TypeKind,
+    TypeConstructorDatabase,
+    TypeConstructorId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,13 +89,13 @@ pub struct TypeInstanceManager {
 
 impl TypeInstanceManager {
     pub fn new(ctors: TypeConstructorDatabase) -> TypeInstanceManager {
-        let item = TypeInstanceManager {
+        
+
+        TypeInstanceManager {
             types: vec![],
             constructors: ctors,
             common_types: Default::default(),
-        };
-
-        item
+        }
     }
 
     pub fn find(&self, id: TypeInstanceId) -> &TypeInstance {

@@ -46,6 +46,14 @@ use semantic::{
     context::Source,
     hir::{ast_globals_to_hir, MetaTable},
 };
+use crate::semantic::mir::hir_to_mir;
+use crate::semantic::monomorph::Monomorphizer;
+use crate::semantic::typer::Typer;
+use crate::semantic::{mir_printer, uniformizer};
+use crate::semantic::hir_printer::HIRPrinter;
+use crate::semantic::type_checker::typecheck;
+use crate::types::diagnostics::{TypeErrorPrinter, TypeErrors};
+use crate::types::type_constructor_db::TypeConstructorDatabase;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -54,6 +62,8 @@ fn main() {
         return;
     }
 
+    let mut type_db = TypeConstructorDatabase::new();
+    let mut meta_table = MetaTable::new();
     let mut source = Source::new();
 
     source.load_stdlib();
@@ -61,7 +71,74 @@ fn main() {
         return;
     }
 
-    let type_db = types::type_constructor_db::TypeConstructorDatabase::new();
-    let mut meta_table = MetaTable::new();
-    ast_globals_to_hir(&source.file_table[0].ast, &type_db, &mut meta_table);
+    let print_hir = args.iter().any(|a| a == "print_hir");
+    let print_mir = args.iter().any(|a| a == "print_mir");
+
+    let mut compiler_errors: Option<TypeErrors> = None;
+
+    let mut all_mir = vec![];
+
+    for file in source.file_table.iter() {
+        let mut parsed = ast_globals_to_hir(&file.ast, &type_db, &mut meta_table);
+        let mut typer = Typer::new(&mut type_db);
+        typer.forgive_skolem_mismatches();
+        if typer.assign_types(&mut parsed).is_err() {
+            panic!("Failed to assign types while processing basic types, this is a bug");
+        }
+        let mut mono = Monomorphizer::new(&type_db);
+        mono.run(&parsed).unwrap();
+
+        let (mut monomorphized, mono_structs) = mono.get_result();
+        let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
+        let mut final_typer = Typer::new(&mut type_db);
+        final_typer.set_monomorphized_versions(replacements);
+        let tc_result_2 = final_typer.assign_types(&mut monomorphized);
+        if let Some(errors) = compiler_errors {
+            compiler_errors = Some(errors.merge(final_typer.compiler_errors));
+        } else {
+            compiler_errors = Some(final_typer.compiler_errors);
+        }
+        if tc_result_2.is_err() {
+            eprintln!("Compilation failed");
+            break;
+        }
+
+        //uniformize again because the 2nd typer run would change some types back to their generic
+        //versions
+        uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
+        let mut mir_type_errors = TypeErrors::new();
+
+        if print_hir {
+            let printer = HIRPrinter::new(true, &type_db);
+            let printed = printer.print_hir(&parsed);
+            println!("{}", printed);
+        }
+
+        let mir = hir_to_mir(parsed.clone(), &mut mir_type_errors).unwrap();
+
+        let _ = typecheck(&mir, &type_db, &mut mir_type_errors);
+
+        if let Some(errors) = compiler_errors {
+            compiler_errors = Some(errors.merge(mir_type_errors));
+        }
+
+        all_mir.extend(mir);
+    }
+
+    if print_mir {
+        let printed_mir = mir_printer::print_mir(&all_mir, &type_db);
+        println!("{}", printed_mir);
+    }
+
+    if let Some(errors) = compiler_errors
+        && errors.len() > 0 {
+        let printer = TypeErrorPrinter::new(
+            &errors,
+            &type_db,
+            &meta_table,
+            &source.file_table,
+        );
+        println!("{printer}");
+    }
+
 }

@@ -72,9 +72,9 @@ impl<'type_db> MIRPrinter<'type_db> {
                     ty = ty.print_name(type_table, self.type_db)
                 )
             }
-            MIRExpr::RValue(MIRExprRValue::TypeVariable { type_variable, .. }) => {
-                format!("{}", type_variable.print_name(type_table, self.type_db))
-            }
+            /*MIRExpr::RValue(MIRExprRValue::TypeVariable { type_variable, .. }) => {
+                type_variable.print_name(type_table, self.type_db).to_string()
+            }*/
         }
     }
 
@@ -288,16 +288,5 @@ pub fn print_mir(mir: &[MIRTopLevelNode], type_db: &TypeConstructorDatabase) -> 
     for node in mir {
         buffer.push_str(&print_mir_str(node, type_db));
     }
-    buffer
-}
-
-#[allow(dead_code)]
-pub fn print_mir_node(
-    mir: &MIRTopLevelNode,
-    type_db: &TypeConstructorDatabase,
-    type_table: &TypeTable,
-) -> String {
-    let mut buffer = String::new();
-    buffer.push_str(&print_mir_str(mir, type_db));
     buffer
 }

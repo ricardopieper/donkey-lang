@@ -1,42 +1,20 @@
-use crate::types::diagnostics::RootElementType;
 #[cfg(test)]
 use crate::{
-    interner::{InternedString, StringInterner},
-    semantic::hir_printer::HIRPrinter,
+    semantic::{ typer::Typer},
+    types::{ type_constructor_db::TypeConstructorDatabase},
 };
-
 #[cfg(test)]
-use crate::{
-    semantic::{hir::MetaTable, typer::Typer},
-    types::{diagnostics::TypeErrorPrinter, type_constructor_db::TypeConstructorDatabase},
-};
-
-#[cfg(test)]
-use super::context::test_utils;
-
-#[cfg(test)]
-use super::hir::ast_globals_to_hir;
-
-#[cfg(test)]
-use super::context::Source;
-
-#[cfg(test)]
-use super::hir::HIRRoot;
-#[cfg(test)]
-use super::hir::{MonoType, NodeIndex, TypeTable};
+use super::hir::{MonoType, NodeIndex};
 
 #[cfg(test)]
 use super::hir::TypeVariable;
 #[cfg(test)]
-use crate::types::diagnostics::TypeErrors;
-#[cfg(test)]
-use std::collections::HashMap;
+use crate::types::diagnostics::RootElementType;
 
 #[cfg(test)]
 use super::typer::UnificationErrorStack;
-#[cfg(test)]
-use super::typer::UnificationMismatchingTypes;
 
+#[cfg(test)]
 use super::typer::Substitution;
 
 #[cfg(test)]
@@ -53,7 +31,7 @@ fn check(
             let v = uni
                 .get(&TypeVariable(expected_left.into()))
                 .expect("Expected left type not found");
-            assert!(v.print_name(ty) == expected_right);
+            assert_eq!(v.print_name(ty), expected_right);
         }
         Err(errors) => {
             panic!("Unification failed: {:#?}", errors);

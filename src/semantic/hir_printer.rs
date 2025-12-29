@@ -26,7 +26,7 @@ impl<'type_db> HIRExprPrinter<'type_db> {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                let type_args = if fcall.type_args.len() > 0 {
+                let type_args = if !fcall.type_args.is_empty() {
                     format!(
                         "<{}>",
                         fcall
@@ -56,7 +56,7 @@ impl<'type_db> HIRExprPrinter<'type_db> {
                     .join(", ");
                 format!(
                     "{}.{}({})",
-                    self.print(&*mcall.object, type_table),
+                    self.print(&mcall.object, type_table),
                     mcall.method_name,
                     args_str
                 )
@@ -83,7 +83,7 @@ impl<'type_db> HIRExprPrinter<'type_db> {
                 format!("{}.{}", self.print(obj, type_table), elem)
             }
             HIRExpr::Cast(casted, user_type, _, ty) => {
-                let ty_str = ty.print_name(type_table, &self.type_db);
+                let ty_str = ty.print_name(type_table, self.type_db);
                 let user_type_str = format!("{user_type}");
                 //HACK: if the type inferred is (), then we prefer the user type... but I didn't want to do
                 //a "template specialization" kinda thing here
@@ -102,12 +102,12 @@ impl<'type_db> HIRExprPrinter<'type_db> {
             HIRExpr::Ref(expr, ..) => format!("&{}", self.print(expr, type_table)),
             HIRExpr::StructInstantiate(_, _, _, ty) => {
                 //@TODO Factor this
-                let struct_type_name = ty.print_name(type_table, &self.type_db);
+                let struct_type_name = ty.print_name(type_table, self.type_db);
                 format!("{struct_type_name}()")
             }
-            HIRExpr::TypeName { type_variable, .. } => {
-                format!("{}", type_variable.print_name(type_table, self.type_db))
-            }
+           /* HIRExpr::TypeName { type_variable, .. } => {
+                type_variable.print_name(type_table, self.type_db).to_string()
+            }*/
             HIRExpr::SelfValue(..) => "self".into(),
         };
 
@@ -233,7 +233,7 @@ impl<'type_db> HIRPrinter<'type_db> {
                     .join(", ");
                 format!(
                     "{indent}{}.{}({})\n",
-                    self.expr_printer.print(&*mcall.object, type_table),
+                    self.expr_printer.print(&mcall.object, type_table),
                     mcall.method_name,
                     args_str
                 )
@@ -288,7 +288,7 @@ impl<'type_db> HIRPrinter<'type_db> {
                 ..
             } => {
                 let mut parameters_printed = vec![];
-                if let Some(_) = method_of {
+                if method_of.is_some() {
                     parameters_printed.push("self".into());
                 }
                 parameters
@@ -315,7 +315,7 @@ impl<'type_db> HIRPrinter<'type_db> {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                if args.len() > 0 {
+                if !args.is_empty() {
                     args = format!("<{}>", args);
                 }
 

@@ -1,7 +1,6 @@
 use core::panic;
 use std::fs;
 
-use super::hir::HIR;
 
 use crate::ast::lexer::{TokenSpanIndex, TokenTable};
 use crate::ast::parser::AST;
@@ -75,7 +74,7 @@ impl Source {
         let root = parser::AST::Root(result);
         self.file_table.last_mut().unwrap().ast = root;
 
-        return true;
+        true
     }
 
     pub fn load_file(&mut self, file_location: &str) -> bool {
@@ -97,29 +96,8 @@ impl Source {
         self.load_file("./stdlib/c_lib.dk");
         self.load_file("./stdlib/llvm_intrinsics.dk");
         self.load_file("./stdlib/asserts.dk");
-        return true;
+        true
     }
-}
-
-pub struct Analyzer<'source> {
-    pub hir: Vec<HIR>,
-
-    source: &'source Source,
-}
-
-impl<'source> Analyzer<'source> {
-    pub fn new(source: &'source Source) -> Analyzer<'source> {
-        Analyzer {
-            hir: vec![],
-            source,
-        }
-    }
-
-    pub fn last_hir(&self, n: usize) -> &[HIR] {
-        &self.hir[self.hir.len() - n..]
-    }
-
-    pub fn generate_mir_and_typecheck(&mut self, source: &'source Source) {}
 }
 
 #[cfg(test)]
@@ -130,13 +108,6 @@ pub mod test_utils {
 
     pub fn istr(str: &'static str) -> InternedString {
         InternedString::new(str)
-    }
-
-    pub fn parse(s: &str) -> Source {
-        let mut source = Source::new();
-        source.load_stdlib();
-        source.load_str_ref("test", s);
-        source
     }
 
     pub fn parse_basic_types() -> Source {

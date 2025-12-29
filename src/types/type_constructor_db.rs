@@ -1,6 +1,6 @@
 use crate::semantic::hir::{MonoType, TypeParameter, TypeVariable};
 use crate::semantic::typer::Substitution;
-use crate::{ast::lexer::Operator, semantic::hir::PolyType};
+use crate::ast::lexer::Operator;
 
 use crate::interner::InternedString;
 
@@ -68,9 +68,9 @@ pub struct FunctionSignature {
 impl FunctionSignature {
     pub fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
         let mut name = String::new();
-        name.push_str("(");
+        name.push('(');
         for (i, p) in self.parameters.iter().enumerate() {
-            name.push_str(&&p.print_name(type_db));
+            name.push_str(&p.print_name(type_db));
             if i != self.parameters.len() - 1 {
                 name.push_str(", ");
             }
@@ -175,18 +175,18 @@ impl TypeConstructorDatabase {
         let mut item = Self {
             types: vec![],
             common_types: CommonTypeConstructors {
-                void: default_type_constructor_id.clone(),
-                i32: default_type_constructor_id.clone(),
-                u32: default_type_constructor_id.clone(),
-                i64: default_type_constructor_id.clone(),
-                u64: default_type_constructor_id.clone(),
-                f32: default_type_constructor_id.clone(),
-                f64: default_type_constructor_id.clone(),
-                u8: default_type_constructor_id.clone(),
-                char: default_type_constructor_id.clone(),
-                bool: default_type_constructor_id.clone(),
-                array: default_type_constructor_id.clone(),
-                ptr: default_type_constructor_id.clone(),
+                void: default_type_constructor_id,
+                i32: default_type_constructor_id,
+                u32: default_type_constructor_id,
+                i64: default_type_constructor_id,
+                u64: default_type_constructor_id,
+                f32: default_type_constructor_id,
+                f64: default_type_constructor_id,
+                u8: default_type_constructor_id,
+                char: default_type_constructor_id,
+                bool: default_type_constructor_id,
+                array: default_type_constructor_id,
+                ptr: default_type_constructor_id,
             },
         };
         item.init_builtin();
@@ -445,7 +445,7 @@ impl TypeConstructorDatabase {
         //not by name, but by signature
         let found = self.try_find_function_by_signature(&signature);
 
-        let function_type_id = if let None = found {
+        let function_type_id = if found.is_none() {
             let next_id = {
                 //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
                 #[cfg(test)]
@@ -486,7 +486,7 @@ impl TypeConstructorDatabase {
             signature: function_type_id,
         });
 
-        return function_type_id;
+        function_type_id
     }
 
     //This function can be smarter by reworking the signature into a strict naming convention for type parameters,
@@ -654,7 +654,7 @@ impl TypeConstructorDatabase {
                     ),
                     MonoType::simple(self.common_types.u64),
                 ], /* offset * sizeof(TPtr) */
-                return_type: MonoType::Variable(TypeVariable(istr("TPtr"))).into(),
+                return_type: MonoType::Variable(TypeVariable(istr("TPtr"))),
                 variadic: Variadic(false),
             },
         );
@@ -671,7 +671,7 @@ impl TypeConstructorDatabase {
                     ), //self
                     MonoType::simple(self.common_types.i32),
                 ], /* offset * sizeof(TPtr) */
-                return_type: MonoType::Variable(TypeVariable(istr("TPtr"))).into(),
+                return_type: MonoType::Variable(TypeVariable(istr("TPtr"))),
                 variadic: Variadic(false),
             },
         );
@@ -694,8 +694,7 @@ impl TypeConstructorDatabase {
                 return_type: MonoType::Application(
                     ptr_type,
                     vec![MonoType::Variable(TypeVariable(istr("TPtr")))],
-                )
-                .into(),
+                ),
                 variadic: Variadic(false),
                 type_parameters: vec![TypeParameter(istr("TPtr"))],
             },
@@ -729,8 +728,7 @@ impl TypeConstructorDatabase {
                 return_type: MonoType::Application(
                     ptr_type,
                     vec![MonoType::Variable(TypeVariable(istr("TItem")))],
-                )
-                .into(),
+                ),
                 variadic: Variadic(false),
                 type_parameters: vec![TypeParameter(istr("TItem"))],
             },
@@ -752,7 +750,7 @@ impl TypeConstructorDatabase {
                     ),
                     MonoType::simple(u32_type),
                 ],
-                return_type: MonoType::Application(u32_type, vec![]).into(),
+                return_type: MonoType::Application(u32_type, vec![]),
                 variadic: Variadic(false),
                 type_parameters: vec![TypeParameter(istr("TItem"))],
             },

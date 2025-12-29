@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    interner::InternedString,
     semantic::{
         hir::{HIRRoot, MonoType},
-        hir_printer::{HIRExprPrinter, HIRPrinter},
         monomorph::MonomorphizedStruct,
     },
     types::type_constructor_db::{TypeConstructorDatabase, TypeKind},
@@ -69,10 +67,9 @@ pub fn uniformize(
             .expect("Should be impossible to not find it at this point");
 
         let id = original_type.id;
-        let ty = new_type_ids
+        let ty = *new_type_ids
             .get(&monomorphized_struct.resulting_name)
-            .unwrap()
-            .clone();
+            .unwrap();
         let mono_to_find =
             MonoType::Application(id, monomorphized_struct.positional_type_arguments.clone());
 
@@ -87,8 +84,8 @@ pub fn uniformize(
             match root {
                 HIRRoot::DeclareFunction {
                     type_table,
-                    function_name,
-                    body,
+                    
+                    
                     ..
                 } => {
                     type_table.apply_function_wide_mono_substitution(&mono_to_find, &mono_target);
@@ -98,14 +95,11 @@ pub fn uniformize(
                 }
                 HIRRoot::ImplDeclaration { methods, .. } => {
                     for method in methods {
-                        match method {
-                            HIRRoot::DeclareFunction { type_table, .. } => {
-                                type_table.apply_function_wide_mono_substitution(
-                                    &mono_to_find,
-                                    &mono_target,
-                                );
-                            }
-                            _ => {}
+                        if let HIRRoot::DeclareFunction { type_table, .. } = method {
+                            type_table.apply_function_wide_mono_substitution(
+                                &mono_to_find,
+                                &mono_target,
+                            );
                         }
                     }
                 }
@@ -113,7 +107,5 @@ pub fn uniformize(
         }
     }
 
-    log!("Uniformization done");
-
-    return result;
+    result
 }

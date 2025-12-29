@@ -223,11 +223,11 @@ fn print_ast_internal(ast: &AST, indent: &str, parenthesized: bool) -> String {
             None => format!("{indent}return"),
         },
         AST::Root(r) => {
-            return r
+            r
                 .iter()
                 .map(|x| print_ast_internal(&x.ast, indent, parenthesized))
                 .collect::<Vec<_>>()
-                .join("\n");
+                .join("\n")
         }
         AST::External(_) => format!("{indent}external"),
         AST::ImplDeclaration {
@@ -250,7 +250,7 @@ fn print_ast_internal(ast: &AST, indent: &str, parenthesized: bool) -> String {
                 buf.push_str(&printed_fdecl);
                 buf.push('\n');
             }
-            return buf;
+            buf
         }
     }
 }
@@ -332,18 +332,18 @@ fn join_comma_sep(type_parameters: &[StringSpan]) -> String {
 
 #[allow(dead_code)]
 pub fn print_ast(ast: &[SpanAST]) -> String {
-    return ast
+    ast
         .iter()
         .map(|x| print_ast_internal(&x.ast, "", false))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
 }
 
 #[allow(dead_code)]
 pub fn print_fully_parenthesized_ast(ast: &[SpanAST]) -> String {
-    return ast
+    ast
         .iter()
         .map(|x| print_ast_internal(&x.ast, "", true))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
 }

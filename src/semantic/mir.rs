@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::VecDeque;
 
 use super::hir::{
@@ -9,16 +8,12 @@ use crate::ast::parser::SpannedOperator;
 use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 
-use crate::ast::parser::{AST, Expr};
 use crate::types::diagnostics::{
-    CompilerErrorContext, ContextualizedCompilerError, DerefOnNonPointerError, RootElementType,
+    CompilerErrorContext, DerefOnNonPointerError, RootElementType,
     TypeErrors,
 };
 
 type CompilerError = ();
-
-pub type TypecheckPendingExpression = MIRExpr;
-pub type TypecheckedExpression = MIRExpr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiteralMIRExpr {
@@ -83,11 +78,11 @@ pub enum MIRExprRValue {
         Option<PolymorphicName>,
     ),
     StructInstantiate(TypeIndex, NodeIndex),
-    TypeVariable {
+    /*TypeVariable {
         type_variable: TypeIndex,
         type_data: TypeIndex,
         location: NodeIndex,
-    },
+    },*/
     Ref(
         //you can only ref an lvalue
         Box<MIRExprLValue>,
@@ -109,7 +104,7 @@ impl MIRExpr {
     pub fn get_type(&self) -> TypeIndex {
         match self {
             MIRExpr::RValue(rvalue_expr) => match rvalue_expr {
-                MIRExprRValue::TypeVariable { type_data, .. } => *type_data,
+                //MIRExprRValue::TypeVariable { type_data, .. } => *type_data,
                 MIRExprRValue::Literal(_, type_id, _) => *type_id,
                 MIRExprRValue::BinaryOperation(_, _, _, type_id, _) => *type_id,
                 MIRExprRValue::MethodCall(_, _, _, type_id, _) => *type_id,
@@ -284,7 +279,7 @@ fn simplify_expression(expr: HIRExpr) -> (HIRExpr, bool) {
             } = mcall;
             let (object, simplified_object) = simplify_expression(*object);
             let (args, simplified_args): (_, Vec<_>) =
-                args.into_iter().map(|arg| simplify_expression(arg)).unzip();
+                args.into_iter().map(simplify_expression).unzip();
             let simplified =
                 simplified_object || simplified_args.iter().any(|simplified| *simplified);
             (
@@ -309,7 +304,7 @@ fn simplify_expression(expr: HIRExpr) -> (HIRExpr, bool) {
             } = *call;
             let (function, simplified_function) = simplify_expression(function);
             let (args, simplified_args): (Vec<_>, Vec<_>) =
-                args.into_iter().map(|arg| simplify_expression(arg)).unzip();
+                args.into_iter().map(simplify_expression).unzip();
             let simplified =
                 simplified_function || simplified_args.iter().any(|simplified| *simplified);
             (
@@ -372,12 +367,12 @@ fn simplify_expression(expr: HIRExpr) -> (HIRExpr, bool) {
         HIRExpr::Array(items, location, ty) => {
             let (items, simplified_items): (Vec<_>, Vec<_>) = items
                 .into_iter()
-                .map(|item| simplify_expression(item))
+                .map(simplify_expression)
                 .unzip();
             let simplified = simplified_items.iter().any(|simplified| *simplified);
             (HIRExpr::Array(items, location, ty), simplified)
         }
-        HIRExpr::TypeName {
+        /*HIRExpr::TypeName {
             type_variable,
             type_data,
             location,
@@ -388,7 +383,7 @@ fn simplify_expression(expr: HIRExpr) -> (HIRExpr, bool) {
                 location,
             },
             false,
-        ),
+        ),*/
         HIRExpr::SelfValue(location, ty) => (HIRExpr::SelfValue(location, ty), false),
     }
 }
@@ -425,7 +420,7 @@ fn expect_lvalue(
                 location,
                 compiler_code_location: loc!(),
             });
-            return Err(());
+            Err(())
         }
         MIRExpr::LValue(lvalue) => Ok(lvalue),
     }
@@ -570,7 +565,7 @@ fn convert_expr_to_mir(
         HIRExpr::StructInstantiate(_name, _typeargs, location, ty) => Ok(MIRExpr::RValue(
             MIRExprRValue::StructInstantiate(ty, location),
         )),
-        HIRExpr::TypeName {
+        /*HIRExpr::TypeName {
             type_variable,
             type_data,
             location,
@@ -578,7 +573,7 @@ fn convert_expr_to_mir(
             type_variable,
             type_data,
             location,
-        })),
+        })),*/
         HIRExpr::SelfValue(ty_id, location) => Ok(MIRExpr::LValue(MIRExprLValue::Variable(
             "self".into(),
             location,
@@ -786,7 +781,7 @@ impl<'errors> MIRFunctionEmitter<'errors> {
                     });
                 }
 
-                return Ok(());
+                Ok(())
             }
 
             //@TODO the fact is that the only operations that can be "grouped" really are only assignments and function calls, as they don't become any control flow
@@ -1091,7 +1086,7 @@ impl<'errors> MIRFunctionEmitter<'errors> {
                     }
                 }
 
-                return Ok(());
+                Ok(())
             }
         }
     }
@@ -1190,9 +1185,8 @@ pub fn hir_to_mir(
             }
             HIRRoot::ImplDeclaration {
                 struct_name,
-                type_parameters,
                 methods,
-                has_been_monomorphized,
+                ..
             } => {
                 for method in methods.into_iter() {
                     match method {
@@ -1202,12 +1196,8 @@ pub fn hir_to_mir(
                             parameters,
                             body,
                             return_type,
-                            is_intrinsic,
-                            is_varargs,
-                            is_external,
-                            method_of: _,
                             type_table,
-                            has_been_monomorphized: _,
+                            ..
                         } => {
                             let mir_parameters = parameters
                                 .iter()
@@ -1227,7 +1217,7 @@ pub fn hir_to_mir(
                             mir_emitter.run(body, parameters)?;
 
                             let result = MIRTopLevelNode::DeclareFunction {
-                                function_name: function_name,
+                                function_name,
                                 parameters: mir_parameters,
                                 body: mir_emitter.blocks,
                                 scopes: mir_emitter.scopes,

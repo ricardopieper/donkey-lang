@@ -5,7 +5,6 @@ use std::fmt::Write;
 use std::ops::Deref;
 use std::ops::Index;
 use std::ops::IndexMut;
-use std::usize;
 
 use crate::ast::lexer::Operator;
 use crate::ast::parser::ASTIfStatement;
@@ -37,7 +36,7 @@ pub enum LiteralHIRExpr {
 }
 
 //This is for types that the user can give, like in function parameters, struct field types, or typed variable declarations.
-//This type can be generic and thus not immediatelly inferrable. Thus the user given type must survive until monomorphization.
+//This type can be generic and thus not immediately inferrable. Thus, the user given type must survive until monomorphization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HIRUserTypeInfo {
     pub user_given_type: Option<HIRType>,
@@ -71,14 +70,6 @@ impl TypeIndex {
         }
         ty[self].to_string(type_db)
     }
-
-    pub fn is_untyped(&self) -> bool {
-        self.0 == usize::MAX
-    }
-
-    pub fn poly<'a>(&self, ty: &'a TypeTable) -> PolyType {
-        ty[*self].clone()
-    }
 }
 
 // Index of the HIR node (either an expression or a statement) so that we can store
@@ -96,11 +87,11 @@ impl NodeIndex {
 pub enum HIRExpr {
     Literal(LiteralHIRExpr, NodeIndex, TypeIndex),
     Variable(InternedString, NodeIndex, TypeIndex),
-    TypeName {
+    /*TypeName {
         type_variable: TypeIndex, //the actual contents of the metadata of the TypeData instance
         type_data: TypeIndex,     //always the metadata type TypeData
         location: NodeIndex,
-    },
+    },*/
     Cast(Box<HIRExpr>, HIRType, NodeIndex, TypeIndex),
     SelfValue(NodeIndex, TypeIndex),
     BinaryOperation(
@@ -134,8 +125,8 @@ impl HIRType {
     pub fn bound_generics(&self, generics_in_context: &[TypeParameter]) -> Vec<InternedString> {
         match self {
             HIRType::Simple(s) => {
-                if let Some(_) = generics_in_context.iter().find(|x| x.0 == *s) {
-                    vec![s.clone()]
+                if generics_in_context.iter().any(|x| x.0 == *s) {
+                    vec![*s]
                 } else {
                     vec![]
                 }
@@ -157,18 +148,17 @@ impl HIRType {
 
         if bound_generics.is_empty() {
             return PolyType::mono(
-                self.make_mono(type_db, generics_in_context, use_skolems)
-                    .into(),
+                self.make_mono(type_db, generics_in_context, use_skolems),
             );
         }
 
         match self {
             HIRType::Simple(s) => {
-                let is_generic = bound_generics.iter().find(|x| *x == s).is_some();
+                let is_generic = bound_generics.iter().any(|x| x == s);
                 if is_generic {
                     PolyType {
                         quantifiers: generics_in_context.to_vec(),
-                        mono: MonoType::variable(s.clone()),
+                        mono: MonoType::variable(*s),
                     }
                 } else {
                     let ty = type_db.find_by_name(*s).expect("Could not find type");
@@ -204,12 +194,12 @@ impl HIRType {
     ) -> MonoType {
         match self {
             HIRType::Simple(s) => {
-                let is_generic = generics.iter().find(|x| x.0 == *s).is_some();
+                let is_generic = generics.iter().any(|x| x.0 == *s);
                 if is_generic {
                     if use_skolems {
-                        MonoType::Skolem(TypeVariable(s.clone()))
+                        MonoType::Skolem(TypeVariable(*s))
                     } else {
-                        MonoType::variable(s.clone())
+                        MonoType::variable(*s)
                     }
                 } else {
                     match type_db.find_by_name(*s) {
@@ -313,11 +303,11 @@ impl HIRExpr {
             | HIRExpr::Ref(.., t)
             | HIRExpr::MemberAccess(.., t)
             | HIRExpr::Array(.., t)
-            | HIRExpr::Variable(.., t) => t.clone(),
-            HIRExpr::FunctionCall(fcall, _) => fcall.return_type.clone(),
-            HIRExpr::MethodCall(mcall, _) => mcall.return_type.clone(),
-            HIRExpr::TypeName { type_data, .. } => type_data.clone(),
-            HIRExpr::SelfValue(.., t) => t.clone(),
+            | HIRExpr::Variable(.., t) => *t,
+            HIRExpr::FunctionCall(fcall, _) => fcall.return_type,
+            HIRExpr::MethodCall(mcall, _) => mcall.return_type,
+            //HIRExpr::TypeName { type_data, .. } => *type_data,
+            HIRExpr::SelfValue(.., t) => *t,
         }
     }
 
@@ -325,7 +315,7 @@ impl HIRExpr {
         match self {
             HIRExpr::Literal(_, node_index, _) => *node_index,
             HIRExpr::Variable(_, node_index, _) => *node_index,
-            HIRExpr::TypeName { location, .. } => *location,
+            //HIRExpr::TypeName { location, .. } => *location,
             HIRExpr::Cast(_, _, node_index, _) => *node_index,
             HIRExpr::SelfValue(node_index, _) => *node_index,
             HIRExpr::BinaryOperation(_, _, _, node_index, _) => *node_index,
@@ -448,7 +438,7 @@ impl TypeParameter {
         {
             return TypeParameter(sub.0);
         }
-        return self.clone();
+        self.clone()
     }
 }
 
@@ -486,10 +476,10 @@ impl MonoType {
                         any = true;
                     }
                 }
-                return any;
+                any
             }
             _ => {
-                return false;
+                false
             }
         }
     }
@@ -497,26 +487,26 @@ impl MonoType {
     pub fn apply_substitution(&self, substitution: &Substitution) -> MonoType {
         match self {
             MonoType::Variable(var) => {
-                if let Some(sub) = substitution.get(&var) {
+                if let Some(sub) = substitution.get(var) {
                     return sub.clone();
                 }
 
-                return MonoType::Variable(var.clone());
+                MonoType::Variable(*var)
             }
             MonoType::Skolem(var) => {
-                if let Some(sub) = substitution.get(&var) {
+                if let Some(sub) = substitution.get(var) {
                     return sub.clone();
                 }
 
-                return MonoType::Skolem(var.clone());
+                MonoType::Skolem(*var)
             }
             MonoType::Application(constructor, args) => {
                 let new_args = args
-                    .into_iter()
+                    .iter()
                     .map(|a| a.apply_substitution(substitution))
                     .collect();
 
-                return MonoType::Application(*constructor, new_args);
+                MonoType::Application(*constructor, new_args)
             }
         }
     }
@@ -549,11 +539,11 @@ impl MonoType {
 
     pub fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
         match self {
-            MonoType::Variable(name) => format!("{}", name.0.to_string()),
-            MonoType::Skolem(name) => format!("{}", name.0.to_string()),
+            MonoType::Variable(name) => format!("{}", name.0),
+            MonoType::Skolem(name) => format!("{}", name.0),
             MonoType::Application(constructor, args) => {
                 let ctor = type_db.find(*constructor);
-                if ctor.kind == TypeKind::Function && args.len() > 0 {
+                if ctor.kind == TypeKind::Function && !args.is_empty() {
                     let mut args = args.clone();
                     let return_type = args
                         .pop()
@@ -573,8 +563,8 @@ impl MonoType {
                         .collect::<Vec<String>>()
                         .join(", ");
 
-                    if args.len() == 0 {
-                        return constructor_name.to_string();
+                    if args.is_empty() {
+                        constructor_name.to_string()
                     } else {
                         format!("{}<{}>", constructor_name, args)
                     }
@@ -600,7 +590,7 @@ pub struct PolyType {
 impl PolyType {
     pub fn to_string(&self, type_db: &TypeConstructorDatabase) -> String {
         match self {
-            PolyType { quantifiers, mono } if quantifiers.len() == 0 => mono.print_name(type_db),
+            PolyType { quantifiers, mono } if quantifiers.is_empty() => mono.print_name(type_db),
 
             PolyType { quantifiers, mono } => {
                 let vars = quantifiers
@@ -635,7 +625,7 @@ impl PolyType {
     }
 
     pub fn expect_mono(&self) -> &MonoType {
-        if self.quantifiers.len() == 0 {
+        if self.quantifiers.is_empty() {
             &self.mono
         } else {
             panic!("Expected a monotype, got a polytype")
@@ -659,27 +649,21 @@ impl PolyType {
             .iter()
             .map(|x| MonoType::Variable(TypeVariable(x.0)))
             .collect();
-        return PolyType::poly(
+        PolyType::poly(
             type_params,
             MonoType::Application(ctor.id, type_params_as_mono),
-        );
+        )
     }
 
     pub fn apply_substitution(&self, substitution: &Substitution) -> PolyType {
         if !self.quantifiers.is_empty() {
-            return PolyType::poly(
+            PolyType::poly(
                 self.quantifiers.clone(),
                 self.mono.apply_substitution(substitution),
-            );
+            )
         } else {
-            return PolyType::mono(self.mono.apply_substitution(substitution));
+            PolyType::mono(self.mono.apply_substitution(substitution))
         }
-    }
-
-    pub fn contains_type_variable(&self, other: TypeVariable) -> bool {
-        //let is_in_quantifiers = self.quantifiers.iter().any(|q| q.0 == other.0);
-        let is_in_quantifiers = false;
-        return self.mono.contains_type_variable(other) && !is_in_quantifiers;
     }
 }
 
@@ -724,7 +708,6 @@ impl TypeTable {
 
     pub fn next(&mut self) -> TypeIndex {
         let var_name = format!("'t{}", self.ty_var_current);
-        log!("PRODUCED {var_name}");
         let r = self.next_with(PolyType::mono(MonoType::Variable(TypeVariable(
             InternedString::new(&var_name),
         ))));
@@ -745,7 +728,7 @@ impl TypeTable {
         self.table.push(poly);
         let ret = self.current_index;
         self.current_index = TypeIndex(self.current_index.0 + 1);
-        return ret;
+        ret
     }
 
     pub fn untyped(&self) -> TypeIndex {
@@ -753,18 +736,17 @@ impl TypeTable {
     }
 
     pub fn apply_substitution(&mut self, substitution: &Substitution) {
-        if substitution.len() == 0 {
+        if substitution.is_empty() {
             return;
         }
 
-        for (_, entry) in self.table.iter_mut().enumerate() {
+        for entry in self.table.iter_mut() {
             match entry.mono {
                 MonoType::Variable(tv) => {
-                    if entry.quantifiers.len() == 0 {
-                        if let Some(sub) = substitution.get(&tv) {
+                    if entry.quantifiers.is_empty()
+                        && let Some(sub) = substitution.get(&tv) {
                             entry.mono = sub.clone();
                         }
-                    }
                 }
                 MonoType::Application(_, ref mut args) => {
                     for arg in args {
@@ -779,10 +761,10 @@ impl TypeTable {
     //used by monomorphization to do a function-wide and impl-wide substitution. Includes skolems,
     //and includes type variables that are deep inside type applications (the arguments of type applications)
     pub fn apply_function_wide_substitution(&mut self, substitution: &Substitution) {
-        if substitution.len() == 0 {
+        if substitution.is_empty() {
             return;
         }
-        for (_, entry) in self.table.iter_mut().enumerate() {
+        for entry in self.table.iter_mut() {
             match entry.mono {
                 MonoType::Variable(tv) | MonoType::Skolem(tv) => {
                     if let Some(sub) = substitution.get(&tv) {
@@ -804,11 +786,8 @@ impl TypeTable {
     //used after monomorphization to normalize all types to their monomorphic version.
     //
     pub fn apply_function_wide_mono_substitution(&mut self, find: &MonoType, target: &MonoType) {
-        for (i, entry) in self.table.iter_mut().enumerate() {
-            let replaced = entry.mono.apply_mono_substitution(find, target);
-            if replaced {
-                log!("Replaced at index {i}");
-            }
+        for entry in self.table.iter_mut() {
+            entry.mono.apply_mono_substitution(find, target);
         }
     }
 }
@@ -875,7 +854,7 @@ impl MetaTable {
         self.table.push(MetadataItem {
             ast_span: span.get_span(),
         });
-        return ret;
+        ret
     }
 }
 
@@ -907,9 +886,9 @@ impl IndexMut<&NodeIndex> for MetaTable {
     }
 }
 
-fn expr_to_hir<'source>(
+fn expr_to_hir(
     type_db: &TypeConstructorDatabase,
-    expr: &'source Expr,
+    expr: &Expr,
     _is_in_assignment_lhs: bool,
     ty: &mut TypeTable,
     meta: &mut MetaTable,
@@ -946,7 +925,7 @@ fn expr_to_hir<'source>(
         Expr::NoneValue(span) => HIRExpr::Literal(LiteralHIRExpr::None, meta.next(span), ty.next()),
         Expr::Variable(name) => {
             if let Some(t) = decls.get(&name.0) {
-                HIRExpr::Variable(name.0, meta.next(name), t.clone())
+                HIRExpr::Variable(name.0, meta.next(name), *t)
             } else {
                 //Since the HIR processor processes the AST in a top-down manner
                 //and decls is only scoped to the current function, we can't find
@@ -958,7 +937,6 @@ fn expr_to_hir<'source>(
         }
         Expr::FunctionCall(fun_expr, type_args, args, span) => match fun_expr.as_ref() {
             var @ Expr::Variable(_) => {
-                println!("Type args in fcall: {:?}", type_args);
                 let fcall = FunctionCall {
                     function: expr_to_hir(
                         type_db,
@@ -968,8 +946,7 @@ fn expr_to_hir<'source>(
                         meta,
                         decls,
                         generics_in_context,
-                    )
-                    .into(),
+                    ),
                     type_args: type_args
                         .iter()
                         .map(|x| HIRUserTypeInfo {
@@ -1031,7 +1008,6 @@ fn expr_to_hir<'source>(
             let meta_next = meta.next(span);
             let return_type = ty.next();
             let deref_result = ty.next();
-            log!("Generated return type {return_type:?} and deref {deref_result:?}");
             let method_call = MethodCall {
                 object: Box::new(expr_to_hir(
                     type_db,
@@ -1052,7 +1028,7 @@ fn expr_to_hir<'source>(
                     decls,
                     generics_in_context,
                 )],
-                return_type: return_type,
+                return_type,
             };
             HIRExpr::Deref(
                 HIRExpr::MethodCall(method_call, meta_next).into(),
@@ -1103,8 +1079,8 @@ fn expr_to_hir<'source>(
     }
 }
 
-fn ast_to_hir<'source>(
-    ast: &'source SpanAST,
+fn ast_to_hir(
+    ast: &SpanAST,
     accum: &mut Vec<HIR>,
     ty: &mut TypeTable,
     meta: &mut MetaTable,
@@ -1146,7 +1122,7 @@ fn ast_to_hir<'source>(
             let result_expr =
                 expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
             if let HIRExpr::Variable(name, meta, _) = &path_expr {
-                if let Some(_) = decls.get(name) {
+                if decls.get(name).is_some() {
                     let decl_hir = HIR::Assign {
                         path: path_expr.clone(),
                         expression: result_expr,
@@ -1155,7 +1131,7 @@ fn ast_to_hir<'source>(
                     accum.push(decl_hir);
                 } else {
                     let ty_var = result_expr.get_type();
-                    decls.insert(name.clone(), ty_var);
+                    decls.insert(*name, ty_var);
                     let decl_hir = HIR::SyntheticDeclare {
                         var: *name,
                         typedef: ty_var,
@@ -1197,9 +1173,9 @@ fn ast_to_hir<'source>(
                         args: mcall.args,
                         return_type: ty.next(),
                     };
-                    accum.push(HIR::MethodCall(mcall.into(), meta));
+                    accum.push(HIR::MethodCall(mcall, meta));
                 }
-                HIRExpr::FunctionCall(mut fcall, meta) => {
+                HIRExpr::FunctionCall(fcall, meta) => {
                     accum.push(HIR::FunctionCall(*fcall, meta));
                 }
                 _ => {
@@ -1218,7 +1194,6 @@ fn ast_to_hir<'source>(
                 accum,
                 elifs,
                 final_else,
-                ast,
                 ty,
                 meta,
                 decls,
@@ -1231,7 +1206,6 @@ fn ast_to_hir<'source>(
                 &expression.expr,
                 accum,
                 body,
-                ast,
                 ty,
                 meta,
                 decls,
@@ -1252,7 +1226,6 @@ fn ast_decl_function_to_hir<'source>(
     parameters: &'source [TypeBoundName],
     return_type: &Option<ASTType>,
     is_varargs: bool,
-    ast: &'source AST,
     accum: &mut Vec<HIRRoot>,
     decls: &mut HashMap<InternedString, TypeIndex>,
     meta: &mut MetaTable,
@@ -1260,7 +1233,7 @@ fn ast_decl_function_to_hir<'source>(
 ) {
     let mut ty = TypeTable::new();
     let type_parameters: Vec<_> = type_parameters.iter().map(|x| TypeParameter(x.0)).collect();
-    let parameters = create_parameters(parameters, type_db, &type_parameters, &mut ty, decls, true);
+    let parameters = create_parameters(parameters, &mut ty, decls);
     let hir_return = match return_type {
         Some(x) => x.into(),
         None => HIRType::Simple(InternedString::new("Void")),
@@ -1344,25 +1317,19 @@ fn ast_decl_function_to_hir<'source>(
 
 fn create_parameters(
     parameters: &[TypeBoundName],
-    type_db: &TypeConstructorDatabase,
-    type_params: &[TypeParameter],
     ty: &mut TypeTable,
-    decls: &mut HashMap<InternedString, TypeIndex>,
-    use_skolem: bool,
+    decls: &mut HashMap<InternedString, TypeIndex>
 ) -> Vec<HIRTypedBoundName> {
     parameters
         .iter()
-        .map(|it| create_function_param(it, type_db, type_params, ty, decls, use_skolem))
+        .map(|it| create_function_param(it, ty, decls))
         .collect()
 }
 
 fn create_function_param(
     param: &TypeBoundName,
-    type_db: &TypeConstructorDatabase,
-    type_params: &[TypeParameter], //not args, params
     ty: &mut TypeTable,
     decls: &mut HashMap<InternedString, TypeIndex>,
-    use_skolem: bool,
 ) -> HIRTypedBoundName {
     let hir_type: HIRType = (&param.name_type).into();
     let ty_var = ty.next_param_or_return();
@@ -1399,7 +1366,6 @@ fn ast_if_to_hir<'source>(
     accum: &mut Vec<HIR>,
     elifs: &'source [ASTIfStatement],
     final_else: &'source Option<Vec<SpanAST>>,
-    ast: &'source AST,
     ty: &mut TypeTable,
     meta: &mut MetaTable,
     decls: &mut HashMap<InternedString, TypeIndex>,
@@ -1571,7 +1537,6 @@ fn ast_while_to_hir<'source>(
     expression: &'source Expr,
     accum: &mut Vec<HIR>,
     body: &'source [SpanAST],
-    ast: &'source AST,
     ty: &mut TypeTable,
     meta: &mut MetaTable,
     decls: &mut HashMap<InternedString, TypeIndex>,
@@ -1601,7 +1566,6 @@ fn ast_impl_to_hir<'source>(
     body: &'source [FunctionDeclaration],
     struct_name: InternedString,
     type_parameters: &'source [StringSpan],
-    ast: &'source AST,
     accum: &mut Vec<HIRRoot>,
     meta: &mut MetaTable,
 ) {
@@ -1616,7 +1580,6 @@ fn ast_impl_to_hir<'source>(
             &node.parameters,
             &node.return_type,
             node.is_varargs,
-            ast,
             &mut functions,
             &mut decls,
             meta,
@@ -1636,9 +1599,7 @@ fn try_literal_promotion(
     type_db: &TypeConstructorDatabase,
     literal: &LiteralHIRExpr,
     type_hint: &TypeConstructorId,
-    meta: &crate::ast::parser::Expr,
 ) -> Result<(), String> {
-    let type_constructor_id = *type_hint;
     match literal {
         LiteralHIRExpr::Integer(i) => {
             //we need to check for promotions and the attempted promoted type
@@ -1646,7 +1607,7 @@ fn try_literal_promotion(
 
             macro_rules! check_promotion {
                 ($type:ty, $type_id:expr) => {
-                    if type_constructor_id == $type_id {
+                    if *type_hint == $type_id {
                         if *i >= <$type>::MIN as i128 && *i <= <$type>::MAX as i128 {
                             return Ok(());
                         }
@@ -1698,7 +1659,7 @@ fn load_stdlib_builtin(type_db: &TypeConstructorDatabase, name: &str) -> Option<
     let type_data_type = type_db.find_by_name(InternedString::new(name));
 
     match type_data_type {
-        Some(d) => return Some(PolyType::simple(d.id)),
+        Some(d) => Some(PolyType::simple(d.id)),
         None => {
             //TODO: Fix: navigate through all types and roots before running inference,
             //otherwise we can't use types in stdlib
@@ -1708,8 +1669,8 @@ fn load_stdlib_builtin(type_db: &TypeConstructorDatabase, name: &str) -> Option<
     }
 }
 
-pub fn ast_globals_to_hir<'source>(
-    ast: &'source AST,
+pub fn ast_globals_to_hir(
+    ast: &AST,
     type_db: &TypeConstructorDatabase,
     meta: &mut MetaTable,
 ) -> Vec<HIRRoot> {
@@ -1733,7 +1694,6 @@ pub fn ast_globals_to_hir<'source>(
                 parameters,
                 return_type,
                 *is_varargs,
-                ast,
                 &mut accum,
                 &mut decls,
                 meta,
@@ -1755,7 +1715,6 @@ pub fn ast_globals_to_hir<'source>(
                 body,
                 struct_name.0,
                 type_parameters,
-                ast,
                 &mut accum,
                 meta,
             );
@@ -1772,14 +1731,6 @@ pub fn ast_globals_to_hir<'source>(
                 .iter()
                 .map(|field| create_struct_field_type(field, type_db, &type_parameters, &mut ty))
                 .collect();
-
-            for field in &fields {
-                log!(
-                    "Field: {} {}",
-                    field.name,
-                    &ty[field.type_data.type_variable].to_string(type_db)
-                );
-            }
 
             accum.push(HIRRoot::StructDeclaration {
                 struct_name: struct_name.0,

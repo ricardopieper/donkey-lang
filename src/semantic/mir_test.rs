@@ -37,8 +37,8 @@ fn setup(
     TypeErrors,
 ) {
     use crate::semantic::{mir::hir_to_mir, mir_printer, monomorph::Monomorphizer};
-
-    use super::mir::MIRTopLevelNode;
+    use crate::semantic::uniformizer;
+    
 
     let mut type_db = TypeConstructorDatabase::new();
     let mut meta_table = MetaTable::new();
@@ -56,9 +56,19 @@ fn setup(
         let mut mono = Monomorphizer::new(&mut type_db);
 
         mono.run(&mut parsed).unwrap();
-        let (monomorphized, _) = mono.get_result();
+        let (mut monomorphized, mono_structs) = mono.get_result();
+
+        let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
+
+        let mut final_typer = Typer::new(&mut type_db);
+        final_typer.set_monomorphized_versions(replacements);
+        let tc_result_2 = final_typer.assign_types(&mut monomorphized);
+        let full_compiler_errors = final_typer.compiler_errors;
+
+        //uniformize again - typer will redo some types
+        uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
         parsed = monomorphized;
-        tc_result
+        (full_compiler_errors, tc_result_2)
     };
 
     let hir_string = {
@@ -1337,6 +1347,53 @@ def main() -> Void:
         s.x = 1
         s.get_x()
         return";
+
+    assert_eq!(expected.trim(), final_result.trim());
+}
+
+
+
+#[test]
+fn generic_struct_impl() {
+    let (_, final_result, ..) = setup(
+        "
+struct MyStruct<T>:
+    x: T
+
+impl MyStruct<T>:
+    def get_x(self) -> T:
+        return (*self).x
+
+def main():
+    s = MyStruct<i32>()
+    s.x = 1
+    s.get_x()
+",
+    );
+
+    println!("{final_result}");
+    let expected = "
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+        s : MyStruct[i32]
+    defscope 1:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        s = MyStruct[i32]()
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        s.x = 1
+        s.get_x()
+        return
+def MyStruct[i32]::get_x() -> i32:
+    defscope 0:
+        inheritscope 0
+    defblock 0:
+        usescope 0
+        return *self.x";
 
     assert_eq!(expected.trim(), final_result.trim());
 }
