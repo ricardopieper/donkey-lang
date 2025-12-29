@@ -268,39 +268,6 @@ impl<T> LexerResult<T> {
             LexerResult::Error(e) => panic!("Unwrap on lexer result error: {e}"),
         }
     }
-
-    pub fn is_ok(&self) -> bool {
-        match self {
-            LexerResult::Ok(_) => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_no_match(&self) -> bool {
-        match self {
-            LexerResult::NoMatch => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_eof(&self) -> bool {
-        match self {
-            LexerResult::EndOfInput => true,
-            _ => false,
-        }
-    }
-
-    pub fn map<F, U>(self, f: F) -> LexerResult<U>
-    where
-        F: Fn(T) -> U,
-    {
-        match self {
-            LexerResult::Ok(v) => LexerResult::Ok(f(v)),
-            LexerResult::NoMatch => LexerResult::NoMatch,
-            LexerResult::EndOfInput => LexerResult::EndOfInput,
-            LexerResult::Error(e) => LexerResult::Error(e),
-        }
-    }
 }
 
 impl Iterator for Lexer {

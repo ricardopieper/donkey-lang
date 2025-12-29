@@ -89,8 +89,6 @@ pub struct TypeInstanceManager {
 
 impl TypeInstanceManager {
     pub fn new(ctors: TypeConstructorDatabase) -> TypeInstanceManager {
-        
-
         TypeInstanceManager {
             types: vec![],
             constructors: ctors,

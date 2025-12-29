@@ -93,7 +93,7 @@ fn setup_mono(
     let parsed = ast_globals_to_hir(&original_src.file_table[0].ast, &type_db, &mut meta_table);
 
     //Run type check + monomorphization
-    let (compiler_errors, new_hir, tc_result, monomorphized_structs) =
+    let (compiler_errors, new_hir, tc_result, ..) =
         run_type_checker(&mut type_db, parsed, true);
 
 
@@ -136,10 +136,6 @@ fn run_type_checker(
     use crate::semantic::monomorph::Monomorphizer;
     use crate::semantic::uniformizer;
 
-    {
-        let printer = HIRPrinter::new(true, type_db);
-        let s = printer.print_hir(&parsed);
-    };
     let mut typer = Typer::new(type_db);
     typer.forgive_skolem_mismatches();
 
@@ -147,10 +143,6 @@ fn run_type_checker(
 
     let compiler_errors = typer.compiler_errors;
     if !monomorphize {
-        {
-            let printer = HIRPrinter::new(true, type_db);
-            let s = printer.print_hir(&parsed);
-        };
         return (compiler_errors, parsed, tc_result, vec![]);
     }
 
@@ -1260,7 +1252,7 @@ def baz[i32](t: T (inferred: i32)) -> T (return inferred: i32):
 
 #[test]
 fn struct_usage_monomorphization() {
-    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
+    let (.., result, typing_result, errors) = setup_mono(
         "
 struct Box<T>:
     x: T
@@ -1313,7 +1305,7 @@ struct Box[i32]:
 
 #[test]
 fn struct_generic() {
-    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
+    let (.., result, typing_result, errors) = setup_mono(
         "
 struct Box<T>:
     x: T
@@ -1393,7 +1385,7 @@ def main() -> i32 (return inferred: i32):
 
 #[test]
 fn list_test_fully_inferred() {
-    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
+    let (.., result, typing_result, errors) = setup_mono(
         "
 struct List<T>:
     buf: ptr<T>
@@ -1427,7 +1419,7 @@ struct List[i32]:
 
 #[test]
 fn list_test_with_impl() {
-    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
+    let (.., result, typing_result, errors) = setup_mono(
         "
 struct List<T>:
     buf: ptr<T>
@@ -1542,7 +1534,7 @@ impl List[i32]:
 
 #[test]
 fn index_ptr_test() {
-    let (ty_db, meta, source, hir, result, typing_result, errors) = setup_mono(
+    let (.., result, typing_result, errors) = setup_mono(
         "
 struct List:
     cap: i32

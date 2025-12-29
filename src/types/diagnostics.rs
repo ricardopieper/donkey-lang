@@ -6,9 +6,8 @@ use crate::semantic::hir::MetaTable;
 
 #[derive(Copy, Clone)]
 pub enum RootElementType {
-    Struct(InternedString),
     Function(InternedString),
-    Impl(InternedString),
+    //Impl(InternedString),
     ImplMethod(InternedString, InternedString),
 }
 
@@ -16,17 +15,18 @@ impl RootElementType {
     #[allow(dead_code)]
     pub fn get_name(&self) -> String {
         match self {
-            RootElementType::Struct(s) | RootElementType::Function(s) => s.into(),
-            RootElementType::Impl(s) => s.into(),
+            //RootElementType::Struct(s) |
+            RootElementType::Function(s) => s.into(),
+            //RootElementType::Impl(s) => s.into(),
             RootElementType::ImplMethod(i, m) => format!("{}:{}", i, m),
         }
     }
 
     pub fn diag_name(&self) -> String {
         match self {
-            RootElementType::Struct(s) => format!("In struct {}", s),
+           // RootElementType::Struct(s) => format!("In struct {}", s),
             RootElementType::Function(s) => format!("In function {}", s),
-            RootElementType::Impl(s) => format!("In impl {}", s),
+            //RootElementType::Impl(s) => format!("In impl {}", s),
             RootElementType::ImplMethod(i, m) => format!("In method {m} of impl {i}"),
         }
     }

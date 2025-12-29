@@ -2320,7 +2320,7 @@ mod tests {
             token_table: tokens,
             contents: "none",
             path: "test".to_string(),
-            index: FileTableIndex(0),
+            //index: FileTableIndex(0),
         }];
         let mut parser = Parser::new(&table[0].token_table);
         print_errors(&parser, table, &table[0].token_table);
@@ -2340,7 +2340,7 @@ mod tests {
                 },
             }),
             token_table: tokens,
-            index: FileTableIndex(0),
+            //index: FileTableIndex(0),
             contents: "none",
             path: "test".to_string(),
         }];

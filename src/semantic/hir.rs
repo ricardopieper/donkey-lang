@@ -731,10 +731,6 @@ impl TypeTable {
         ret
     }
 
-    pub fn untyped(&self) -> TypeIndex {
-        TypeIndex(usize::MAX)
-    }
-
     pub fn apply_substitution(&mut self, substitution: &Substitution) {
         if substitution.is_empty() {
             return;
@@ -1595,6 +1591,7 @@ fn ast_impl_to_hir<'source>(
     });
 }
 
+/*
 fn try_literal_promotion(
     type_db: &TypeConstructorDatabase,
     literal: &LiteralHIRExpr,
@@ -1652,7 +1649,7 @@ fn try_literal_promotion(
         }
         _ => panic!("Cannot promote value: {:#?}", literal),
     }
-}
+}*/
 
 fn load_stdlib_builtin(type_db: &TypeConstructorDatabase, name: &str) -> Option<PolyType> {
     //check if instance already exists

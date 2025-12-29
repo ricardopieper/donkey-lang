@@ -46,16 +46,20 @@ fn setup(
 
     let mut parsed = ast_globals_to_hir(&original_src.file_table[0].ast, &type_db, &mut meta_table);
 
-    let (mut compiler_errors, tc_result) = {
-        let tc_result = {
-            let mut typer = Typer::new(&mut type_db);
-            typer.forgive_skolem_mismatches();
-            let tc_result = typer.assign_types(&mut parsed);
-            (typer.compiler_errors, tc_result)
-        };
-        let mut mono = Monomorphizer::new(&mut type_db);
+    let (mut compiler_errors, tc_result) = 'tc: {
 
-        mono.run(&mut parsed).unwrap();
+        let mut typer = Typer::new(&mut type_db);
+        typer.forgive_skolem_mismatches();
+        let tc_result = typer.assign_types(&mut parsed);
+
+        if tc_result.is_err() {
+            //return here on the let (mut compiler_errors, tc_result) = { line
+            break 'tc (typer.compiler_errors, tc_result)
+        }
+
+        let mut mono = Monomorphizer::new(&type_db);
+
+        mono.run(&parsed).unwrap();
         let (mut monomorphized, mono_structs) = mono.get_result();
 
         let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);

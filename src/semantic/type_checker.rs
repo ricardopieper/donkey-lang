@@ -16,7 +16,7 @@ use crate::types::type_constructor_db::{
 
 use super::mir::{
     LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue,
-    MIRExprRValue, MIRScope, MIRTopLevelNode, ScopeId,
+    MIRExprRValue, MIRScope, MIRTopLevelNode,
 };
 
 pub struct TypeCheckContext<'compiler_context> {
@@ -45,32 +45,27 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                     literal,
                     mono,
                     &self.type_db.common_types,
-                    type_table,
                     *location,
                 )
             }
-            MIRExpr::RValue(MIRExprRValue::Cast(cast_expr, cast_to, location)) => {
+            MIRExpr::RValue(MIRExprRValue::Cast(..)) => {
                 //self.check_expr_cast(*cast_expr, cast_to, location)
                 Ok(())
             }
-            MIRExpr::RValue(MIRExprRValue::BinaryOperation(lhs, op, rhs, expr_type, location)) => {
+            MIRExpr::RValue(MIRExprRValue::BinaryOperation(..)) => {
                 //self.check_fun_expr_bin_op(*lhs, *rhs, op, expr_type, location)
                 Ok(())
             }
-            MIRExpr::RValue(MIRExprRValue::MethodCall(obj, name, args, return_type, location)) => {
+            MIRExpr::RValue(MIRExprRValue::MethodCall(..)) => {
                 Ok(())
                 //self.check_expr_method_call(obj, *name, args, *return_type, type_table, *location)
             }
             MIRExpr::RValue(MIRExprRValue::FunctionCall(
-                function_expr,
-                args,
-                return_type,
-                location,
-                _,
+                ..
             )) => Ok(()),
-            MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, location)) => Ok(()),
+            MIRExpr::RValue(MIRExprRValue::StructInstantiate(..)) => Ok(()),
 
-            MIRExpr::RValue(MIRExprRValue::UnaryExpression(op, rhs, inferred_type, location)) => {
+            MIRExpr::RValue(MIRExprRValue::UnaryExpression(..)) => {
                 //Type inference would not work
                 //if the unary operator is not found, so we can assume it is correct.
                 Ok(())
@@ -125,11 +120,11 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
         type_table: &TypeTable,
     ) -> Result<(), CompilerError> {
         match lvalue {
-            MIRExprLValue::MemberAccess(obj, member, inferred_type, location) => {
+            MIRExprLValue::MemberAccess(..) => {
                 //elf.check_expr_member_access(*obj, member, inferred_type, location)
                 Ok(())
             }
-            MIRExprLValue::Variable(var, inferred_type, location) => Ok(()),
+            MIRExprLValue::Variable(..) => Ok(()),
             MIRExprLValue::Deref(obj, expr_type, location) => {
                 self.check_deref_expr(obj, *expr_type, type_table, *location)
             } //should be OK...
@@ -145,7 +140,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
         location: NodeIndex,
     ) -> Result<(), CompilerError> {
         self.typecheck(obj, type_table)?;
-        let mut unifier = Unifier::new(self.errors, self.type_db);
+        let mut unifier = Unifier::new(self.errors);
 
         let derefed_type = &type_table[expr_type].mono; //self.type_db. //get_instance(expr_type);
         let ptr_type = &type_table[obj.get_type()].mono;
@@ -187,7 +182,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
                     match unify_result {
                         Ok(_) => {}
-                        Err(e) => {
+                        Err(_) => {
                             self.errors.internal_error.push(CompilerErrorContext {
                                 on_element: self.on_element,
                                 location,
@@ -233,7 +228,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
             vec![MonoType::variable(InternedString::new("T"))],
         );
 
-        let mut unifier = Unifier::new(self.errors, self.type_db);
+        let mut unifier = Unifier::new(self.errors);
         let unify_result =
             unifier.unify(ptr_type, &expected_type, location, &self.on_element, false);
 
@@ -298,7 +293,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
     }
 
     fn make_unifier(&mut self) -> Unifier<'_> {
-        Unifier::new(self.errors, self.type_db)
+        Unifier::new(self.errors)
     }
 
     fn check_expr_array(
@@ -466,7 +461,6 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
         literal: &LiteralMIRExpr,
         type_mono: &MonoType,
         common_types: &CommonTypeConstructors,
-        type_table: &TypeTable,
         location: NodeIndex,
     ) -> Result<(), CompilerError> {
         let MonoType::Application(type_id, _) = type_mono else {
@@ -668,16 +662,15 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
         return_type: &MonoType,
         type_table: &TypeTable,
     ) -> Result<(), CompilerError> {
-        let fname = self.on_element.get_name();
         let cloned_element = self.on_element;
         for block in body {
             //let scope = block.scope;
             //let index = block.index;
             match &block.finish {
-                MIRBlockFinal::If(expr, goto_true, goto_false, location) => {
+                MIRBlockFinal::If(expr, _goto_true, _goto_false, location) => {
                     self.check_if_statement_expression(expr, *location, type_table)?;
                 }
-                MIRBlockFinal::GotoBlock(id) => {}
+                MIRBlockFinal::GotoBlock(_) => {}
                 MIRBlockFinal::Return(return_expr, location) => {
                     self.typecheck(return_expr, type_table)?;
                     let expr_type = return_expr.get_type();
@@ -690,7 +683,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
                     match unification_result {
                         Ok(_) => {}
-                        Err(e) => {
+                        Err(_) => {
                             self.errors
                                 .return_type_mismatches
                                 .push(CompilerErrorContext {
@@ -749,7 +742,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
             let mut new_blocks = vec![];
             for node in &block.nodes {
-                match self.check_mir_block_node(node, block.scope, scopes, type_table) {
+                match self.check_mir_block_node(node, type_table) {
                     Ok(_) => new_blocks.push(node),
                     Err(e) if first_error.is_none() => first_error = Some(e),
                     Err(_) => {}
@@ -765,12 +758,8 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
     fn check_mir_block_node(
         &mut self,
         node: &MIRBlockNode,
-        scope: ScopeId,
-        scopes: &[MIRScope],
         type_table: &TypeTable,
     ) -> Result<(), CompilerError> {
-        let fname = self.on_element.get_name();
-
         match node {
             MIRBlockNode::Assign {
                 path,
@@ -788,7 +777,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                         let mono_expr_type = &type_table[expr_type].mono;
                         let mono_ty = &type_table[ty].mono;
 
-                        let mut unifier = Unifier::new(self.errors, self.type_db);
+                        let mut unifier = Unifier::new(self.errors);
                         let unify_result = unifier.unify(
                             mono_expr_type,
                             mono_ty,
@@ -799,7 +788,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
                         match unify_result {
                             Ok(_) => {}
-                            Err(e) => {
+                            Err(_) => {
                                 self.errors.assign_mismatches.push(CompilerErrorContext {
                                     error: TypeMismatch {
                                         context: AssignContext {
@@ -827,7 +816,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                         let assign_type_mono = &type_table[assign_type].mono;
                         let rhs_type_mono = &type_table[expr_type].mono;
 
-                        let mut unifier = Unifier::new(self.errors, self.type_db);
+                        let mut unifier = Unifier::new(self.errors);
 
                         let unify_result = unifier.unify(
                             assign_type_mono,
@@ -839,7 +828,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
                         match unify_result {
                             Ok(_) => {}
-                            Err(e) => {
+                            Err(_) => {
                                 self.errors.assign_mismatches.push(CompilerErrorContext {
                                     error: TypeMismatch {
                                         context: AssignContext {
@@ -857,13 +846,11 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                         };
                         Ok(())
                     }
-                    MIRExprLValue::Deref(ptr, ty, location) => {
-                        let lhs_type = ty;
-
+                    MIRExprLValue::Deref(_ptr_expr, ty, location) => {
                         let mono_expr_type = &type_table[expr_type].mono;
                         let mono_ty = &type_table[ty].mono;
 
-                        let mut unifier = Unifier::new(self.errors, self.type_db);
+                        let mut unifier = Unifier::new(self.errors);
 
                         let unify_result = unifier.unify(
                             mono_expr_type,
@@ -875,7 +862,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
                         match unify_result {
                             Ok(_) => {}
-                            Err(e) => {
+                            Err(_) => {
                                 self.errors.assign_mismatches.push(CompilerErrorContext {
                                     error: TypeMismatch {
                                         context: AssignContext {
@@ -897,20 +884,13 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                 }
             }
             MIRBlockNode::FunctionCall {
-                function,
-                args,
-                location,
-                return_type,
+                ..
             } => {
                 //already checked at inference time
                 Ok(())
             }
             MIRBlockNode::MethodCall {
-                object,
-                method_name,
-                args,
-                location,
-                return_type,
+               ..
             } => {
                 //already checked at inference time
                 Ok(())
@@ -968,13 +948,12 @@ pub fn typecheck(
 ) -> Result<(), CompilerError> {
     for node in top_nodes {
         if let MIRTopLevelNode::DeclareFunction {
-                struct_name,
                 function_name,
-                parameters,
                 body,
                 scopes,
                 return_type,
                 type_table,
+                ..
             } = node {
             let mut context = TypeCheckContext {
                 type_db,

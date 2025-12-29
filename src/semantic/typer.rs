@@ -129,29 +129,24 @@ impl<'db, 'subs> fmt::Display for SubstitutionPrinter<'db, 'subs> {
 */
 pub struct Unifier<'ctx> {
     type_errors: &'ctx mut TypeErrors,
-    type_database: &'ctx TypeConstructorDatabase,
     forgive_list: &'ctx [UniformizedTypes],
 }
 
 impl<'ctx> Unifier<'ctx> {
     pub fn new(
-        type_errors: &'ctx mut TypeErrors,
-        type_database: &'ctx TypeConstructorDatabase,
+        type_errors: &'ctx mut TypeErrors
     ) -> Self {
         Self {
             type_errors,
-            type_database,
             forgive_list: &[],
         }
     }
     pub fn new_with_forgive_list(
         type_errors: &'ctx mut TypeErrors,
-        type_database: &'ctx TypeConstructorDatabase,
         forgive_list: &'ctx [UniformizedTypes],
     ) -> Self {
         Self {
             type_errors,
-            type_database,
             forgive_list,
         }
     }
@@ -395,9 +390,8 @@ impl<'tydb> Typer<'tydb> {
             if let HIRRoot::StructDeclaration {
                 struct_name,
                 type_parameters,
-                fields,
-                type_table,
                 has_been_monomorphized,
+                ..
             } = root
             {
                 //TODO: Check for existing ones if they have been monomorphized
@@ -521,7 +515,6 @@ impl<'tydb> Typer<'tydb> {
     ) -> Result<Substitution, UnificationErrorStack> {
         let mut unifier = Unifier::new_with_forgive_list(
             &mut self.compiler_errors,
-            self.type_database,
             &self.monomorphized_versions,
         );
         //unifier.set_forgive_list(&self.monomorphized_versions);
@@ -826,7 +819,7 @@ impl<'tydb> Typer<'tydb> {
                         }
                     }
                 }
-                HIR::FunctionCall(fcall, location) => {
+                HIR::FunctionCall(fcall, ..) => {
                     self.infer_function_call(fcall, type_table, typing_context, root)?;
                 }
                 HIR::MethodCall(mcall, location) => {
@@ -1118,7 +1111,7 @@ impl<'tydb> Typer<'tydb> {
                 //inferred_passed_type_args
                 if !user_wants_specific_type {
                     let mut inferred_passed_type_args = vec![];
-                    for (ty, arg) in type_arg_types {
+                    for (_, arg) in type_arg_types {
                         let substituted = arg.apply_substitution(&substitution);
                         inferred_passed_type_args.push(substituted);
                     }
@@ -1267,12 +1260,12 @@ impl<'tydb> Typer<'tydb> {
                         parameters,
                         body,
                         return_type,
-                        method_of,
                         is_intrinsic,
                         is_external,
                         is_varargs,
                         type_table,
                         has_been_monomorphized,
+                        ..
                     } = method
                     else {
                         panic!("Expected a function declaration in impl block");
@@ -1465,7 +1458,7 @@ impl<'tydb> Typer<'tydb> {
         coercion_hint: Option<&MonoType>,
     ) -> Result<(), ()> {
         match expression {
-            HIRExpr::BinaryOperation(lhs, op, rhs, node, final_ty) => {
+            HIRExpr::BinaryOperation(lhs, op, rhs, _node, final_ty) => {
                 self.infer_type_for_expression(
                     lhs,
                     typing_context,
@@ -1484,10 +1477,10 @@ impl<'tydb> Typer<'tydb> {
                 let rhs_ty = type_table[lhs.get_type()].clone();
                 use super::hir::PolyType;
                 match lhs_ty.expect_mono() {
-                    MonoType::Variable(type_variable) => {
+                    MonoType::Variable(..) => {
                         //leave as is to solve later during monomorphization
                     }
-                    MonoType::Skolem(type_variable) => {
+                    MonoType::Skolem(..) => {
                         //leave as is to solve later during monomorphization
                     }
                     MonoType::Application(lhs_app, _) => {
@@ -1543,7 +1536,6 @@ impl<'tydb> Typer<'tydb> {
             HIRExpr::Literal(literal, node, ty) => {
                 if let Some(coercion_hint) = coercion_hint {
                     //let current_type = type_table[*ty].clone();
-                    let coercion_hint = coercion_hint;
                     self.coerce_integer_literal(literal, coercion_hint, type_table, *ty)
                 }
             }

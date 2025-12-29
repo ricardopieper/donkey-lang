@@ -239,8 +239,6 @@ pub struct MIRBlock {
     pub nodes: Vec<MIRBlockNode>,
 }
 
-pub type TypecheckedMIRBlock = MIRBlock;
-
 //returns the simplified expression, and whether the expression was simplified at all. Can be called until no simplification is possible.
 //In theory this could do constant folding, but we're just removing &* and *&
 fn simplify_expression(expr: HIRExpr) -> (HIRExpr, bool) {

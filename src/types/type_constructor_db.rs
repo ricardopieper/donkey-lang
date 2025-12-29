@@ -1027,15 +1027,3 @@ impl Bytes {
         Bytes(std::mem::size_of::<T>() as u32)
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ByteRange {
-    pub begin: Bytes,
-    pub end: Bytes,
-}
-
-impl ByteRange {
-    pub fn size(&self) -> Bytes {
-        self.end - self.begin
-    }
-}

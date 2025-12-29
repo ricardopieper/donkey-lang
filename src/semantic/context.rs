@@ -13,7 +13,6 @@ pub struct FileTableIndex(pub usize);
 #[derive(Debug)]
 pub struct FileTableEntry {
     pub path: String,
-    pub index: FileTableIndex,
     pub ast: AST,
     pub contents: &'static str,
     pub token_table: TokenTable,
@@ -39,7 +38,6 @@ impl Source {
         let prev_count = self.file_table.len();
         let mut file_table_entry = FileTableEntry {
             path: file_name,
-            index: FileTableIndex(prev_count),
             ast: AST::Break(AstSpan {
                 //this gets replaced
                 start: TokenSpanIndex {
