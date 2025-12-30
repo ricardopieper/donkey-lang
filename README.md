@@ -44,7 +44,7 @@ struct SomeStructGeneric<T>:
 
 impl SomeStructGeneric<F>:
     def some_method(self, param: u32) -> F:
-       ...
+       return (*self).field3
 
 def some_func<T>(param: T):
     x = 1
