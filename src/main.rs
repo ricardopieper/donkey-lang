@@ -20,6 +20,7 @@ mod debug;
 #[macro_use]
 mod semantic;
 mod types;
+mod llvm;
 
 #[cfg(test)]
 #[macro_use(quickcheck)]
@@ -66,7 +67,7 @@ fn main() {
     let mut meta_table = MetaTable::new();
     let mut source = Source::new();
 
-    source.load_stdlib();
+    //source.load_stdlib();
     if !source.load_file(&args[1]) {
         return;
     }
@@ -140,5 +141,7 @@ fn main() {
         );
         println!("{printer}");
     }
+
+    llvm::llvm_backend::generate_llvm(&type_db, &all_mir).unwrap();
 
 }

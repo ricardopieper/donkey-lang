@@ -454,6 +454,7 @@ pub enum MonoType {
 }
 
 impl MonoType {
+
     pub fn get_ctor_id(&self) -> TypeConstructorId {
         match self {
             MonoType::Application(id, _) => *id,

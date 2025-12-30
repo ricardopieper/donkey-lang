@@ -135,6 +135,24 @@ impl TypeConstructor {
     pub fn find_field(&self, name: InternedString) -> Option<&TypeConstructorFieldDeclaration> {
         self.fields.iter().find(|m| m.name == name)
     }
+
+    pub fn compute_size(&self, ty_db: &TypeConstructorDatabase) -> Bytes {
+        match self.kind {
+            TypeKind::Primitive { size } => size,
+            TypeKind::Struct => {
+
+                self.fields.iter()
+                    .map(|field| {
+                        let field_ctor = field.field_type.get_ctor_id();
+                        let ctor = ty_db.find(field_ctor);
+                        ctor.compute_size(ty_db)
+                    })
+                    .sum()
+            },
+            //ptr, review this
+            TypeKind::Function => Bytes::size_of::<usize>(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +247,20 @@ impl TypeConstructorDatabase {
         });
         next_id
     }
+
+    pub fn is_integer(&self, ty: TypeConstructorId) -> bool {
+            ty == self.common_types.i32
+                || ty == self.common_types.u32
+                || ty == self.common_types.i64
+                || ty == self.common_types.u64
+                || ty == self.common_types.u8
+                || ty == self.common_types.char
+    }
+
+    pub fn is_float(&self, ty: TypeConstructorId) -> bool {
+        ty == self.common_types.f32 || ty == self.common_types.f64
+    }
+
 
     pub fn add_binary_operator(
         &mut self,
