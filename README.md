@@ -43,7 +43,7 @@ struct SomeStructGeneric<T>:
     field3: T
 
 impl SomeStructGeneric<F>:
-    def some_method(self, param: u32) -> u32:
+    def some_method(self, param: u32) -> F:
        ...
 
 def some_func<T>(param: T):
@@ -52,6 +52,11 @@ def some_func<T>(param: T):
     return x + y + param
 
 def main():
+    my_struct = SomeStructGeneric<str>() //no initializers yet!
+    my_struct.field1 = 10
+    my_struct.field2 = 999
+    my_struct.field3 = "Hello!"
+    value = my_struct.some_method(123) //value is inferred as str
     some_func(10)
 
 ```
