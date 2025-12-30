@@ -70,3 +70,4 @@ Pending features:
  - array methods
  - string methods (based on libc, can be done in stdlib)
  - import statements, prelude
+ - ptr ergonomics (like -> or auto deref)
