@@ -74,8 +74,6 @@ In this case, self is ptr<SomeStruct>, automatically inferred.
 
 
 Pending features:
-
- - impl
  - low-level memory management functions
  - array methods
  - string methods (based on libc, can be done in stdlib)
