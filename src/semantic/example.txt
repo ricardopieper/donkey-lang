@@ -1,0 +1,70 @@
+<T, U>(data: Foo<Bar, Baz<T>, Another<Example<U>>)
+
+generics_in_context: T, U
+HIRType: {
+    Type: Foo
+    Parameters: [
+        {
+            Type: Bar
+            Kind: Simple
+        },
+        {
+            Type: Baz
+            Parameters: [
+                {
+                    Type: T
+                    Kind: Simple
+
+                }
+            ]
+            Kind: Generic
+        },
+        {
+            Type: Another
+            Parameters: [
+                {
+                    Type: Type
+                    Parameters: [
+                        {
+                            Type: U
+                            Kind: Simple
+                        }
+                    ],
+                    Kind: Generic
+                }
+            ],
+            Kind: Generic
+        }
+    ]
+}
+
+Expected Result:
+<T, U>, Foo<Bar, Baz<T>, Another<Example<U>>
+PolyType::Poly(
+    <T, U>,
+    PolyType::Mono(
+        MonoType::Application(
+            Foo,
+            [
+                MonoType::Variable(Bar),
+                MonoType::Application(
+                    Baz,
+                    [
+                        MonoType::Variable(T)
+                    ]
+                ),
+                MonoType::Application(
+                    Another,
+                    [
+                        MonoType::Application(
+                            Example,
+                            [
+                                MonoType::Variable(U)
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
+    )
+)

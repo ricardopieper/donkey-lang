@@ -1,7 +1,8 @@
 
-use super::hir::{MonoType, NodeIndex, PolyType, TypeIndex, TypeTable};
+use super::hir::{HIRType, MonoType, NodeIndex, PolyType, TypeIndex, TypeTable};
 use super::typer::Unifier;
 use crate::interner::InternedString;
+use crate::semantic::hir::{HIR, HIRExpr, HIRRoot, LiteralHIRExpr};
 use crate::types::diagnostics::{
     ArrayExpressionsNotAllTheSameType, AssignContext, CompilerErrorContext, DerefOnNonPointerError, InternalError, OutOfTypeBounds,
     ReturnTypeContext, RootElementType, TypeErrors, TypeMismatch,
@@ -14,12 +15,8 @@ use crate::types::type_constructor_db::{
     CommonTypeConstructors, TypeConstructorDatabase,
 };
 
-use super::mir::{
-    LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue,
-    MIRExprRValue, MIRScope, MIRTopLevelNode,
-};
 
-pub struct TypeCheckContext<'compiler_context> {
+pub struct HIRTypeCheckContext<'compiler_context> {
     //top_level_decls: &'compiler_context <TypeInstanceId>,
     type_db: &'compiler_context TypeConstructorDatabase,
     errors: &'compiler_context mut TypeErrors,
@@ -28,62 +25,63 @@ pub struct TypeCheckContext<'compiler_context> {
 
 type CompilerError = ();
 
-impl<'compiler_context> TypeCheckContext<'compiler_context> {
+impl<'compiler_context> HIRTypeCheckContext<'compiler_context> {
     //We will check that function arguments and index operators are receiving the correct types.
-    //Binary operators are actually certainly correct, since type inference will report errors if it can't find an appropriate operator.
-    //We might implement sanity checks here, to prevent bugs in the type inference propagating to the backend code.
+    //We also implement sanity checks here, to prevent bugs in the type inference propagating to the backend code.
     //We also assert that literal types are within bounds.
     pub fn typecheck(
         &mut self,
-        expr: &MIRExpr,
+        expr: &HIRExpr,
         type_table: &TypeTable,
     ) -> Result<(), CompilerError> {
         match expr {
-            MIRExpr::RValue(MIRExprRValue::Literal(literal, type_id, location)) => {
+            HIRExpr::Literal(literal, location, type_id) => {
                 let mono = &type_table[*type_id].mono;
                 self.check_literal_expr_value_bounds(
                     literal,
                     mono,
                     &self.type_db.common_types,
+                    type_table,
                     *location,
                 )
             }
-            MIRExpr::RValue(MIRExprRValue::Cast(..)) => {
-                //self.check_expr_cast(*cast_expr, cast_to, location)
-                Ok(())
+            HIRExpr::Cast(cast_expr, cast_to, location, type_id) => {
+                self.check_expr_cast(cast_expr.as_ref(), cast_to, location, type_id)
             }
-            MIRExpr::RValue(MIRExprRValue::BinaryOperation(..)) => {
+            HIRExpr::BinaryOperation(lhs, op, rhs, location, expr_type) => {
                 //self.check_fun_expr_bin_op(*lhs, *rhs, op, expr_type, location)
                 Ok(())
             }
-            MIRExpr::RValue(MIRExprRValue::MethodCall(..)) => {
+            HIRExpr::MethodCall(call, location) => {
                 Ok(())
                 //self.check_expr_method_call(obj, *name, args, *return_type, type_table, *location)
             }
-            MIRExpr::RValue(MIRExprRValue::FunctionCall(
-                ..
-            )) => Ok(()),
-            MIRExpr::RValue(MIRExprRValue::StructInstantiate(..)) => Ok(()),
-
-            MIRExpr::RValue(MIRExprRValue::UnaryExpression(..)) => {
+            HIRExpr::FunctionCall(call, location) => Ok(()),
+            HIRExpr::StructInstantiate(name, type_args, location, type_id) => Ok(()),
+            HIRExpr::UnaryExpression(op, rhs, inferred_type, location) => {
                 //Type inference would not work
                 //if the unary operator is not found, so we can assume it is correct.
                 Ok(())
             }
-
-            MIRExpr::RValue(MIRExprRValue::Array(expr_array, inferred_type, location)) => {
+            HIRExpr::Array(expr_array, location, inferred_type) => {
                 self.check_expr_array(expr_array, *inferred_type, type_table, *location)
             }
-            MIRExpr::LValue(lvalue) => self.typecheck_lvalue(lvalue, type_table),
-
-            MIRExpr::RValue(MIRExprRValue::Ref(obj, expr_type, location)) => {
+            HIRExpr::MemberAccess(obj, member, location, inferred_type) => {
+                //elf.check_expr_member_access(*obj, member, inferred_type, location)
+                Ok(())
+            }
+            HIRExpr::Variable(var, location, inferred_type) => Ok(()),
+            HIRExpr::Deref(obj, location, expr_type) => {
+                self.check_deref_expr(obj, *expr_type, type_table, *location)
+            } //
+            HIRExpr::Ref(obj, location, expr_type) => {
                 self.check_ref_expr(obj, *expr_type, type_table, *location)
             }
-            /*MIRExpr::RValue(MIRExprRValue::TypeVariable {
+            /*HIRExpr::TypeName {
                 type_variable,
                 type_data,
                 location,
-            }) => {
+            } => {
                 let type_data_type = &type_table[type_data];
                 let type_data_type_data = self.type_db.find_by_name("TypeData".into()).unwrap();
 
@@ -110,37 +108,29 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                         Err(())
                     }
                 }
-            }*/
-        }
-    }
-
-    fn typecheck_lvalue(
-        &mut self,
-        lvalue: &MIRExprLValue,
-        type_table: &TypeTable,
-    ) -> Result<(), CompilerError> {
-        match lvalue {
-            MIRExprLValue::MemberAccess(..) => {
-                //elf.check_expr_member_access(*obj, member, inferred_type, location)
+            },*/
+            HIRExpr::MemberAccess(obj, member, inferred_type, location) => {
+                //self.check_expr_member_access(*obj, member, inferred_type, location)
                 Ok(())
             }
-            MIRExprLValue::Variable(..) => Ok(()),
-            MIRExprLValue::Deref(obj, expr_type, location) => {
+            HIRExpr::Variable(var, inferred_type, location) => Ok(()),
+            HIRExpr::Deref(obj, location, expr_type) => {
                 self.check_deref_expr(obj, *expr_type, type_table, *location)
-            } //should be OK...
+            }
+            _ => Ok(()), //should be OK...
         }
     }
 
     //*a where a: ptr<T>, result type = T
     fn check_deref_expr(
         &mut self,
-        obj: &MIRExpr,
+        obj: &HIRExpr,
         expr_type: super::hir::TypeIndex,
         type_table: &TypeTable,
         location: NodeIndex,
     ) -> Result<(), CompilerError> {
         self.typecheck(obj, type_table)?;
-        let mut unifier = Unifier::new(self.errors);
+        let mut unifier = Unifier::new(self.errors, self.type_db);
 
         let derefed_type = &type_table[expr_type].mono; //self.type_db. //get_instance(expr_type);
         let ptr_type = &type_table[obj.get_type()].mono;
@@ -182,7 +172,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
                     match unify_result {
                         Ok(_) => {}
-                        Err(_) => {
+                        Err(e) => {
                             self.errors.internal_error.push(CompilerErrorContext {
                                 on_element: self.on_element,
                                 location,
@@ -213,12 +203,12 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
     fn check_ref_expr(
         &mut self,
-        obj: &MIRExprLValue, //value to be referenced, &obj, this will be only obj and wont be ptr<?>
+        obj: &HIRExpr, //value to be referenced, &obj, this will be only obj and wont be ptr<?>
         expr_type: super::hir::TypeIndex, //produced type, ptr<?>
         type_table: &TypeTable,
         location: NodeIndex,
     ) -> Result<(), CompilerError> {
-        self.typecheck(&MIRExpr::LValue(obj.clone()), type_table)?;
+        self.typecheck(obj, type_table)?;
         let ptr_type = &type_table[expr_type].mono;
 
         //and expr_type has to be ptr<T> where T is the type of the object
@@ -228,7 +218,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
             vec![MonoType::variable(InternedString::new("T"))],
         );
 
-        let mut unifier = Unifier::new(self.errors);
+        let mut unifier = Unifier::new(self.errors, self.type_db);
         let unify_result =
             unifier.unify(ptr_type, &expected_type, location, &self.on_element, false);
 
@@ -293,12 +283,12 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
     }
 
     fn make_unifier(&mut self) -> Unifier<'_> {
-        Unifier::new(self.errors)
+        Unifier::new(self.errors, self.type_db)
     }
 
     fn check_expr_array(
         &mut self,
-        expr_array: &[MIRExpr],
+        expr_array: &[HIRExpr],
         inferred_type: TypeIndex,
         type_table: &TypeTable,
         location: NodeIndex,
@@ -311,7 +301,6 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
             .collect::<Result<Vec<_>, _>>()?;
 
         let all_types = expr_array.iter().map(|x| x.get_type()).collect::<Vec<_>>();
-
         let first_type = &type_table[all_types[0]];
         let cloned_self_element = self.on_element;
 
@@ -421,8 +410,8 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
     /*
     fn check_fun_expr_bin_op(
         &mut self,
-        lhs: MIRExpr,
-        rhs: MIRExpr,
+        lhs: TypecheckPendingExpression,
+        rhs: TypecheckPendingExpression,
         op: SpannedOperator,
         expr_type: TypeInstanceId,
         location: NodeIndex,
@@ -458,9 +447,10 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
     */
     fn check_literal_expr_value_bounds(
         &mut self,
-        literal: &LiteralMIRExpr,
+        literal: &LiteralHIRExpr,
         type_mono: &MonoType,
         common_types: &CommonTypeConstructors,
+        type_table: &TypeTable,
         location: NodeIndex,
     ) -> Result<(), CompilerError> {
         let MonoType::Application(type_id, _) = type_mono else {
@@ -472,7 +462,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
         let type_id = *type_id;
 
         match literal {
-            LiteralMIRExpr::Integer(i) => {
+            LiteralHIRExpr::Integer(i) => {
                 let is_within_bounds = if type_id == common_types.i32 {
                     i >= i128::from(i32::MIN) && i <= i128::from(i32::MAX)
                 } else if type_id == common_types.i64 {
@@ -507,7 +497,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                     return Err(());
                 }
             }
-            LiteralMIRExpr::Float(f) => {
+            LiteralHIRExpr::Float(f) => {
                 let f = f.0;
                 let is_within_bounds = if type_id == common_types.f32 {
                     f >= f64::from(f32::MIN) && f <= f64::from(f32::MAX)
@@ -539,18 +529,19 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                     return Err(());
                 }
             }
-            LiteralMIRExpr::String(_) | LiteralMIRExpr::Boolean(_) | LiteralMIRExpr::Char(_) => {
+            LiteralHIRExpr::String(_) | LiteralHIRExpr::Boolean(_) | LiteralHIRExpr::Char(_) => {
                 true
             }
+            LiteralHIRExpr::None => unimplemented!(),
         };
         Ok(())
     }
     /*
        fn method_call_check(
            &mut self,
-           obj: MIRExpr,
+           obj: TypecheckPendingExpression,
            name: InternedString,
-           args: Vec<MIRExpr>,
+           args: Vec<TypecheckPendingExpression>,
            location: NodeIndex,
        ) -> Result<
            (
@@ -641,7 +632,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
            &mut self,
            function_type: TypeIndex,
            function_name: FName,
-           args: &[MIRExpr],
+           args: &[TypecheckPendingExpression],
            type_table: &TypeTable,
            location: NodeIndex,
        ) -> Result<(), CompilerError>
@@ -655,41 +646,83 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
            return Ok(());
        }
     */
-    fn type_check_function(
+    fn type_check_roots<'scopes>(
         &mut self,
-        body: &[MIRBlock],
-        scopes: &[MIRScope],
+        body: &[HIR],
         return_type: &MonoType,
         type_table: &TypeTable,
     ) -> Result<(), CompilerError> {
+        let fname = self.on_element.get_name();
+
         let cloned_element = self.on_element;
         for block in body {
-            //let scope = block.scope;
-            //let index = block.index;
-            match &block.finish {
-                MIRBlockFinal::If(expr, _goto_true, _goto_false, location) => {
-                    self.check_if_statement_expression(expr, *location, type_table)?;
+
+            match block {
+                crate::semantic::hir::HIR::If(
+                    bool_expr,
+                    true_branch,
+                    false_branch,
+                    node_index,
+                ) => {
+                    self.check_if_statement_expression(
+                        bool_expr,
+                        *node_index,
+                        type_table,
+                    )?;
                 }
-                MIRBlockFinal::GotoBlock(_) => {}
-                MIRBlockFinal::Return(return_expr, location) => {
+                crate::semantic::hir::HIR::Assign {
+                    path,
+                    expression,
+                    location,
+                } => {
+                    self.check_assignment(&fname, type_table, path, expression, location)?;
+                },
+                crate::semantic::hir::HIR::SyntheticDeclare {
+                    location,
+                    var,
+                    typedef,
+                    expression
+                } => {
+                   self.check_declare(&fname, type_table, location, var, typedef, expression)?;
+                },
+                crate::semantic::hir::HIR::Declare {
+                    location,
+                    var,
+                    typedef,
+                    expression } => {
+                    (*self).check_declare(&fname, type_table, location, var, &typedef.type_variable, expression)?;
+                },
+                crate::semantic::hir::HIR::While(hirexpr, hirs, node_index) => {
+                    //@TODO parameterize if/while
+                    self.check_if_statement_expression(
+                        hirexpr,
+                        *node_index,
+                        type_table,
+                    )?;
+                },
+                crate::semantic::hir::HIR::Return(return_expr, location) => {
                     self.typecheck(return_expr, type_table)?;
                     let expr_type = return_expr.get_type();
                     let expr_mono = &type_table[expr_type].mono;
-                    let original = return_type;
                     let mut unifier = self.make_unifier();
 
                     let unification_result =
-                        unifier.unify_strict(original, expr_mono, *location, &cloned_element);
+                        unifier.unify_strict(
+                            return_type,
+                            expr_mono,
+                            *location,
+                            &cloned_element
+                        );
 
                     match unification_result {
                         Ok(_) => {}
-                        Err(_) => {
+                        Err(e) => {
                             self.errors
                                 .return_type_mismatches
                                 .push(CompilerErrorContext {
                                     error: TypeMismatch {
                                         context: ReturnTypeContext(),
-                                        expected: PolyType::mono(original.clone()),
+                                        expected: PolyType::mono(return_type.clone()),
                                         actual: PolyType::mono(expr_mono.clone()),
                                     },
                                     on_element: self.on_element,
@@ -700,8 +733,9 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                         }
                     }
                 }
-                MIRBlockFinal::EmptyReturn(location) => {
+                crate::semantic::hir::HIR::EmptyReturn(location) => {
                     let MonoType::Application(ctor, _) = return_type else {
+                        //Just in case a type variable reaches here... we throw a generic type mismatch
                         self.errors
                             .return_type_mismatches
                             .push(CompilerErrorContext {
@@ -736,171 +770,188 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                             });
                         return Err(());
                     }
-                }
-            };
-            let mut first_error = None;
-
-            let mut new_blocks = vec![];
-            for node in &block.nodes {
-                match self.check_mir_block_node(node, type_table) {
-                    Ok(_) => new_blocks.push(node),
-                    Err(e) if first_error.is_none() => first_error = Some(e),
-                    Err(_) => {}
-                }
+                },
+                _ => {}
             }
-            if let Some(e) = first_error {
-                return Err(e);
+
+        }
+        Ok(())
+    }
+
+    fn check_declare(
+        &mut self,
+        fname: &String,
+        type_table: &TypeTable,
+        location: &NodeIndex,
+        var: &InternedString,
+        typedef: &TypeIndex,
+        expression: &HIRExpr) -> Result<(), CompilerError>
+    {
+        let expr_type = expression.get_type();
+
+        let mono_expr_type = &type_table[expr_type].mono;
+        let mono_ty = &type_table[typedef].mono;
+
+        let mut unifier = Unifier::new(self.errors, self.type_db);
+        let unify_result = unifier.unify(
+            mono_expr_type,
+            mono_ty,
+            *location,
+            &self.on_element,
+            false,
+        );
+
+        match unify_result {
+            Ok(_) => {}
+            Err(e) => {
+                self.errors.assign_mismatches.push(CompilerErrorContext {
+                    error: TypeMismatch {
+                        context: AssignContext {
+                            assign_lvalue_expr: var.into(),
+                        },
+                        expected: PolyType::mono(mono_ty.clone()),
+                        actual: PolyType::mono(mono_expr_type.clone()),
+                    },
+                    on_element: self.on_element,
+                    location: *location,
+                    compiler_code_location: loc!(),
+                });
+                return Err(());
             }
         }
         Ok(())
     }
 
-    fn check_mir_block_node(
+    fn check_assignment(
         &mut self,
-        node: &MIRBlockNode,
+        fname: &String,
         type_table: &TypeTable,
-    ) -> Result<(), CompilerError> {
-        match node {
-            MIRBlockNode::Assign {
-                path,
-                expression,
-                location,
-            } => {
-                let path_lvalue = MIRExpr::LValue(path.clone());
-                self.typecheck(&path_lvalue, type_table)?;
-                self.typecheck(expression, type_table)?;
+        path: &HIRExpr,
+        expression: &HIRExpr,
+        location: &NodeIndex) -> Result<(), CompilerError> {
+        //let path_lvalue = MIRExpr::LValue(path.clone());
+        self.typecheck(path, type_table)?;
+        self.typecheck(expression, type_table)?;
 
-                let expr_type = expression.get_type();
+        let expr_type = expression.get_type();
 
-                match path {
-                    MIRExprLValue::Variable(var_name, ty, _) => {
-                        let mono_expr_type = &type_table[expr_type].mono;
-                        let mono_ty = &type_table[ty].mono;
+        match path {
+            HIRExpr::Variable(var_name, _node, ty) => {
+                let mono_expr_type = &type_table[expr_type].mono;
+                let mono_ty = &type_table[ty].mono;
 
-                        let mut unifier = Unifier::new(self.errors);
-                        let unify_result = unifier.unify(
-                            mono_expr_type,
-                            mono_ty,
-                            *location,
-                            &self.on_element,
-                            false,
-                        );
+                let mut unifier = Unifier::new(self.errors, self.type_db);
+                let unify_result = unifier.unify(
+                    mono_expr_type,
+                    mono_ty,
+                    *location,
+                    &self.on_element,
+                    false,
+                );
 
-                        match unify_result {
-                            Ok(_) => {}
-                            Err(_) => {
-                                self.errors.assign_mismatches.push(CompilerErrorContext {
-                                    error: TypeMismatch {
-                                        context: AssignContext {
-                                            assign_lvalue_expr: var_name.into(),
-                                        },
-                                        expected: PolyType::mono(mono_ty.clone()),
-                                        actual: PolyType::mono(mono_expr_type.clone()),
-                                    },
-                                    on_element: self.on_element,
-                                    location: *location,
-                                    compiler_code_location: loc!(),
-                                });
-                                return Err(());
-                            }
-                        }
-                        Ok(())
-                    }
-                    MIRExprLValue::MemberAccess(_, member, ty, location) => {
-                        //in this case, we check that the member exists on the object,
-                        //and that the type of the member is the same as the type of the expression
-                        //this is redundant with the check in the type inference, but it's better to be safe
-
-                        let assign_type = ty;
-
-                        let assign_type_mono = &type_table[assign_type].mono;
-                        let rhs_type_mono = &type_table[expr_type].mono;
-
-                        let mut unifier = Unifier::new(self.errors);
-
-                        let unify_result = unifier.unify(
-                            assign_type_mono,
-                            rhs_type_mono,
-                            *location,
-                            &self.on_element,
-                            false,
-                        );
-
-                        match unify_result {
-                            Ok(_) => {}
-                            Err(_) => {
-                                self.errors.assign_mismatches.push(CompilerErrorContext {
-                                    error: TypeMismatch {
-                                        context: AssignContext {
-                                            assign_lvalue_expr: member.into(),
-                                        },
-                                        expected: PolyType::mono(assign_type_mono.clone()),
-                                        actual: PolyType::mono(rhs_type_mono.clone()),
-                                    },
-                                    on_element: self.on_element,
-                                    location: *location,
-                                    compiler_code_location: loc!(),
-                                });
-                                return Err(());
-                            }
-                        };
-                        Ok(())
-                    }
-                    MIRExprLValue::Deref(_ptr_expr, ty, location) => {
-                        let mono_expr_type = &type_table[expr_type].mono;
-                        let mono_ty = &type_table[ty].mono;
-
-                        let mut unifier = Unifier::new(self.errors);
-
-                        let unify_result = unifier.unify(
-                            mono_expr_type,
-                            mono_ty,
-                            *location,
-                            &self.on_element,
-                            false,
-                        );
-
-                        match unify_result {
-                            Ok(_) => {}
-                            Err(_) => {
-                                self.errors.assign_mismatches.push(CompilerErrorContext {
-                                    error: TypeMismatch {
-                                        context: AssignContext {
-                                            assign_lvalue_expr: "ptr deref".into(),
-                                        },
-                                        expected: PolyType::mono(mono_ty.clone()),
-                                        actual: PolyType::mono(mono_expr_type.clone()),
-                                    },
-                                    on_element: self.on_element,
-                                    location: *location,
-                                    compiler_code_location: loc!(),
-                                });
-                                return Err(());
-                            }
-                        };
-
-                        Ok(())
+                match unify_result {
+                    Ok(_) => {}
+                    Err(e) => {
+                        self.errors.assign_mismatches.push(CompilerErrorContext {
+                            error: TypeMismatch {
+                                context: AssignContext {
+                                    assign_lvalue_expr: var_name.into(),
+                                },
+                                expected: PolyType::mono(mono_ty.clone()),
+                                actual: PolyType::mono(mono_expr_type.clone()),
+                            },
+                            on_element: self.on_element,
+                            location: *location,
+                            compiler_code_location: loc!(),
+                        });
+                        return Err(());
                     }
                 }
             }
-            MIRBlockNode::FunctionCall {
-                ..
-            } => {
-                //already checked at inference time
-                Ok(())
+            HIRExpr::MemberAccess(_, member, location, ty) => {
+                //in this case, we check that the member exists on the object,
+                //and that the type of the member is the same as the type of the expression
+                //this is redundant with the check in the type inference, but it's better to be safe
+
+                let assign_type = ty;
+
+                let assign_type_mono = &type_table[assign_type].mono;
+                let rhs_type_mono = &type_table[expr_type].mono;
+
+                let mut unifier = Unifier::new(self.errors, self.type_db);
+
+                let unify_result = unifier.unify(
+                    assign_type_mono,
+                    rhs_type_mono,
+                    *location,
+                    &self.on_element,
+                    false,
+                );
+
+                match unify_result {
+                    Ok(_) => {}
+                    Err(e) => {
+                        self.errors.assign_mismatches.push(CompilerErrorContext {
+                            error: TypeMismatch {
+                                context: AssignContext {
+                                    assign_lvalue_expr: member.into(),
+                                },
+                                expected: PolyType::mono(assign_type_mono.clone()),
+                                actual: PolyType::mono(rhs_type_mono.clone()),
+                            },
+                            on_element: self.on_element,
+                            location: *location,
+                            compiler_code_location: loc!(),
+                        });
+                        return Err(());
+                    }
+                };
             }
-            MIRBlockNode::MethodCall {
-               ..
-            } => {
-                //already checked at inference time
-                Ok(())
+            HIRExpr::Deref(ptr, location, ty) => {
+                let lhs_type = ty;
+
+                let mono_expr_type = &type_table[expr_type].mono;
+                let mono_ty = &type_table[ty].mono;
+
+                let mut unifier = Unifier::new(self.errors, self.type_db);
+
+                let unify_result = unifier.unify(
+                    mono_expr_type,
+                    mono_ty,
+                    *location,
+                    &self.on_element,
+                    false,
+                );
+
+                match unify_result {
+                    Ok(_) => {}
+                    Err(e) => {
+                        self.errors.assign_mismatches.push(CompilerErrorContext {
+                            error: TypeMismatch {
+                                context: AssignContext {
+                                    assign_lvalue_expr: "ptr deref".into(),
+                                },
+                                expected: PolyType::mono(mono_ty.clone()),
+                                actual: PolyType::mono(mono_expr_type.clone()),
+                            },
+                            on_element: self.on_element,
+                            location: *location,
+                            compiler_code_location: loc!(),
+                        });
+                        return Err(());
+                    }
+                };
+            },
+            _ => {
+                panic!("Unexpected assign: lvalue {path:?} rvalue {expression:?}")
             }
         }
+        Ok(())
     }
 
     fn check_if_statement_expression(
         &mut self,
-        expr: &MIRExpr,
+        expr: &HIRExpr,
         location: NodeIndex,
         type_table: &TypeTable,
     ) -> Result<(), CompilerError> {
@@ -939,29 +990,38 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
             Err(())
         }
     }
+
+    fn check_expr_cast(&self, expr: &HIRExpr, cast_to: &HIRType, location: &NodeIndex, type_id: &TypeIndex) -> Result<(), CompilerError> {
+        unimplemented!()
+    }
 }
 
 pub fn typecheck(
-    top_nodes: &[MIRTopLevelNode],
+    top_nodes: &[HIRRoot],
     type_db: &TypeConstructorDatabase,
     errors: &mut TypeErrors,
 ) -> Result<(), CompilerError> {
     for node in top_nodes {
-        if let MIRTopLevelNode::DeclareFunction {
+        if let HIRRoot::DeclareFunction {
                 function_name,
+                type_parameters,
+                parameters,
                 body,
-                scopes,
                 return_type,
+                method_of,
+                is_intrinsic,
+                is_external,
+                is_varargs,
                 type_table,
-                ..
+                has_been_monomorphized,
             } = node {
-            let mut context = TypeCheckContext {
+            let mut context = HIRTypeCheckContext {
                 type_db,
                 errors,
                 on_element: RootElementType::Function(*function_name),
             };
-            let mono_return_type = &type_table[*return_type].mono;
-            context.type_check_function(body, scopes, mono_return_type, type_table)?;
+            let mono_return_type = &type_table[return_type.type_variable].mono;
+            context.type_check_roots(body, mono_return_type, type_table)?;
         }
     }
     Ok(())

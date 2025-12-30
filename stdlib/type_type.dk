@@ -1,0 +1,3 @@
+struct TypeData:
+    name: str
+    size: u64

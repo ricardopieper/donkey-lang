@@ -11,8 +11,6 @@ def list_new<T>() -> List<T>:
 
     return list
 
-
-
 # Adds an item to the list
 def list_add<T>(list: ptr<List<T>>, item: T):
     len = (*list).len
@@ -31,8 +29,8 @@ def list_add<T>(list: ptr<List<T>>, item: T):
                 i = i + 1
             mem_free<T>((*list).buf)
 
-        (*list).buf = new_allocation   
-    
+        (*list).buf = new_allocation
+
     (*list).buf[len] = item
     (*list).len = len + 1
 

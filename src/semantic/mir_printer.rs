@@ -1,22 +1,25 @@
-use crate::types::type_instance_db::TypeInstanceManager;
+use crate::types::type_constructor_db::TypeConstructorDatabase;
 
-use super::mir::{
-    LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue, MIRExprRValue,
-    MIRScope, MIRTopLevelNode,
+use super::{
+    hir::TypeTable,
+    mir::{
+        LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue,
+        MIRExprRValue, MIRScope, MIRTopLevelNode,
+    },
 };
 
 pub struct MIRPrinter<'type_db> {
-    type_db: &'type_db TypeInstanceManager,
+    type_db: &'type_db TypeConstructorDatabase,
 }
 
 impl<'type_db> MIRPrinter<'type_db> {
-    pub fn new(type_db: &'type_db TypeInstanceManager) -> Self {
+    pub fn new(type_db: &'type_db TypeConstructorDatabase) -> Self {
         Self { type_db }
     }
 
-    pub fn print(&self, expr: &MIRExpr) -> String {
+    pub fn print(&self, expr: &MIRExpr, type_table: &TypeTable) -> String {
         match expr {
-            MIRExpr::LValue(expr) => self.print_lvalue(expr),
+            MIRExpr::LValue(expr) => self.print_lvalue(expr, type_table),
 
             MIRExpr::RValue(MIRExprRValue::Literal(literal, ..)) => {
                 self.print_literal_expr(literal)
@@ -24,64 +27,64 @@ impl<'type_db> MIRPrinter<'type_db> {
             MIRExpr::RValue(MIRExprRValue::FunctionCall(f, args, ..)) => {
                 let args_str = args
                     .iter()
-                    .map(|x| self.print(x))
+                    .map(|x| self.print(x, type_table))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}({})", self.print_lvalue(f), args_str)
+                format!("{}({})", self.print_lvalue(f, type_table), args_str)
             }
             MIRExpr::RValue(MIRExprRValue::StructInstantiate(ty, _)) => {
-                let struct_name = ty.to_string(self.type_db);
+                let struct_name = ty.print_name(type_table, self.type_db);
                 format!("{struct_name}()")
             }
             MIRExpr::RValue(MIRExprRValue::MethodCall(obj, name, args, ..)) => {
                 let args_str = args
                     .iter()
-                    .map(|x| self.print(x))
+                    .map(|x| self.print(x, type_table))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}.{}({})", self.print(obj), name, args_str)
+                format!("{}.{}({})", self.print(obj, type_table), name, args_str)
             }
             MIRExpr::RValue(MIRExprRValue::BinaryOperation(var, op, var2, ..)) => format!(
                 "{} {} {}",
-                self.print(var),
+                self.print(var, type_table),
                 op.0.to_string(),
-                self.print(var2)
+                self.print(var2, type_table)
             ),
             MIRExpr::RValue(MIRExprRValue::Array(items, ..)) => {
                 let array_items_str = items
                     .iter()
-                    .map(|x| self.print(x))
+                    .map(|x| self.print(x, type_table))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{array_items_str}]")
             }
             MIRExpr::RValue(MIRExprRValue::UnaryExpression(op, expr, ..)) => {
-                format!("{}{}", op.0.to_string(), self.print(expr))
+                format!("{}{}", op.0.to_string(), self.print(expr, type_table))
             }
 
             MIRExpr::RValue(MIRExprRValue::Ref(expr, ..)) => {
-                format!("&{}", self.print_lvalue(expr))
+                format!("&{}", self.print_lvalue(expr, type_table))
             }
             MIRExpr::RValue(MIRExprRValue::Cast(expr, ty, ..)) => {
                 format!(
                     "{expr} as {ty}",
-                    expr = self.print(expr),
-                    ty = ty.to_string(self.type_db)
+                    expr = self.print(expr, type_table),
+                    ty = ty.print_name(type_table, self.type_db)
                 )
             }
-            MIRExpr::RValue(MIRExprRValue::TypeVariable { type_variable, .. }) => {
-                format!("{}", type_variable.to_string(self.type_db))
-            }
+            /*MIRExpr::RValue(MIRExprRValue::TypeVariable { type_variable, .. }) => {
+                type_variable.print_name(type_table, self.type_db).to_string()
+            }*/
         }
     }
 
-    pub fn print_lvalue(&self, expr: &MIRExprLValue) -> String {
+    pub fn print_lvalue(&self, expr: &MIRExprLValue, type_table: &TypeTable) -> String {
         match expr {
             MIRExprLValue::Variable(s, ..) => s.into(),
             MIRExprLValue::MemberAccess(obj, elem, ..) => {
-                format!("{}.{}", self.print(obj), elem)
+                format!("{}.{}", self.print(obj, type_table), elem)
             }
-            MIRExprLValue::Deref(expr, ..) => format!("*{}", self.print(expr)),
+            MIRExprLValue::Deref(expr, ..) => format!("*{}", self.print(expr, type_table)),
         }
     }
 
@@ -97,21 +100,21 @@ impl<'type_db> MIRPrinter<'type_db> {
         }
     }
 
-    pub fn print_mir_block_node(&self, node: &MIRBlockNode<'_>) -> String {
+    pub fn print_mir_block_node(&self, node: &MIRBlockNode, type_table: &TypeTable) -> String {
         match node {
             MIRBlockNode::Assign {
                 path, expression, ..
             } => {
                 format!(
                     "        {} = {}\n",
-                    self.print_lvalue(path),
-                    self.print(expression)
+                    self.print_lvalue(path, type_table),
+                    self.print(expression, type_table)
                 )
             }
             MIRBlockNode::FunctionCall { function, args, .. } => {
                 let args_str = args
                     .iter()
-                    .map(|x| self.print(x))
+                    .map(|x| self.print(x, type_table))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("        {}({})\n", function, args_str)
@@ -124,12 +127,12 @@ impl<'type_db> MIRPrinter<'type_db> {
             } => {
                 let args_str = args
                     .iter()
-                    .map(|x| self.print(x))
+                    .map(|x| self.print(x, type_table))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!(
                     "        {}.{}({})\n",
-                    self.print(object),
+                    self.print(object, type_table),
                     method_name,
                     args_str
                 )
@@ -138,14 +141,18 @@ impl<'type_db> MIRPrinter<'type_db> {
     }
 }
 
-pub fn print_mir_block(block: &MIRBlock, type_db: &TypeInstanceManager) -> String {
+pub fn print_mir_block(
+    block: &MIRBlock,
+    type_db: &TypeConstructorDatabase,
+    type_table: &TypeTable,
+) -> String {
     let mut buffer = String::new();
     let printer = MIRPrinter::new(type_db);
     buffer.push_str(&format!("    defblock {}:\n", block.index));
     buffer.push_str(&format!("        usescope {}\n", block.scope.0));
 
     for node in &block.nodes {
-        let s = printer.print_mir_block_node(node);
+        let s = printer.print_mir_block_node(node, type_table);
         buffer.push_str(&s);
     }
 
@@ -157,8 +164,8 @@ pub fn print_mir_block(block: &MIRBlock, type_db: &TypeInstanceManager) -> Strin
         else:
             gotoblock {}
 ",
-                printer.print(condition), //if condition:
-                true_branch.0,            //gotoblock 0
+                printer.print(condition, type_table), //if condition:
+                true_branch.0,                        //gotoblock 0
                 false_branch.0
             )); //gotoblock 1
         }
@@ -166,7 +173,10 @@ pub fn print_mir_block(block: &MIRBlock, type_db: &TypeInstanceManager) -> Strin
             buffer.push_str(&format!("        gotoblock {}\n", block.0));
         }
         MIRBlockFinal::Return(expr, ..) => {
-            buffer.push_str(&format!("        return {}\n", printer.print(expr)));
+            buffer.push_str(&format!(
+                "        return {}\n",
+                printer.print(expr, type_table)
+            ));
         }
         MIRBlockFinal::EmptyReturn(..) => {
             buffer.push_str("        return\n");
@@ -176,7 +186,11 @@ pub fn print_mir_block(block: &MIRBlock, type_db: &TypeInstanceManager) -> Strin
     buffer
 }
 
-fn print_mir_scope(scope: &MIRScope, type_db: &TypeInstanceManager) -> String {
+fn print_mir_scope(
+    scope: &MIRScope,
+    type_db: &TypeConstructorDatabase,
+    type_table: &TypeTable,
+) -> String {
     let mut buffer = String::new();
 
     buffer.push_str(&format!("    defscope {}:\n", scope.id.0));
@@ -186,25 +200,32 @@ fn print_mir_scope(scope: &MIRScope, type_db: &TypeInstanceManager) -> String {
         buffer.push_str(&format!(
             "        {} : {}\n",
             name.name,
-            name.type_instance.to_string(type_db)
+            name.type_instance.print_name(type_table, type_db)
         ));
     }
 
     buffer
 }
 
-fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> String {
+fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeConstructorDatabase) -> String {
     match node {
         MIRTopLevelNode::IntrinsicOrExternalFunction {
             function_name,
             parameters,
             return_type,
             is_varargs,
+            type_table,
             ..
         } => {
             let parameters = parameters
                 .iter()
-                .map(|param| format!("{}: {}", param.name, param.type_instance.to_string(type_db)))
+                .map(|param| {
+                    format!(
+                        "{}: {}",
+                        param.name,
+                        param.type_instance.print_name(type_table, type_db)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -213,7 +234,7 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> Strin
                 "def {}({}{varargs}) -> {}\n",
                 function_name,
                 parameters,
-                &return_type.to_string(type_db)
+                &return_type.print_name(type_table, type_db)
             );
 
             function
@@ -224,25 +245,37 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> Strin
             body,
             scopes,
             return_type,
+            type_table,
+            struct_name,
         } => {
             let parameters = parameters
                 .iter()
-                .map(|param| format!("{}: {}", param.name, param.type_instance.to_string(type_db)))
+                .map(|param| {
+                    format!(
+                        "{}: {}",
+                        param.name,
+                        param.type_instance.print_name(type_table, type_db)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
+
+            let fully_qualified_function_name = struct_name
+                .map_or_else(|| function_name.into(), |f| format!("{f}::{function_name}"));
+
             let mut function = format!(
                 "def {}({}) -> {}:\n",
-                function_name,
+                fully_qualified_function_name,
                 parameters,
-                &return_type.to_string(type_db)
+                &return_type.print_name(type_table, type_db)
             );
 
             for s in scopes {
-                function.push_str(&print_mir_scope(s, type_db));
+                function.push_str(&print_mir_scope(s, type_db, type_table));
             }
 
             for n in body {
-                function.push_str(&print_mir_block(n, type_db));
+                function.push_str(&print_mir_block(n, type_db, type_table));
             }
 
             function
@@ -250,17 +283,10 @@ fn print_mir_str(node: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> Strin
     }
 }
 
-pub fn print_mir(mir: &[MIRTopLevelNode], type_db: &TypeInstanceManager) -> String {
+pub fn print_mir(mir: &[MIRTopLevelNode], type_db: &TypeConstructorDatabase) -> String {
     let mut buffer = String::new();
     for node in mir {
         buffer.push_str(&print_mir_str(node, type_db));
     }
-    buffer
-}
-
-#[allow(dead_code)]
-pub fn print_mir_node(mir: &MIRTopLevelNode, type_db: &TypeInstanceManager) -> String {
-    let mut buffer = String::new();
-    buffer.push_str(&print_mir_str(mir, type_db));
     buffer
 }

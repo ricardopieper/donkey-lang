@@ -250,9 +250,9 @@ impl<T> Try for LexerResult<T> {
     }
 }
 
-impl<T, E: Error> Into<LexerResult<T>> for Result<T, E> {
-    fn into(self) -> LexerResult<T> {
-        match self {
+impl<T, E: Error> From<Result<T, E>> for LexerResult<T> {
+    fn from(val: Result<T, E>) -> Self {
+        match val {
             Ok(v) => LexerResult::Ok(v),
             Err(e) => LexerResult::Error(e.to_string()),
         }
@@ -266,39 +266,6 @@ impl<T> LexerResult<T> {
             LexerResult::NoMatch => panic!("Unwrap on lexer result error: No match"),
             LexerResult::EndOfInput => panic!("Unwrap on lexer result error: End of input"),
             LexerResult::Error(e) => panic!("Unwrap on lexer result error: {e}"),
-        }
-    }
-
-    pub fn is_ok(&self) -> bool {
-        match self {
-            LexerResult::Ok(_) => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_no_match(&self) -> bool {
-        match self {
-            LexerResult::NoMatch => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_eof(&self) -> bool {
-        match self {
-            LexerResult::EndOfInput => true,
-            _ => false,
-        }
-    }
-
-    pub fn map<F, U>(self, f: F) -> LexerResult<U>
-    where
-        F: Fn(T) -> U,
-    {
-        match self {
-            LexerResult::Ok(v) => LexerResult::Ok(f(v)),
-            LexerResult::NoMatch => LexerResult::NoMatch,
-            LexerResult::EndOfInput => LexerResult::EndOfInput,
-            LexerResult::Error(e) => LexerResult::Error(e),
         }
     }
 }
@@ -399,9 +366,9 @@ impl Lexer {
 
     fn cur_offset(&self, offset: isize) -> LexerResult<char> {
         if (self.index as isize + offset) as usize >= self.chars.len() {
-            return LexerResult::EndOfInput;
+            LexerResult::EndOfInput
         } else {
-            return LexerResult::Ok(self.chars[(self.index as isize + offset) as usize]);
+            LexerResult::Ok(self.chars[(self.index as isize + offset) as usize])
         }
     }
 
@@ -465,7 +432,9 @@ impl Lexer {
             self.next();
             let cur = self.peek()?;
 
-            let escaped_char = match cur {
+            
+
+            match cur {
                 '\\' => '\\',
                 '\'' => '\'',
                 '0' => '\0',
@@ -473,9 +442,7 @@ impl Lexer {
                 't' => '\t',
                 'r' => '\r',
                 _ => return LexerResult::Error(format!("Cannot escape char {cur}")),
-            };
-
-            escaped_char
+            }
         } else {
             cur
         };
@@ -487,7 +454,7 @@ impl Lexer {
         }
         self.next();
 
-        return LexerResult::Ok(char);
+        LexerResult::Ok(char)
     }
 
     fn eat_string_literal(&mut self) -> LexerResult<String> {
@@ -560,7 +527,7 @@ impl Lexer {
                 return LexerResult::Ok((&self.source[cur_idx..new_idx], start, end));
             }
         }
-        return LexerResult::NoMatch;
+        LexerResult::NoMatch
     }
 
     fn tokenize_number_literal(&mut self) -> LexerResult<(Token, SourceLocation, SourceLocation)> {
@@ -680,7 +647,7 @@ impl Lexer {
     }
 
     fn symbol_to_token(identifier: &str) -> LexerResult<Token> {
-        LexerResult::Ok(match identifier.as_ref() {
+        LexerResult::Ok(match identifier {
             "+" => Token::Operator(Operator::Plus),
             "," => Token::Comma,
             "[" => Token::OpenArrayBracket,
@@ -712,7 +679,7 @@ impl Lexer {
     }
 
     fn identifier_to_token(identifier: &str) -> Token {
-        match identifier.as_ref() {
+        match identifier {
             "None" => Token::None,
             "as" => Token::AsKeyword,
             "not" => Token::Operator(Operator::Not),

@@ -160,12 +160,6 @@ pub struct AstSpan {
     pub end: TokenSpanIndex,
 }
 
-impl Spanned for AstSpan {
-    fn get_span(&self) -> AstSpan {
-        *self
-    }
-}
-
 impl AstSpan {
     pub fn range(&self, other: &Self) -> Self {
         Self {
@@ -178,6 +172,12 @@ impl AstSpan {
             start: other.start,
             end: self.end,
         }
+    }
+}
+
+impl Spanned for AstSpan {
+    fn get_span(&self) -> AstSpan {
+        *self
     }
 }
 
@@ -613,7 +613,7 @@ impl<'tok> Parser<'tok> {
     }
 
     fn get_expected_indent(&mut self) -> usize {
-        return self.parsing_state.last_mut().unwrap().current_indent;
+        self.parsing_state.last_mut().unwrap().current_indent
     }
 
     fn set_cur(&mut self, parsing_state: &ParsingState) {
@@ -645,7 +645,7 @@ impl<'tok> Parser<'tok> {
     }
 
     fn cur_offset(&self, offset: isize) -> &TokenData {
-        return self.cur_offset_opt(offset).unwrap();
+        self.cur_offset_opt(offset).unwrap()
     }
 
     fn cur_offset_opt(&self, offset: isize) -> Option<&TokenData> {
@@ -682,19 +682,19 @@ impl<'tok> Parser<'tok> {
     }
 
     fn operand_stack(&self) -> &[SpanExpr] {
-        return &self.parsing_state.last().unwrap().operand_stack;
+        &self.parsing_state.last().unwrap().operand_stack
     }
 
     fn operator_stack(&self) -> &[SpannedOperator] {
-        return &self.parsing_state.last().unwrap().operator_stack;
+        &self.parsing_state.last().unwrap().operator_stack
     }
 
     fn operand_stack_mut(&mut self) -> &mut Vec<SpanExpr> {
-        return &mut self.parsing_state.last_mut().unwrap().operand_stack;
+        &mut self.parsing_state.last_mut().unwrap().operand_stack
     }
 
     fn operator_stack_mut(&mut self) -> &mut Vec<SpannedOperator> {
-        return &mut self.parsing_state.last_mut().unwrap().operator_stack;
+        &mut self.parsing_state.last_mut().unwrap().operator_stack
     }
 
     pub fn parse_variable_assign(&mut self) -> ASTParsingEvent {
@@ -775,30 +775,30 @@ impl<'tok> Parser<'tok> {
         if self.peek().token == tok {
             self.next();
             if !self.can_peek_on_line() {
-                return ParsingEvent::TryAnotherGrammarRule;
+                ParsingEvent::TryAnotherGrammarRule
             } else {
-                return ParsingEvent::Success(());
+                ParsingEvent::Success(())
             }
         } else {
-            return ParsingEvent::TryAnotherGrammarRule;
+            ParsingEvent::TryAnotherGrammarRule
         }
     }
 
     pub fn expect(&mut self, tok: Token, message: &'static str) -> ParsingEvent<()> {
         if self.peek().token == tok {
             self.next();
-            return ParsingEvent::Success(());
+            ParsingEvent::Success(())
         } else {
-            let token = self.peek().clone();
+            let token = *self.peek();
             self.irrecoverable_error = true;
-            return ParsingEvent::NonRecoverable(
+            ParsingEvent::NonRecoverable(
                 ParsingErrorDetails::InvalidSyntax(format!(
                     "{message}, expected {} got {}",
                     tok.name(),
                     self.peek().token.name()
                 )),
                 token.span_index,
-            );
+            )
         }
     }
 
@@ -808,20 +808,20 @@ impl<'tok> Parser<'tok> {
     }
 
     pub fn expect_id(&mut self, role: &'static str) -> ParsingEvent<StringSpan> {
-        let token = self.peek().clone();
+        let token = *self.peek();
 
         if let Token::Identifier(id) = token.token {
             self.next();
             ParsingEvent::Success(id.token_spanned(token.span_index))
         } else {
-            return ParsingEvent::GrammarRuleFail(
+            ParsingEvent::GrammarRuleFail(
                 ParsingErrorDetails::InvalidSyntax(format!(
                     "Expected {}, got {}",
                     role,
                     self.peek().token.name()
                 )),
                 token.span_index,
-            );
+            )
         }
     }
 
@@ -835,7 +835,7 @@ impl<'tok> Parser<'tok> {
                 return self.grammar_fail(ParsingErrorDetails::ContextForError(
                     "Expected expression for if statement".into(),
                     e.into(),
-                ))
+                ));
             }
         };
 
@@ -986,10 +986,10 @@ impl<'tok> Parser<'tok> {
                         break;
                     }
                     ParsingEvent::GrammarRuleFail(details, token) => {
-                        return ParsingEvent::GrammarRuleFail(details, token)
+                        return ParsingEvent::GrammarRuleFail(details, token);
                     }
                     ParsingEvent::NonRecoverable(details, token) => {
-                        return ParsingEvent::NonRecoverable(details, token)
+                        return ParsingEvent::NonRecoverable(details, token);
                     }
                 }
             }
@@ -1018,8 +1018,7 @@ impl<'tok> Parser<'tok> {
                 } else {
                     return Err(ParsingErrorDetails::Fatal(
                         "Expected identifier for generic parameter".into(),
-                    )
-                    .into());
+                    ));
                 }
                 self.next();
                 if let Token::Comma = self.peek().token {
@@ -1033,15 +1032,13 @@ impl<'tok> Parser<'tok> {
             } else {
                 return Err(ParsingErrorDetails::Fatal(
                     "Expected > after generic parameters".into(),
-                )
-                .into());
+                ));
             }
 
             if type_parameters.is_empty() {
                 return Err(ParsingErrorDetails::Fatal(
                     "Expected at least one generic parameter".into(),
-                )
-                .into());
+                ));
             }
         }
         Ok(type_parameters)
@@ -1062,8 +1059,7 @@ impl<'tok> Parser<'tok> {
                 } else {
                     return Err(ParsingErrorDetails::Fatal(
                         "Expected type name for generic parameter".into(),
-                    )
-                    .into());
+                    ));
                 }
                 //the parse_type_name leaves the state in the next token after the type name, for instance:
                 //<List<T>, i32> imagine we just parsed List<T>, the cur token is the comma
@@ -1079,15 +1075,13 @@ impl<'tok> Parser<'tok> {
             } else {
                 return Err(ParsingErrorDetails::Fatal(
                     "Expected > after generic parameters".into(),
-                )
-                .into());
+                ));
             }
 
             if type_parameters.is_empty() {
                 return Err(ParsingErrorDetails::Fatal(
                     "Expected at least one generic parameter".into(),
-                )
-                .into());
+                ));
             }
         }
         Ok(type_parameters)
@@ -1103,7 +1097,7 @@ impl<'tok> Parser<'tok> {
                 return self.grammar_fail(ParsingErrorDetails::ContextForError(
                     "Expected expression for while statement".into(),
                     e.into(),
-                ))
+                ));
             }
         };
 
@@ -1131,7 +1125,7 @@ impl<'tok> Parser<'tok> {
                 return self.grammar_fail(ParsingErrorDetails::ContextForError(
                     "Expected expression for iterable in for statement".into(),
                     e.into(),
-                ))
+                ));
             }
         };
 
@@ -1187,11 +1181,11 @@ impl<'tok> Parser<'tok> {
                     )
                 } //read<List<T>[>] next will be in []
                 self.next();
-                return generic;
+                generic
             }
             _ => {
                 //if it's not < then we assume another syntax would start to be parsed,
-                return Some(ASTType::Simple(base_type));
+                Some(ASTType::Simple(base_type))
             }
         }
     }
@@ -1249,7 +1243,9 @@ impl<'tok> Parser<'tok> {
             has_self = true;
             self.next();
         }
-
+        if has_self && let Token::Comma = self.peek().token {
+            self.next();
+        }
         while let Token::Identifier(_) = self.peek().token {
             let param = self.parse_type_bound_name().unwrap().unwrap();
             params.push(param);
@@ -1330,7 +1326,7 @@ impl<'tok> Parser<'tok> {
                         return self.grammar_fail(ParsingErrorDetails::ContextForError(
                             "Expected expression on return statement".into(),
                             e.into(),
-                        ))
+                        ));
                     }
                 };
 
@@ -1383,12 +1379,12 @@ impl<'tok> Parser<'tok> {
         let parsed_expr = self.parse_expr();
         match parsed_expr {
             Ok(result) => {
-                return ParsingEvent::Success(
+                ParsingEvent::Success(
                     AST::StandaloneExpr(result.resulting_expr).self_spanning(),
                 )
             }
             Err(e) => {
-                return self.grammar_fail(ParsingErrorDetails::ContextForError(
+                self.grammar_fail(ParsingErrorDetails::ContextForError(
                     "Expected expression".into(),
                     e.into(),
                 ))
@@ -1652,7 +1648,7 @@ impl<'tok> Parser<'tok> {
             //if there is an open paren, we collect all the tokens for this open paren
             //and parse the sub-expression recursively
             {
-                let tok = self.peek().clone();
+                let tok = *self.peek();
 
                 let prev_token = self.prev_token().cloned().map(|x| x.token);
                 match tok.token {
@@ -1972,7 +1968,7 @@ impl<'tok> Parser<'tok> {
                                 return Err(ParsingErrorDetails::ExprError(
                                     "Cast expression failed: expected type name after `as` keyword"
                                         .into(),
-                                ))
+                                ));
                             }
                         }
                     }
@@ -2141,7 +2137,9 @@ impl<'tok> Parser<'tok> {
             && !type_parameters.is_empty()
             && self.peek().token != Token::OpenParen
         {
-            todo!("Make error reporting work here: expected ( for parameter list after generic types, type params: {type_parameters:?}");
+            todo!(
+                "Make error reporting work here: expected ( for parameter list after generic types, type params: {type_parameters:?}"
+            );
         }
 
         if self.peek().token != Token::OpenParen && type_parameters.is_empty() {
@@ -2301,7 +2299,7 @@ mod tests {
     use crate::{
         ast::ast_printer::{print_ast, print_fully_parenthesized_ast},
         interner::StringInterner,
-        semantic::context::{test_utils::istr, FileTableIndex},
+        semantic::context::{FileTableIndex, test_utils::istr},
     };
 
     use super::*;
@@ -2322,7 +2320,7 @@ mod tests {
             token_table: tokens,
             contents: "none",
             path: "test".to_string(),
-            index: FileTableIndex(0),
+            //index: FileTableIndex(0),
         }];
         let mut parser = Parser::new(&table[0].token_table);
         print_errors(&parser, table, &table[0].token_table);
@@ -2342,7 +2340,7 @@ mod tests {
                 },
             }),
             token_table: tokens,
-            index: FileTableIndex(0),
+            //index: FileTableIndex(0),
             contents: "none",
             path: "test".to_string(),
         }];
@@ -2413,7 +2411,23 @@ impl SomeStruct:
         print(self)
 
 def not_method():
-    print(1)    
+    print(1)
+    ",
+        );
+    }
+
+    #[test]
+    fn method_with_params() {
+        parse_and_compare(
+            "
+impl SomeStruct:
+    def method(self, param: i32):
+        print(self)
+    ",
+            "
+impl SomeStruct:
+    def method(self, param: i32):
+        print(self)
     ",
         );
     }
@@ -3224,6 +3238,21 @@ print(x)"
     }
 
     #[test]
+    fn struct_definition_set_field() {
+        parse_and_print_back_to_original(
+            "
+struct SomeStruct:
+    field: i32
+    otherfield: str
+
+def main():
+    x = SomeStruct()
+    x.field = 1
+    ",
+        );
+    }
+
+    #[test]
     fn access_at_index() {
         parse_and_print_back_to_original("list[1]");
     }
@@ -3427,26 +3456,26 @@ struct SomeStruct<T>:
     }
 
     #[test]
-    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params(
-    ) {
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params()
+     {
         parse_and_print_back_to_original("make_fn<T, U, V>(x, y, z)(1, \"abc\")");
     }
 
     #[test]
-    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing(
-    ) {
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing()
+     {
         parse_and_print_back_to_original("make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]");
     }
 
     #[test]
-    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary(
-    ) {
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary()
+     {
         parse_and_print_back_to_original("& make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]");
     }
 
     #[test]
-    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary_ref_minus(
-    ) {
+    fn parse_generic_function_call_with_multiple_params_and_generics_for_function_returning_call_with_params_with_indexing_and_unary_ref_minus()
+     {
         parse_and_print_back_to_original("- & make_fn<T, U, V>(x, y, z)(1, \"abc\")[0]");
     }
 
