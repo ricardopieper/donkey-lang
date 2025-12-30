@@ -48,8 +48,8 @@ impl SomeStructGeneric<F>:
 
 def some_func<T>(param: T):
     x = 1
-    y: u64 = 0
-    return x + y + 
+    y: i32 = 0
+    return x + y + param
 
 def main():
     some_func(10)
