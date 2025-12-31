@@ -1401,3 +1401,64 @@ def MyStruct[i32]::get_x() -> i32:
 
     assert_eq!(expected.trim(), final_result.trim());
 }
+
+#[test]
+fn memalloc_test() {
+    let (_, final_result, ..) = setup(
+        "
+struct TypeData:
+    name: i32
+    size: u64
+
+def ptr_cast<T, U>(p: ptr<T>) -> ptr<U>:
+    intrinsic
+
+def malloc(size: u64) -> ptr<u8>:
+    external
+
+def mem_alloc<T>(elems: u64) -> ptr<T>:
+    num_bytes = elems * T.size
+    new_allocation = malloc(elems * T.size)
+    return ptr_cast<u8, T>(new_allocation)
+
+def main():
+    buf = mem_alloc<i32>(10)
+",
+    );
+
+    println!("{final_result}");
+    let expected = "
+def malloc(size: u64) -> ptr<u8>
+def main() -> Void:
+    defscope 0:
+        inheritscope 0
+        buf : ptr<i32>
+    defblock 0:
+        usescope 0
+        buf = mem_alloc[i32](10)
+        return
+def mem_alloc[i32](elems: u64) -> ptr<i32>:
+    defscope 0:
+        inheritscope 0
+        elems : u64
+        num_bytes : u64
+    defscope 1:
+        inheritscope 0
+        new_allocation : ptr<u8>
+    defscope 2:
+        inheritscope 1
+    defblock 0:
+        usescope 0
+        num_bytes = elems * TypeData.size
+        gotoblock 1
+    defblock 1:
+        usescope 1
+        new_allocation = malloc(elems * TypeData.size)
+        gotoblock 2
+    defblock 2:
+        usescope 2
+        return ptr_cast[u8,i32](new_allocation)
+def ptr_cast[u8,i32](p: ptr<u8>) -> ptr<i32>";
+
+    assert_eq!(expected.trim(), final_result.trim());
+}

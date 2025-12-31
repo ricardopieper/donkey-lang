@@ -379,7 +379,7 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
         }
     }
 
-    /*
+
     fn add_type_data(&mut self, type_instance: TypeConstructorId) {
         //we need to build a str with the name, and a size
         let instance = self.type_db.find(type_instance);
@@ -387,7 +387,7 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
         let size = self
             .context
             .i64_type()
-            .const_int(type_instance.size.0 as u64, false);
+            .const_int(instance.compute_size(self.type_db).0 as u64, false);
 
         let llvm_struct_instance = self
             .type_data_llvm_type
@@ -400,13 +400,13 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
         let global = self.module.add_global(
             as_basic_type,
             None,
-            &format!(".TypeData_{}", &type_instance.name),
+            &format!(".TypeData_{}", &instance.name.to_string()),
         );
         global.set_initializer(&llvm_struct_instance);
         global.set_linkage(Linkage::Internal);
         global.set_constant(true);
-        self.type_data.insert(type_instance.id, global);
-    }*/
+        self.type_data.insert(type_instance, global);
+    }
 
     pub fn generate_for_top_lvl<'source>(&mut self, node: &'source MIRTopLevelNode) {
         match node {
@@ -861,30 +861,36 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
 
                 LlvmExpression::RValue(casted)
             }
-            /*MIRExprRValue::TypeVariable { type_variable, .. } => {
-                let global = self.type_data.get(type_variable);
-
+            MIRExprRValue::TypeVariable { type_variable, .. } => {
+                let type_data_type = self.type_db.find_by_name("TypeData".into()).unwrap();
+                let llvm_type_data_type = self.make_llvm_type(type_data_type.id);
+                let ctor_id = type_table[*type_variable].mono.get_ctor_id();
+                let global = self.type_data.get(
+                    &ctor_id
+                );
                 match global {
                     Some(type_data) => {
                         let loaded_global_var = self
                             .builder
-                            .build_load(type_data.as_pointer_value(), "loaded_type_data");
+                            .build_load(llvm_type_data_type.into_struct_type(), type_data.as_pointer_value(), "loaded_type_data")
+                            .unwrap();
                         LlvmExpression::LoadedLValue(
                             loaded_global_var,
                             type_data.as_pointer_value(),
+                            llvm_type_data_type
                         )
                     }
                     None => {
-                        let type_instance = self.type_db.get_instance(*type_variable);
-                        self.add_type_data(type_instance);
-                        let global = self.type_data.get(type_variable).unwrap();
+                        self.add_type_data(ctor_id);
+                        let global = self.type_data.get(&ctor_id).unwrap();
                         let loaded_global_var = self
                             .builder
-                            .build_load(global.as_pointer_value(), "loaded_type_data");
-                        LlvmExpression::LoadedLValue(loaded_global_var, global.as_pointer_value())
+                            .build_load(llvm_type_data_type.into_struct_type(), global.as_pointer_value(), "loaded_type_data")
+                            .unwrap();
+                        LlvmExpression::LoadedLValue(loaded_global_var, global.as_pointer_value(), llvm_type_data_type)
                     }
                 }
-            }*/
+            }
         }
     }
 
@@ -1738,12 +1744,12 @@ pub fn generate_llvm(
 
     //codegen.generate_type_data_globals();
 
-    /*let type_data_type = codegen.type_db.find_by_name("TypeData").unwrap();
+    let type_data_type = codegen.type_db.find_by_name("TypeData".into()).unwrap();
     let llvm_type_data_type = codegen.make_llvm_type(type_data_type.id);
     codegen.type_data_llvm_type = Some(llvm_type_data_type);
     codegen
         .type_cache
-        .insert(type_data_type.id, llvm_type_data_type);*/
+        .insert(type_data_type.id, llvm_type_data_type);
 
     //for mir_node in mir_top_level_nodes {
     //    codegen.register_top_lvl(mir_node);

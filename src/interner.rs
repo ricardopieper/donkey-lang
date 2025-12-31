@@ -6,7 +6,7 @@ use std::{
 #[derive(Hash, Eq, PartialEq, Clone, Copy, PartialOrd, Ord)]
 pub struct InternedString {
     pub index: usize,
-    #[cfg(test)]
+    //#[cfg(test)]
     pub str_interned: &'static str,
 }
 
@@ -43,7 +43,7 @@ impl StringInterner {
         let unsafe_str_key = unsafe { std::mem::transmute::<&str, &'static str>(last) };
         let interned = InternedString {
             index,
-            #[cfg(test)]
+            //#[cfg(test)]
             str_interned: unsafe_str_key,
         };
         state.table.insert(unsafe_str_key, interned);

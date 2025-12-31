@@ -29,13 +29,15 @@ use crate::{
 };
 
 pub struct TypingContext {
-    pub definitions: HashMap<InternedString, PolyType>
+    pub definitions: HashMap<InternedString, PolyType>,
+    pub generic_params_in_context: HashSet<InternedString>
 }
 
 impl TypingContext {
     pub fn new() -> Self {
         Self {
-            definitions: HashMap::new()
+            definitions: HashMap::new(),
+            generic_params_in_context: HashSet::new()
         }
     }
 
@@ -51,6 +53,14 @@ impl TypingContext {
         for val in self.definitions.values_mut() {
             *val = val.apply_substitution(substitution);
         }
+    }
+
+    pub fn insert_generic_param(&mut self, name: InternedString) {
+        self.generic_params_in_context.insert(name);
+    }
+
+    pub fn has_generic(&self, g: &InternedString) -> bool {
+        self.generic_params_in_context.contains(g)
     }
 }
 
@@ -1014,11 +1024,21 @@ impl<'tydb> Typer<'tydb> {
 
         let function_ty = self.globals.get(&fname);
         if function_ty.is_none() {
-            panic!("Function {fname} not found in globals");
+            self.compiler_errors.variable_not_found.push(CompilerErrorContext {
+                error: VariableNotFound {
+                    variable_name: fname,
+                },
+                on_element: *root,
+                location: fcall.function.get_node_index(),
+                compiler_code_location: loc!(),
+            });
+            return Err(())
         }
         let function_ty = function_ty.unwrap(); //.expect("Expected function to exist in globals");
 
         let ctor = self.type_database.find(*function_ty);
+
+        let Variadic(is_variadic) = ctor.function_variadic;
 
         if ctor.kind == TypeKind::Struct {
             return Ok(FunctionInferenceResult::ActuallyThisIsAStructInstantiation(
@@ -1043,7 +1063,7 @@ impl<'tydb> Typer<'tydb> {
             );
         }
 
-        let (function_instance, type_arg_types) = if user_wants_specific_type {
+        let (mut function_instance, type_arg_types) = if user_wants_specific_type {
             let mut substitution_for_function_type_args = HashMap::<TypeParameter, MonoType>::new();
             for (i, type_arg) in type_args.iter().enumerate() {
                 let quantifier = &generalized_call_type.quantifiers[i];
@@ -1063,10 +1083,12 @@ impl<'tydb> Typer<'tydb> {
             self.instantiate_poly(&generalized_call_type, type_table)
         };
 
-        let MonoType::Application(constructor, _) = function_instance else {
+
+
+        let MonoType::Application(constructor, callargs) = &mut function_instance.clone() else {
             panic!("Expected function to be a type function, not a variable");
         };
-
+        let callargs_original_length = callargs.len();
         //Now figure out the call type at the call site - inspect argument types
         //the return type is just a variable that will be unified with the actual return type
         //of the function. This is because the return type of the function is not known until
@@ -1085,13 +1107,18 @@ impl<'tydb> Typer<'tydb> {
             let idx = arg.get_type();
             let ty = type_table[&idx].clone();
             function_type_application_args.push(ty.expect_mono().clone());
+            if is_variadic && i >= (callargs_original_length - 1) {
+                callargs.insert(callargs.len() - 1, ty.expect_mono().clone());
+            }
         }
+
+        let function_instance =  MonoType::Application(*constructor, callargs.clone());
 
         //This pushes the assigned type variable that will be substituted by the actual
         //return type of the function
         function_type_application_args.push(type_table[*return_type].expect_mono().clone());
 
-        let call_type = MonoType::Application(constructor, function_type_application_args);
+        let call_type = MonoType::Application(*constructor, function_type_application_args);
         let unify_result = self.unify(
             &function_instance,
             &call_type,
@@ -1350,6 +1377,10 @@ impl<'tydb> Typer<'tydb> {
                         self.type_database.mark_as_external(new_type_id)
                     }
 
+                    for type_param in type_parameters.iter() {
+                        typing_context.insert_generic_param(type_param.0)
+                    }
+
                     self.infer_type_for_function(
                         function_name,
                         type_parameters,
@@ -1382,6 +1413,10 @@ impl<'tydb> Typer<'tydb> {
             } = root
             {
                 let mut typing_context = TypingContext::new();
+
+                for param in type_parameters.iter() {
+                    typing_context.insert_generic_param(param.0);
+                }
 
                 self.infer_type_for_function(
                     function_name,
@@ -1543,24 +1578,78 @@ impl<'tydb> Typer<'tydb> {
                 //find variable in typing context, but no need to do anything with it
                 //because the type is already assigned
                 if typing_context.get(name).is_none() {
-                    self.compiler_errors
-                        .variable_not_found
-                        .push(CompilerErrorContext {
-                            error: VariableNotFound {
-                                variable_name: *name,
-                            },
-                            on_element: *root,
+
+                    let is_type_name = self.type_database.find_by_name(*name);
+                    if let Some(ty_data) = is_type_name {
+                        let type_data = self.type_database.find_by_name("TypeData".into())
+                            .unwrap();
+                        let next = type_table.next_with(PolyType::mono(MonoType::simple(type_data.id)));
+                        type_table[&*ty] = PolyType::mono(MonoType::simple(ty_data.id));
+                        *expression = HIRExpr::TypeName {
                             location: *node,
-                            compiler_code_location: loc!(),
-                        });
-                    return Err(());
+                            type_variable: *ty,
+                            type_data: next
+
+                        };
+                        return Ok(())
+                    }
+
+                    //check if is generic
+                    if typing_context.has_generic(name) {
+                        type_table[&*ty] = PolyType::mono(
+                            MonoType::Variable(TypeVariable(*name)),
+                        );
+                        let type_data = self.type_database.find_by_name("TypeData".into())
+                            .unwrap();
+                        let next = type_table.next_with(PolyType::mono(MonoType::simple(type_data.id)));
+                        *expression = HIRExpr::TypeName {
+                            location: *node,
+                            type_variable: *ty,
+                            type_data: next
+
+                        };
+                        return Ok(())
+                    }
+
+                    //check if this is still a simple TypeVariable - it's a sign this is
+                    //NOT being monomorphized and will not be solved at any point.
+                    //if it's a TypeVariable we just throw.
+
+                    if let PolyType {mono: MonoType::Variable(_), ..} = &type_table[ty] {
+                        self.compiler_errors
+                            .variable_not_found
+                            .push(CompilerErrorContext {
+                                error: VariableNotFound {
+                                    variable_name: *name,
+                                },
+                                on_element: *root,
+                                location: *node,
+                                compiler_code_location: loc!(),
+                            });
+                        return Err(());
+                    }
+                    //let's hope for the best!
+                    return Ok(())
+                }
+                else {
+                    return Ok(())
                 }
             }
-            /*super::hir::HIRExpr::TypeName {
+            super::hir::HIRExpr::TypeName {
+                type_data,
+                type_variable,
+                location
+            } => {
+                //find the TypeData instance.
+                //To not break tests, leave untyped if no type data is present
+                let Some(type_data_type) = self.type_database.find_by_name("TypeData".into()) else {
+                    return Ok(())
+                };
+                type_table[type_variable] = PolyType::mono(MonoType::simple(type_data_type.id));
 
 
-                ..
-            } => {}*/
+
+            }
             HIRExpr::Cast(_, _, _, _) => {}
             HIRExpr::SelfValue(_, _) => {
                 //self type is already solved
@@ -1746,9 +1835,20 @@ impl<'tydb> Typer<'tydb> {
                 let expr_ty = type_table[obj.get_type()].expect_mono();
 
                 let MonoType::Application(tc_id, type_args) = expr_ty else {
-                    todo!(
-                        "Proper error reporting here, member access obj application, {expr_ty:?}"
-                    );
+
+                    if let MonoType::Variable(TypeVariable(name)) = expr_ty {
+                        if typing_context.has_generic(name) {
+                            return Ok(())
+                        } else {
+                            todo!(
+                                "Proper error reporting here, member access obj application, {expr_ty:?}"
+                            );
+                        }
+                    } else {
+                        todo!(
+                            "Proper error reporting here, member access obj application, {expr_ty:?}"
+                        );
+                    }
                 };
 
                 /*

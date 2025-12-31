@@ -78,11 +78,11 @@ pub enum MIRExprRValue {
         Option<PolymorphicName>,
     ),
     StructInstantiate(TypeIndex, NodeIndex),
-    /*TypeVariable {
+    TypeVariable {
         type_variable: TypeIndex,
         type_data: TypeIndex,
         location: NodeIndex,
-    },*/
+    },
     Ref(
         //you can only ref an lvalue
         Box<MIRExprLValue>,
@@ -104,7 +104,7 @@ impl MIRExpr {
     pub fn get_type(&self) -> TypeIndex {
         match self {
             MIRExpr::RValue(rvalue_expr) => match rvalue_expr {
-                //MIRExprRValue::TypeVariable { type_data, .. } => *type_data,
+                MIRExprRValue::TypeVariable { type_data, .. } => *type_data,
                 MIRExprRValue::Literal(_, type_id, _) => *type_id,
                 MIRExprRValue::BinaryOperation(_, _, _, type_id, _) => *type_id,
                 MIRExprRValue::MethodCall(_, _, _, type_id, _) => *type_id,
@@ -370,7 +370,7 @@ fn simplify_expression(expr: HIRExpr) -> (HIRExpr, bool) {
             let simplified = simplified_items.iter().any(|simplified| *simplified);
             (HIRExpr::Array(items, location, ty), simplified)
         }
-        /*HIRExpr::TypeName {
+        HIRExpr::TypeName {
             type_variable,
             type_data,
             location,
@@ -381,7 +381,7 @@ fn simplify_expression(expr: HIRExpr) -> (HIRExpr, bool) {
                 location,
             },
             false,
-        ),*/
+        ),
         HIRExpr::SelfValue(location, ty) => (HIRExpr::SelfValue(location, ty), false),
     }
 }
@@ -563,7 +563,7 @@ fn convert_expr_to_mir(
         HIRExpr::StructInstantiate(_name, _typeargs, location, ty) => Ok(MIRExpr::RValue(
             MIRExprRValue::StructInstantiate(ty, location),
         )),
-        /*HIRExpr::TypeName {
+        HIRExpr::TypeName {
             type_variable,
             type_data,
             location,
@@ -571,7 +571,7 @@ fn convert_expr_to_mir(
             type_variable,
             type_data,
             location,
-        })),*/
+        })),
         HIRExpr::SelfValue(ty_id, location) => Ok(MIRExpr::LValue(MIRExprLValue::Variable(
             "self".into(),
             location,
@@ -1187,6 +1187,7 @@ pub fn hir_to_mir(
                 ..
             } => {
                 for method in methods.into_iter() {
+                    log!("Processing method {method:?}");
                     match method {
                         HIRRoot::DeclareFunction {
                             function_name,
@@ -1197,6 +1198,7 @@ pub fn hir_to_mir(
                             type_table,
                             ..
                         } => {
+
                             let mir_parameters = parameters
                                 .iter()
                                 .map(|x| MIRTypedBoundName {

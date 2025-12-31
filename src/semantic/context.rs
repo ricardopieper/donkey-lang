@@ -88,10 +88,10 @@ impl Source {
 
     #[allow(dead_code)]
     pub fn load_stdlib(&mut self) -> bool {
-        self.load_file("./stdlib/type_type.dk");
+        self.load_file("./stdlib/c_lib.dk");
         self.load_file("./stdlib/str_type.dk");
         self.load_file("./stdlib/str_impl.dk");
-        self.load_file("./stdlib/c_lib.dk");
+        self.load_file("./stdlib/type_type.dk");
         self.load_file("./stdlib/llvm_intrinsics.dk");
         self.load_file("./stdlib/asserts.dk");
         true

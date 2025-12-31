@@ -15,7 +15,6 @@ def ptr_cast<T, U>(p: ptr<T>) -> ptr<U>:
 
 def mem_alloc<T>(elems: u64) -> ptr<T>:
     num_bytes = elems * T.size
-    printf("mem_alloc: Allocating %d bytes\n".buf, num_bytes)
     new_allocation = malloc(elems * T.size)
     return ptr_cast<u8, T>(new_allocation)
 

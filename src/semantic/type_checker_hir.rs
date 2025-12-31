@@ -77,7 +77,7 @@ impl<'compiler_context> HIRTypeCheckContext<'compiler_context> {
             HIRExpr::Ref(obj, location, expr_type) => {
                 self.check_ref_expr(obj, *expr_type, type_table, *location)
             }
-            /*HIRExpr::TypeName {
+            HIRExpr::TypeName {
                 type_variable,
                 type_data,
                 location,
@@ -108,7 +108,7 @@ impl<'compiler_context> HIRTypeCheckContext<'compiler_context> {
                         Err(())
                     }
                 }
-            },*/
+            },
             HIRExpr::MemberAccess(obj, member, inferred_type, location) => {
                 //self.check_expr_member_access(*obj, member, inferred_type, location)
                 Ok(())

@@ -35,6 +35,7 @@ extern crate quickcheck_macros;
 
 //use crate::lambda_vm::lambda_runner::LambdaRunner;
 
+use std::collections::HashMap;
 use std::env;
 
 //use crate::donkey_vm::vm::runner;
@@ -67,7 +68,7 @@ fn main() {
     let mut meta_table = MetaTable::new();
     let mut source = Source::new();
 
-    //source.load_stdlib();
+    source.load_stdlib();
     if !source.load_file(&args[1]) {
         return;
     }
@@ -78,22 +79,35 @@ fn main() {
     let mut compiler_errors: Option<TypeErrors> = None;
 
     let mut all_mir = vec![];
-
+    let mut all_globals = HashMap::new();
     for file in source.file_table.iter() {
         let mut parsed = ast_globals_to_hir(&file.ast, &type_db, &mut meta_table);
         let mut typer = Typer::new(&mut type_db);
+        typer.globals = all_globals;
         typer.forgive_skolem_mismatches();
         if typer.assign_types(&mut parsed).is_err() {
-            panic!("Failed to assign types while processing basic types, this is a bug");
+            let printer = TypeErrorPrinter::new(
+                &typer.compiler_errors,
+                &type_db,
+                &meta_table,
+                &source.file_table,
+            );
+            println!("{printer}");
+            return;
         }
+
+        all_globals = typer.globals;
+
         let mut mono = Monomorphizer::new(&type_db);
         mono.run(&parsed).unwrap();
 
         let (mut monomorphized, mono_structs) = mono.get_result();
         let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
         let mut final_typer = Typer::new(&mut type_db);
+        final_typer.globals = all_globals;
         final_typer.set_monomorphized_versions(replacements);
         let tc_result_2 = final_typer.assign_types(&mut monomorphized);
+        all_globals = final_typer.globals;
         if let Some(errors) = compiler_errors {
             compiler_errors = Some(errors.merge(final_typer.compiler_errors));
         } else {
@@ -115,7 +129,7 @@ fn main() {
             println!("{}", printed);
         }
 
-        let mir = hir_to_mir(parsed.clone(), &mut mir_type_errors).unwrap();
+        let mir = hir_to_mir(monomorphized.clone(), &mut mir_type_errors).unwrap();
 
         let _ = typecheck(&mir, &type_db, &mut mir_type_errors);
 

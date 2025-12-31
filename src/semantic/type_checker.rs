@@ -79,7 +79,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
             MIRExpr::RValue(MIRExprRValue::Ref(obj, expr_type, location)) => {
                 self.check_ref_expr(obj, *expr_type, type_table, *location)
             }
-            /*MIRExpr::RValue(MIRExprRValue::TypeVariable {
+            MIRExpr::RValue(MIRExprRValue::TypeVariable {
                 type_variable,
                 type_data,
                 location,
@@ -87,7 +87,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                 let type_data_type = &type_table[type_data];
                 let type_data_type_data = self.type_db.find_by_name("TypeData".into()).unwrap();
 
-                let mut unifier = Unifier::new(self.errors, self.type_db);
+                let mut unifier = Unifier::new(self.errors);
                 let unify_result = unifier.unify(
                     &type_data_type.mono,
                     &MonoType::simple(type_data_type_data.id),
@@ -110,7 +110,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                         Err(())
                     }
                 }
-            }*/
+            }
         }
     }
 

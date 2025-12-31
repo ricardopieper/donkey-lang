@@ -105,9 +105,9 @@ impl<'type_db> HIRExprPrinter<'type_db> {
                 let struct_type_name = ty.print_name(type_table, self.type_db);
                 format!("{struct_type_name}()")
             }
-           /* HIRExpr::TypeName { type_variable, .. } => {
+            HIRExpr::TypeName { type_variable, .. } => {
                 type_variable.print_name(type_table, self.type_db).to_string()
-            }*/
+            }
             HIRExpr::SelfValue(..) => "self".into(),
         };
 
@@ -285,6 +285,9 @@ impl<'type_db> HIRPrinter<'type_db> {
                 type_parameters,
                 type_table,
                 method_of,
+                is_varargs,
+                is_external,
+                is_intrinsic,
                 ..
             } => {
                 let mut parameters_printed = vec![];
@@ -307,6 +310,10 @@ impl<'type_db> HIRPrinter<'type_db> {
                     })
                     .collect_into::<Vec<_>>(&mut parameters_printed);
 
+                if *is_varargs {
+                    parameters_printed.push("...".into());
+                }
+
                 let parameters = parameters_printed.join(", ");
 
                 let mut args = type_parameters
@@ -319,8 +326,11 @@ impl<'type_db> HIRPrinter<'type_db> {
                     args = format!("<{}>", args);
                 }
 
+                let is_external = if !*is_external { "" } else { "external " };
+                let is_intrinsic = if !*is_intrinsic { "" } else { "intrinsic " };
+
                 let mut function = format!(
-                    "{}def {}{}({}) -> {} (return inferred: {}):\n",
+                    "{}{is_external}{is_intrinsic}def {}{}({}) -> {} (return inferred: {}):\n",
                     indent,
                     function_name,
                     args,

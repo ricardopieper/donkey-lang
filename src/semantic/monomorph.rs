@@ -273,6 +273,9 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
     ) -> Result<Option<HIRRoot>, ()> {
         match polymorphic_root {
             PolymorphicRoot::Function(polymorphic_root) => {
+
+                println!("Trying to find {polymorphic_root}");
+
                 let hir = self
                     .global_definitions
                     .get(&polymorphic_root)

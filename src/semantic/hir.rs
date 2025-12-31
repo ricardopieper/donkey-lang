@@ -87,11 +87,11 @@ impl NodeIndex {
 pub enum HIRExpr {
     Literal(LiteralHIRExpr, NodeIndex, TypeIndex),
     Variable(InternedString, NodeIndex, TypeIndex),
-    /*TypeName {
+    TypeName {
         type_variable: TypeIndex, //the actual contents of the metadata of the TypeData instance
         type_data: TypeIndex,     //always the metadata type TypeData
         location: NodeIndex,
-    },*/
+    },
     Cast(Box<HIRExpr>, HIRType, NodeIndex, TypeIndex),
     SelfValue(NodeIndex, TypeIndex),
     BinaryOperation(
@@ -306,7 +306,7 @@ impl HIRExpr {
             | HIRExpr::Variable(.., t) => *t,
             HIRExpr::FunctionCall(fcall, _) => fcall.return_type,
             HIRExpr::MethodCall(mcall, _) => mcall.return_type,
-            //HIRExpr::TypeName { type_data, .. } => *type_data,
+            HIRExpr::TypeName { type_data, .. } => *type_data,
             HIRExpr::SelfValue(.., t) => *t,
         }
     }
@@ -315,7 +315,7 @@ impl HIRExpr {
         match self {
             HIRExpr::Literal(_, node_index, _) => *node_index,
             HIRExpr::Variable(_, node_index, _) => *node_index,
-            //HIRExpr::TypeName { location, .. } => *location,
+            HIRExpr::TypeName { location, .. } => *location,
             HIRExpr::Cast(_, _, node_index, _) => *node_index,
             HIRExpr::SelfValue(node_index, _) => *node_index,
             HIRExpr::BinaryOperation(_, _, _, node_index, _) => *node_index,

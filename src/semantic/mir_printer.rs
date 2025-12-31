@@ -72,9 +72,9 @@ impl<'type_db> MIRPrinter<'type_db> {
                     ty = ty.print_name(type_table, self.type_db)
                 )
             }
-            /*MIRExpr::RValue(MIRExprRValue::TypeVariable { type_variable, .. }) => {
+            MIRExpr::RValue(MIRExprRValue::TypeVariable { type_variable, .. }) => {
                 type_variable.print_name(type_table, self.type_db).to_string()
-            }*/
+            }
         }
     }
 

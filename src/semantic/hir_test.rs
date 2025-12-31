@@ -748,7 +748,7 @@ def main() -> i32:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def convert<TIn, TOut>(input: TIn (inferred: TIn)) -> TOut (return inferred: TOut):
+external def convert<TIn, TOut>(input: TIn (inferred: TIn)) -> TOut (return inferred: TOut):
 def main() -> i32 (return inferred: i32):
     x : f32 = {1.0: f32} [synth]
     return {{convert: (f32) -> i32}<f32, i32>({x: f32}): i32}
@@ -1361,7 +1361,7 @@ def main() -> i32:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def print(x: i32 (inferred: i32)) -> Void (return inferred: Void):
+intrinsic def print(x: i32 (inferred: i32)) -> Void (return inferred: Void):
 def main() -> i32 (return inferred: i32):
     x : i32 = {0: i32} [synth]
     if {{x: i32} == {0: i32}: bool}:
@@ -1487,8 +1487,8 @@ def main() -> Void (return inferred: Void):
     {list: List[i32]}.add({1: i32})
     x : i32 = {{list: List[i32]}.get({0: u64}): i32} [synth]
     y : i32 = {*{{list: List[i32]}.__index_ptr__({0: u64}): ptr<i32>}: i32} [synth]
-def mem_free[i32](ptr: ptr<T> (inferred: ptr<i32>)) -> Void (return inferred: Void):
-def mem_alloc[i32](size: u64 (inferred: u64)) -> ptr<T> (return inferred: ptr<i32>):
+intrinsic def mem_free[i32](ptr: ptr<T> (inferred: ptr<i32>)) -> Void (return inferred: Void):
+intrinsic def mem_alloc[i32](size: u64 (inferred: u64)) -> ptr<T> (return inferred: ptr<i32>):
 def list_new[i32]() -> List<T> (return inferred: List[i32]):
     list : List[i32] = {List[i32](): List[i32]} [synth]
     {{list: List[i32]}.len: u64} = {0: u64}
@@ -1707,11 +1707,8 @@ impl SomeStruct[i32]:
     assert_eq!(expected.trim(), result.trim());
 }
 
-/**
- * This is because errors of this kind are caught in MIR type checker.
- */
 #[test]
-fn no_type_errors_on_hir_after_mono() {
+fn toyoya_corolla_test() {
     let (.., result, _, errors) = setup_mono(
         "
 struct ToyotaCorolla:
@@ -1737,6 +1734,68 @@ def main() -> Void (return inferred: Void):
     {sum[ToyotaCorolla]: (i32, ToyotaCorolla) -> ToyotaCorolla}({69: i32}, {corolla: ToyotaCorolla})
 def sum[ToyotaCorolla](i: i32 (inferred: i32), u: T (inferred: ToyotaCorolla)) -> T (return inferred: ToyotaCorolla):
     return {{i: i32} + {u: ToyotaCorolla}: i32}
+";
+
+    println!("{result}");
+
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn variadics_test() {
+    let (.., result, _, errors) = setup_mono(
+        "
+def printf(format: i32, ...) -> i64:
+    external
+
+def main():
+    printf(10, 20)
+",
+    );
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+external def printf(format: i32 (inferred: i32), ...) -> i64 (return inferred: i64):
+def main() -> Void (return inferred: Void):
+    {printf: (i32, i64) -> i64}({10: i32}, {20: i64})
+";
+
+    println!("{result}");
+
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+
+
+#[test]
+fn memalloc_test() {
+    let (.., result, _, errors) = setup_mono(
+        "
+struct TypeData:
+    name: i32
+    size: u64
+
+def ptr_cast<T, U>(p: ptr<T>) -> ptr<U>:
+    intrinsic
+
+def malloc(size: u64) -> ptr<u8>:
+    external
+
+def mem_alloc<T>(elems: u64) -> ptr<T>:
+    num_bytes = elems * T.size
+    new_allocation = malloc(elems * T.size)
+    return ptr_cast<u8, T>(new_allocation)
+
+def main():
+    buf = mem_alloc<i32>(10)
+",
+    );
+
+
+    println!("{result}");
+
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
 ";
 
     println!("{result}");
