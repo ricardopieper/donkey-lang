@@ -148,7 +148,7 @@ fn run_type_checker(
 
     let mut mono = Monomorphizer::new(type_db);
     mono.run(&parsed).unwrap();
-    let (mut new_parsed, monomorphized_structs) = mono.get_result();
+    let (mut new_parsed, monomorphized_structs, _, _) = mono.get_result();
 
 
     let replacements = uniformizer::uniformize(type_db, &mut new_parsed, &monomorphized_structs);
@@ -1507,12 +1507,12 @@ impl List[i32]:
         len : u64 = {{*{self: ptr<List[i32]>}: List[i32]}.len: u64} [synth]
         cap : u64 = {{*{self: ptr<List[i32]>}: List[i32]}.cap: u64} [synth]
         if {{len: u64} == {cap: u64}: bool}:
-            if {{len: u64} == {0: i32}: bool}:
+            if {{len: u64} == {0: u64}: bool}:
                 {{*{self: ptr<List[i32]>}: List[i32]}.cap: u64} = {4: u64}
             else:
                 {{*{self: ptr<List[i32]>}: List[i32]}.cap: u64} = {{cap: u64} * {2: u64}: u64}
             new_allocation : ptr<i32> = {{mem_alloc[i32]: (u64) -> ptr<i32>}({{*{self: ptr<List[i32]>}: List[i32]}.cap: u64}): ptr<i32>} [synth]
-            if {{len: u64} > {0: i32}: bool}:
+            if {{len: u64} > {0: u64}: bool}:
                 i : u64 = {0: u64} (inferred: u64)
                 while {{i: u64} < {len: u64}: bool}:
                     {*{{new_allocation: ptr<i32>}.__index_ptr__({i: u64}): ptr<i32>}: i32} = {*{{{*{self: ptr<List[i32]>}: List[i32]}.buf: ptr<i32>}.__index_ptr__({i: u64}): ptr<i32>}: i32}
@@ -1796,6 +1796,50 @@ def main():
     assert_eq!(errors.len(), 0);
 
     let expected = "
+struct TypeData:
+    name: i32
+    size: u64
+external def malloc(size: u64 (inferred: u64)) -> ptr<u8> (return inferred: ptr<u8>):
+def main() -> Void (return inferred: Void):
+    buf : ptr<i32> = {{mem_alloc[i32]: (u64) -> ptr<i32>}({10: u64}): ptr<i32>} [synth]
+def mem_alloc[i32](elems: u64 (inferred: u64)) -> ptr<T> (return inferred: ptr<i32>):
+    num_bytes : u64 = {{elems: u64} * {{TypeData: TypeData}.size: u64}: u64} [synth]
+    new_allocation : ptr<u8> = {{malloc: (u64) -> ptr<u8>}({{elems: u64} * {{TypeData: TypeData}.size: u64}: u64}): ptr<u8>} [synth]
+    return {{ptr_cast[u8,i32]: (ptr<u8>) -> ptr<i32>}({new_allocation: ptr<u8>}): ptr<i32>}
+intrinsic def ptr_cast[u8,i32](p: ptr<T> (inferred: ptr<u8>)) -> ptr<U> (return inferred: ptr<i32>):
+";
+
+    println!("{result}");
+
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+
+
+
+
+#[test]
+fn coercion_on_binary_expr_test() {
+    let (.., result, _, errors) = setup_mono(
+        "
+def main():
+    x: u64 = 0
+    if x > 0:
+        x = 0
+",
+    );
+
+
+    println!("{result}");
+
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    x : u64 = {0: u64} (inferred: u64)
+    if {{x: u64} > {0: u64}: bool}:
+        {x: u64} = {0: u64}
+    else:
+        pass
 ";
 
     println!("{result}");

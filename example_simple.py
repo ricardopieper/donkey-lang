@@ -1,2 +1,3 @@
 def main():
-    printf("hello!".buf, 10)
+    ls = list_new<i32>()
+    ls.add(1)

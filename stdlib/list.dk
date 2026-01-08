@@ -3,6 +3,44 @@ struct List<T>:
     len: u64
     cap: u64
 
+impl List<T>:
+
+    def len(self) -> u64:
+        return (*self).len
+
+    def add(self, item: T):
+        len = (*self).len
+        cap = (*self).cap
+        print("reached 1")
+        if len == cap:
+            print("reached 2")
+            if len == 0:
+                print("reached 3")
+                (*self).cap = 4
+            else:
+                (*self).cap = cap * 2
+            print("allocating... 4")
+            new_allocation = mem_alloc<T>((*self).cap)
+            print("allocated 5")
+
+            if len > 0:
+                print("reached 6")
+                i: u64 = 0
+                while i < len:
+                    new_allocation[i] = (*self).buf[i]
+                    i = i + 1
+                mem_free<T>((*self).buf)
+            print("reached 7")
+            (*self).buf = new_allocation
+            print("reached 8")
+        print("reached 9")
+        (*self).buf[len] = item
+        print("reached 10")
+        (*self).len = len + 1
+
+    def get(self, index: u64) -> T:
+        return (*self).buf[index]
+
 # Creates a new list
 def list_new<T>() -> List<T>:
     list = List<T>()
@@ -10,29 +48,3 @@ def list_new<T>() -> List<T>:
     list.cap = 0
 
     return list
-
-# Adds an item to the list
-def list_add<T>(list: ptr<List<T>>, item: T):
-    len = (*list).len
-    cap = (*list).cap
-    if len == cap:
-        if len == 0:
-            (*list).cap = 4
-        else:
-            (*list).cap = cap * 2
-
-        new_allocation = mem_alloc<T>((*list).cap)
-        if len > 0:
-            i: u64 = 0
-            while i < len:
-                new_allocation[i] = (*list).buf[i]
-                i = i + 1
-            mem_free<T>((*list).buf)
-
-        (*list).buf = new_allocation
-
-    (*list).buf[len] = item
-    (*list).len = len + 1
-
-def list_get<T>(list: ptr<List<T>>, index: u64) -> T:
-    return (*list).buf[index]

@@ -634,13 +634,13 @@ impl<'errors> MIRFunctionEmitter<'errors> {
     pub fn run(
         &mut self,
         body: Vec<HIR>,
-        parameters: Vec<HIRTypedBoundName>,
+        parameters: &[MIRTypedBoundName],
     ) -> Result<(), CompilerError> {
         //the function has a starting scope, create it
         let starting_scope = self.create_scope(ScopeId(0));
         //add all parameters to the scope 0
         for param in parameters.iter() {
-            self.scope_add_variable(starting_scope, param.name, param.type_data.type_variable);
+            self.scope_add_variable(starting_scope, param.name, param.type_instance);
             //   self.scopes[0].boundnames.push(MIRTypedBoundName { name: param.name, type_instance: param.typename });
         }
 
@@ -1133,7 +1133,7 @@ pub fn hir_to_mir(
                 has_been_monomorphized: _,
             } => {
                 let mir_parameters = parameters
-                    .iter()
+                    .into_iter()
                     .map(|x| MIRTypedBoundName {
                         name: x.name,
                         type_instance: x.type_data.type_variable,
@@ -1158,7 +1158,7 @@ pub fn hir_to_mir(
                         body[0].get_node_index(),
                     );
 
-                    mir_emitter.run(body, parameters)?;
+                    mir_emitter.run(body, &mir_parameters)?;
 
                     let result = MIRTopLevelNode::DeclareFunction {
                         function_name,
@@ -1196,16 +1196,24 @@ pub fn hir_to_mir(
                             body,
                             return_type,
                             type_table,
+                            method_of,
                             ..
                         } => {
 
-                            let mir_parameters = parameters
+                            let mut mir_parameters = vec![];
+                            if let Some(struct_type) = method_of {
+                                mir_parameters.push(MIRTypedBoundName {
+                                    name: "self".into(),
+                                    type_instance: struct_type
+                                });
+                            }
+                            parameters
                                 .iter()
                                 .map(|x| MIRTypedBoundName {
                                     name: x.name,
                                     type_instance: x.type_data.type_variable,
                                 })
-                                .collect::<Vec<_>>();
+                                .collect_into(&mut mir_parameters);
 
                             let mut mir_emitter = MIRFunctionEmitter::new(
                                 function_name,
@@ -1214,7 +1222,7 @@ pub fn hir_to_mir(
                                 body[0].get_node_index(),
                             );
 
-                            mir_emitter.run(body, parameters)?;
+                            mir_emitter.run(body, &mir_parameters)?;
 
                             let result = MIRTopLevelNode::DeclareFunction {
                                 function_name,

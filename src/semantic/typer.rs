@@ -850,7 +850,7 @@ impl<'tydb> Typer<'tydb> {
                         typing_context,
                         type_table,
                         root,
-                        Some(&boolean),
+                        None,
                     )?;
                     let condition_ty = type_table[expr.get_type()].clone();
                     let condition_mono = condition_ty.expect_mono();
@@ -1292,6 +1292,7 @@ impl<'tydb> Typer<'tydb> {
                         is_varargs,
                         type_table,
                         has_been_monomorphized,
+                        method_of,
                         ..
                     } = method
                     else {
@@ -1302,6 +1303,8 @@ impl<'tydb> Typer<'tydb> {
                     if let Some(self_type_idx) = type_table.get_self_type() {
                         type_table[self_type_idx] = self_type_in_methods.clone();
                     }
+
+                    assert_eq!(&type_table.get_self_type(), method_of);
 
                     if !*has_been_monomorphized {
                         for param in parameters.iter_mut() {
@@ -1501,12 +1504,15 @@ impl<'tydb> Typer<'tydb> {
                     root,
                     coercion_hint,
                 )?;
+                let lhs_ty =  type_table[lhs.get_type()].mono.clone();
                 self.infer_type_for_expression(
                     rhs,
                     typing_context,
                     type_table,
                     root,
-                    coercion_hint,
+                    coercion_hint.or(Some(
+                        &lhs_ty
+                    )),
                 )?;
                 let lhs_ty = type_table[lhs.get_type()].clone();
                 let rhs_ty = type_table[lhs.get_type()].clone();

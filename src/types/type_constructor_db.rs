@@ -4,11 +4,11 @@ use crate::ast::lexer::Operator;
 
 use crate::interner::InternedString;
 
-#[cfg(not(test))]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TypeConstructorId(pub usize);
+//#[cfg(not(test))]
+//#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+//pub struct TypeConstructorId(pub usize);
 
-#[cfg(test)]
+//#[cfg(test)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeConstructorId(pub usize, pub InternedString);
 
@@ -180,14 +180,14 @@ impl TypeConstructorDatabase {
     pub fn new() -> Self {
         let default_type_constructor_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
-            #[cfg(test)]
+            //#[cfg(test)]
             {
                 TypeConstructorId(0, InternedString::new("NONE"))
             }
-            #[cfg(not(test))]
+           /* #[cfg(not(test))]
             {
                 TypeConstructorId(0)
-            }
+            }*/
         };
 
         let mut item = Self {
@@ -219,14 +219,14 @@ impl TypeConstructorDatabase {
     ) -> TypeConstructorId {
         let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
-            #[cfg(test)]
+            //#[cfg(test)]
             {
                 TypeConstructorId(self.types.len(), name)
             }
-            #[cfg(not(test))]
+            /*#[cfg(not(test))]
             {
                 TypeConstructorId(self.types.len())
-            }
+            }*/
         };
         self.types.push(TypeConstructor {
             id: next_id,
@@ -283,14 +283,14 @@ impl TypeConstructorDatabase {
     ) -> TypeConstructorId {
         let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
-            #[cfg(test)]
+            //#[cfg(test)]
             {
                 TypeConstructorId(self.types.len(), name)
             }
-            #[cfg(not(test))]
+            /*#[cfg(not(test))]
             {
                 TypeConstructorId(self.types.len())
-            }
+            }*/
         };
         self.types.push(TypeConstructor {
             id: next_id,
@@ -316,14 +316,14 @@ impl TypeConstructorDatabase {
         let generated_name = signature.print_name(self);
         let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
-            #[cfg(test)]
+            //#[cfg(test)]
             {
                 TypeConstructorId(self.types.len(), InternedString::new(&generated_name))
             }
-            #[cfg(not(test))]
+            /*#[cfg(not(test))]
             {
                 TypeConstructorId(self.types.len())
-            }
+            }*/
         };
         self.types.push(TypeConstructor {
             id: next_id,
@@ -480,14 +480,14 @@ impl TypeConstructorDatabase {
         let function_type_id = if found.is_none() {
             let next_id = {
                 //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
-                #[cfg(test)]
+                //#[cfg(test)]
                 {
                     TypeConstructorId(self.types.len(), InternedString::new("fn"))
                 }
-                #[cfg(not(test))]
+                /*#[cfg(not(test))]
                 {
                     TypeConstructorId(self.types.len())
-                }
+                }*/
             };
             self.types.push(TypeConstructor {
                 id: next_id,

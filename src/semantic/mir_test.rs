@@ -60,7 +60,7 @@ fn setup(
         let mut mono = Monomorphizer::new(&type_db);
 
         mono.run(&parsed).unwrap();
-        let (mut monomorphized, mono_structs) = mono.get_result();
+        let (mut monomorphized, mono_structs, _, _) = mono.get_result();
 
         let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
 
@@ -1330,9 +1330,10 @@ def main():
 
     println!("{final_result}");
     let expected = "
-def MyStruct::get_x() -> i32:
+def MyStruct::get_x(self: ptr<MyStruct>) -> i32:
     defscope 0:
         inheritscope 0
+        self : ptr<MyStruct>
     defblock 0:
         usescope 0
         return *self.x
@@ -1392,9 +1393,10 @@ def main() -> Void:
         s.x = 1
         s.get_x()
         return
-def MyStruct[i32]::get_x() -> i32:
+def MyStruct[i32]::get_x(self: ptr<MyStruct[i32]>) -> i32:
     defscope 0:
         inheritscope 0
+        self : ptr<MyStruct[i32]>
     defblock 0:
         usescope 0
         return *self.x";

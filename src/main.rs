@@ -69,6 +69,8 @@ fn main() {
     let mut source = Source::new();
 
     source.load_stdlib();
+    //source.load_file("./stdlib/str_type.dk");
+    //source.load_file("./stdlib/type_type.dk");
     if !source.load_file(&args[1]) {
         return;
     }
@@ -80,6 +82,8 @@ fn main() {
 
     let mut all_mir = vec![];
     let mut all_globals = HashMap::new();
+    let mut all_global_defs_for_mono = HashMap::new();
+    let mut all_impls = HashMap::new();
     for file in source.file_table.iter() {
         let mut parsed = ast_globals_to_hir(&file.ast, &type_db, &mut meta_table);
         let mut typer = Typer::new(&mut type_db);
@@ -99,9 +103,13 @@ fn main() {
         all_globals = typer.globals;
 
         let mut mono = Monomorphizer::new(&type_db);
+        mono.global_definitions.extend(all_global_defs_for_mono.clone());
+        mono.impl_definitions.extend(all_impls.clone());
         mono.run(&parsed).unwrap();
 
-        let (mut monomorphized, mono_structs) = mono.get_result();
+        let (mut monomorphized, mono_structs, global_defs, impls) = mono.get_result();
+        all_global_defs_for_mono.extend(global_defs);
+        all_impls.extend(impls);
         let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
         let mut final_typer = Typer::new(&mut type_db);
         final_typer.globals = all_globals;
@@ -125,7 +133,7 @@ fn main() {
 
         if print_hir {
             let printer = HIRPrinter::new(true, &type_db);
-            let printed = printer.print_hir(&parsed);
+            let printed = printer.print_hir(&monomorphized);
             println!("{}", printed);
         }
 

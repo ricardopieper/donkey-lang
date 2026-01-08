@@ -57,8 +57,8 @@ struct MonomorphizationQueueItem {
 type CompilerError = ();
 
 pub struct Monomorphizer<'compiler_state> {
-    global_definitions: HashMap<InternedString, HIRRoot>,
-    impl_definitions: HashMap<InternedString, Vec<HIRRoot>>,
+    pub global_definitions: HashMap<InternedString, HIRRoot>,
+    pub impl_definitions: HashMap<InternedString, Vec<HIRRoot>>,
     queue: Vec<MonomorphizationQueueItem>,
     type_db: &'compiler_state TypeConstructorDatabase,
     result: Vec<(HIRRoot, usize)>,
@@ -259,10 +259,10 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         Ok(())
     }
 
-    pub fn get_result(mut self) -> (Vec<HIRRoot>, Vec<MonomorphizedStruct>) {
+    pub fn get_result(mut self) -> (Vec<HIRRoot>, Vec<MonomorphizedStruct>, HashMap<InternedString, HIRRoot>, HashMap<InternedString, Vec<HIRRoot>>) {
         self.result.sort_by(|a, b| a.1.cmp(&b.1));
         let mono_hir = self.result.into_iter().map(|(hir, _)| hir).collect();
-        (mono_hir, self.monomorphized_structs)
+        (mono_hir, self.monomorphized_structs, self.global_definitions, self.impl_definitions)
     }
 
     fn monomorphize(

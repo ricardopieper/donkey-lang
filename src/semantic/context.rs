@@ -94,6 +94,7 @@ impl Source {
         self.load_file("./stdlib/type_type.dk");
         self.load_file("./stdlib/llvm_intrinsics.dk");
         self.load_file("./stdlib/asserts.dk");
+        self.load_file("./stdlib/list.dk");
         true
     }
 }

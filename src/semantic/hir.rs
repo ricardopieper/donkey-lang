@@ -695,8 +695,8 @@ impl TypeTable {
     }
 
     pub fn make_self(&mut self) -> TypeIndex {
-        if let Some(self_type) = self.self_type {
-            return self_type;
+        if self.self_type.is_some() {
+            panic!("Self type already generated. Use get_self_type")
         }
         let var_name = format!("'self{}", self.ty_var_current);
         let r = self.next_with(PolyType::mono(MonoType::Variable(TypeVariable(
@@ -1072,7 +1072,7 @@ fn expr_to_hir(
             ));
             HIRExpr::Cast(casted_expr, typ, meta.next(span), ty.next())
         }
-        Expr::SelfValue(span) => HIRExpr::SelfValue(meta.next(span), ty.make_self()),
+        Expr::SelfValue(span) => HIRExpr::SelfValue(meta.next(span), ty.get_self_type().expect("Self type should have been generated previously")),
     }
 }
 
@@ -1211,7 +1211,9 @@ fn ast_to_hir(
         }
         AST::Intrinsic(_) => panic!("Cannot use intrinsic keyword"),
 
-        ast => todo!("Not implemented HIR for {ast:?}"),
+        ast => {
+            todo!("Not implemented HIR for {ast:?}")
+        },
     }
 }
 
@@ -1229,6 +1231,11 @@ fn ast_decl_function_to_hir<'source>(
     is_method: bool,
 ) {
     let mut ty = TypeTable::new();
+    let self_ty = if is_method {
+        Some(ty.make_self())
+    } else {
+        None
+    };
     let type_parameters: Vec<_> = type_parameters.iter().map(|x| TypeParameter(x.0)).collect();
     let parameters = create_parameters(parameters, &mut ty, decls);
     let hir_return = match return_type {
@@ -1258,7 +1265,7 @@ fn ast_decl_function_to_hir<'source>(
                 is_external: false,
                 is_varargs,
                 return_type,
-                method_of: if is_method { Some(ty.next()) } else { None },
+                method_of: self_ty,
                 type_table: ty,
                 has_been_monomorphized: false,
             });
@@ -1275,7 +1282,7 @@ fn ast_decl_function_to_hir<'source>(
                 is_external: true,
                 is_varargs,
                 return_type,
-                method_of: if is_method { Some(ty.next()) } else { None },
+                method_of: self_ty,
                 type_table: ty,
                 has_been_monomorphized: false,
             });
@@ -1305,7 +1312,7 @@ fn ast_decl_function_to_hir<'source>(
         is_external: false,
         is_varargs,
         return_type,
-        method_of: if is_method { Some(ty.next()) } else { None },
+        method_of: self_ty,
         type_table: ty,
         has_been_monomorphized: false,
     };

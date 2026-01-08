@@ -68,7 +68,7 @@ fn setup(
         let mut mono = Monomorphizer::new(&type_db);
 
         mono.run(&parsed).unwrap();
-        let (mut monomorphized, mono_structs) = mono.get_result();
+        let (mut monomorphized, mono_structs, _, _) = mono.get_result();
         let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
 
 
