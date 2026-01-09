@@ -93,3 +93,8 @@ $RECYCLE.BIN/
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+# Donkey compiler output files
+*.obj
+*.asm
+donkey_*
