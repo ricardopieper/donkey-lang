@@ -1,5 +1,5 @@
 use core::panic;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::error::Error;
 
 use inkwell::builder::Builder;
@@ -17,14 +17,11 @@ use inkwell::{AddressSpace, OptimizationLevel};
 use crate::ast::lexer::Operator;
 use crate::llvm::linker::{LinkerError, link};
 
-use crate::semantic::mir::{
-  LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue, MIRExprRValue,
-  MIRScope, MIRTypedBoundName, ScopeId,
-};
+use crate::semantic::mir::{LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue, MIRExprRValue, MIRScope, MIRTopLevelNode, MIRTypedBoundName, ScopeId};
 
-use crate::types::type_instance_db::{TypeInstance, TypeInstanceId};
-use crate::{semantic::mir::MIRTopLevelNode, types::type_instance_db::TypeInstanceManager};
-
+use std::collections::hash_map::DefaultHasher;
+use std::hash::BuildHasherDefault;
+type DeterministicMap<K, V> = BTreeMap<K, V>;
 use std::{
   fmt::Display,
   iter::Sum,
@@ -50,7 +47,7 @@ impl ByteRange {
   }
 }
 
-pub type ScopeVariables = HashMap<InternedString, (ByteRange, ScopeId)>;
+pub type ScopeVariables = DeterministicMap<InternedString, (ByteRange, ScopeId)>;
 pub type ScopesVariables = Vec<ScopeVariables>;
 
 pub enum EmitMode {
@@ -63,7 +60,7 @@ fn build_write_scope_byte_layout(
   all_scopes: &[MIRScope],
   type_db: &TypeConstructorDatabase,
   type_table: &TypeTable,
-) -> HashMap<InternedString, (ByteRange, ScopeId)> {
+) -> DeterministicMap<InternedString, (ByteRange, ScopeId)> {
   let mut current_index = scope.id;
   let mut found_var = vec![];
   loop {
@@ -82,7 +79,7 @@ fn build_write_scope_byte_layout(
     current_index = scope.inherit;
   }
 
-  let mut map: HashMap<InternedString, (ByteRange, ScopeId)> = HashMap::new();
+  let mut map: DeterministicMap<InternedString, (ByteRange, ScopeId)> = DeterministicMap::new();
   let mut used_bytes = Bytes(0);
   for (name, size, scope) in found_var.into_iter().rev() {
     map.insert(
@@ -152,16 +149,16 @@ pub struct CodeGen<'codegen_scope, 'ctx> {
   builder: &'codegen_scope Builder<'ctx>,
   module: &'codegen_scope Module<'ctx>,
   type_db: &'codegen_scope TypeConstructorDatabase,
-  type_cache: HashMap<TypeConstructorId, AnyTypeEnum<'ctx>>,
-  functions: HashMap<InternedString, FunctionValue<'ctx>>,
-  type_data: HashMap<TypeConstructorId, GlobalValue<'ctx>>,
+  type_cache: DeterministicMap<TypeConstructorId, AnyTypeEnum<'ctx>>,
+  functions: DeterministicMap<InternedString, FunctionValue<'ctx>>,
+  type_data: DeterministicMap<TypeConstructorId, GlobalValue<'ctx>>,
   next_temporary: u32,
   //InternedString here is a hack to avoid cloning strings
-  mangled_name_cache: HashMap<TypeConstructorId, InternedString>,
-  mangled_method_cache: HashMap<(TypeConstructorId, InternedString), InternedString>,
+  mangled_name_cache: DeterministicMap<TypeConstructorId, InternedString>,
+  mangled_method_cache: DeterministicMap<(TypeConstructorId, InternedString), InternedString>,
   type_data_llvm_type: Option<AnyTypeEnum<'ctx>>,
   codegen_queue: VecDeque<&'codegen_scope MIRTopLevelNode>,
-  top_lvl_names: HashMap<InternedString, &'codegen_scope MIRTopLevelNode>,
+  top_lvl_names: DeterministicMap<InternedString, &'codegen_scope MIRTopLevelNode>,
   //    fpm: PassManager<FunctionValue<'ctx>>
 }
 
@@ -448,10 +445,10 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
         self.builder.position_at_end(cur_basic);
 
         //@TODO cloneless: HashMap<&'str, ..
-        let mut llvm_variables: HashMap<
+        let mut llvm_variables: DeterministicMap<
           InternedString,
           (PointerValue<'_>, BasicTypeEnum<'_>),
-        > = HashMap::new();
+        > = DeterministicMap::new();
 
         for (i, param) in function_signature.get_param_iter().enumerate() {
           let param_name = &parameters[i].name;
@@ -837,14 +834,12 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
               let method_name = self.get_method_name_type_id(*ctor, *method_name);
               let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![];
               let self_value = self
-                  .compile_expr_rvalue(
+                  .compile_expr_lvalue(
                     current_scope,
                     &symbol_table,
                     object,
                     type_table,
-                  )
-                  .get_value()
-                  .into();
+                  );
               //TODO deduplicate this code
               let call_args: Vec<BasicMetadataValueEnum> = args
                   .iter()
@@ -860,7 +855,7 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                   })
                   .collect::<Vec<_>>();
 
-              llvm_args.push(self_value);
+              llvm_args.push(self_value.0.into());
               llvm_args.extend(call_args);
 
               if let Some(f) = self.functions.get(&method_name) {
@@ -871,7 +866,15 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
                       .expect_basic("Expected method to return some value, but this function probably returns void and somehow passed the type checker")
                 )
               } else {
-                panic!("Method not yet added to llvm IR {method_name}");
+                let call_site_val =self.build_function_call_and_enqueue_codegen(
+                  &method_name,
+                  llvm_args,
+                );
+                LlvmRValue(
+                  call_site_val.try_as_basic_value()
+                      .expect_basic("Expected method to return some value, but this function probably returns void and somehow passed the type checker")
+                )
+                //panic!("Method not yet added to llvm IR {method_name}");
               }
             }
           }
@@ -2155,16 +2158,16 @@ impl<'codegen_scope, 'ctx> CodeGen<'codegen_scope, 'ctx> {
 }
 
 type FunctionSymbolTable<'llvm_ctx> =
-HashMap<(InternedString, ScopeId), (PointerValue<'llvm_ctx>, BasicTypeEnum<'llvm_ctx>)>;
+DeterministicMap<(InternedString, ScopeId), (PointerValue<'llvm_ctx>, BasicTypeEnum<'llvm_ctx>)>;
 
 fn build_function_symbol_table<'mir, 'function_layout, 'ctx>(
   body: &'mir [MIRBlock],
   scopes: &'mir [MIRScope],
   function_layout: &'function_layout FunctionLayout,
-  llvm_variables: HashMap<InternedString, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
+  llvm_variables: DeterministicMap<InternedString, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
 ) -> FunctionSymbolTable<'ctx> {
   let mut symbol_table =
-      HashMap::<(InternedString, ScopeId), (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>::new();
+      DeterministicMap::<(InternedString, ScopeId), (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>::new();
   for block in body.iter() {
     let _block_scope = &scopes[block.scope.0];
 
@@ -2209,15 +2212,15 @@ pub fn generate_llvm(
     module: &module,
     builder: &builder,
     type_db,
-    type_cache: HashMap::new(),
+    type_cache: DeterministicMap::new(),
     next_temporary: 0,
-    type_data: HashMap::new(),
-    functions: HashMap::new(),
-    mangled_name_cache: HashMap::new(),
-    mangled_method_cache: HashMap::new(),
+    type_data: DeterministicMap::new(),
+    functions: DeterministicMap::new(),
+    mangled_name_cache: DeterministicMap::new(),
+    mangled_method_cache: DeterministicMap::new(),
     type_data_llvm_type: None,
     codegen_queue: VecDeque::new(),
-    top_lvl_names: HashMap::new(),
+    top_lvl_names: DeterministicMap::new(),
   };
 
   for top_lvl in mir_top_level_nodes {

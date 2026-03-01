@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     semantic::{
@@ -8,6 +8,9 @@ use crate::{
     types::type_constructor_db::{TypeConstructorDatabase, TypeKind},
 };
 use crate::semantic::hir::PolyType;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::BuildHasherDefault;
+type DeterministicMap<K, V> = BTreeMap<K, V>;
 
 #[derive(Debug)]
 pub struct UniformizedTypes {
@@ -21,7 +24,7 @@ pub fn uniformize(
     monomorphized_structs: &[MonomorphizedStruct],
 ) -> Vec<UniformizedTypes> {
     let mut result = vec![];
-    let mut new_type_ids = HashMap::new();
+    let mut new_type_ids = DeterministicMap::new();
     //first collect all the new struct names, then add the fields later
     for monomorphized_struct in monomorphized_structs {
         for root in hir.iter() {

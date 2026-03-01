@@ -257,11 +257,11 @@ def foo<T>(i: T, p: ptr<T>) -> T:
     );
 
     let expected = "
-def foo<T>(i: T (inferred: T), p: ptr<T> (inferred: ptr<T>)) -> T (return inferred: T):
-    x : 't1 = {{i: T} + {2: i32}: 't1} [synth]
+def foo<T>(i: T (inferred: #T), p: ptr<T> (inferred: ptr<#T>)) -> T (return inferred: #T):
+    x : 't1 = {{i: #T} + {2: i32}: 't1} [synth]
     y : 't3 = {{x: 't1} * {98: i32}: 't3} [synth]
-    z : 't6 = {{y: 't3} - {*{p: ptr<T>}: T}: 't6} [synth]
-    return {{x: 't1} + {z: 't6}: T}
+    z : 't6 = {{y: 't3} - {*{p: ptr<#T>}: #T}: 't6} [synth]
+    return {{x: 't1} + {z: 't6}: #T}
     ";
 
     println!("{result}");
@@ -284,8 +284,8 @@ def foo<T>(i: T) -> i32:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def foo<T>(i: T (inferred: T)) -> i32 (return inferred: i32):
-    x : 't1 = {{i: T} + {2: i32}: 't1} [synth]
+def foo<T>(i: T (inferred: #T)) -> i32 (return inferred: i32):
+    x : 't1 = {{i: #T} + {2: i32}: 't1} [synth]
     return {{x: 't1} * {3: i32}: i32}
     ";
 
@@ -356,8 +356,8 @@ def bar(y: i32) -> i32:
     );
 
     let expected = "
-def id<T>(x: T (inferred: T)) -> T (return inferred: T):
-    return {x: T}
+def id<T>(x: T (inferred: #T)) -> T (return inferred: #T):
+    return {x: #T}
 def bar(y: i32 (inferred: i32)) -> i32 (return inferred: i32):
     return {{id: (i32) -> i32}<i32>({y: i32}): i32}
     ";
@@ -387,8 +387,8 @@ def bar() -> i32:
     assert_eq!(&errors.unify_error[0].error.context, "On return statement");
 
     let expected = "
-def id<T>(x: ptr<T> (inferred: ptr<T>)) -> T (return inferred: T):
-    return {*{x: ptr<T>}: T}
+def id<T>(x: ptr<T> (inferred: ptr<#T>)) -> T (return inferred: #T):
+    return {*{x: ptr<#T>}: #T}
 def bar() -> i32 (return inferred: i32):
     x : f32 = {1.0: f32} [synth]
     y : ptr<f32> = {&{x: f32}: ptr<f32>} [synth]
@@ -415,8 +415,8 @@ def bar() -> i32:
     );
 
     let expected = "
-def id<T>(x: ptr<T> (inferred: ptr<T>)) -> T (return inferred: T):
-    return {*{x: ptr<T>}: T}
+def id<T>(x: ptr<T> (inferred: ptr<#T>)) -> T (return inferred: #T):
+    return {*{x: ptr<#T>}: #T}
 def bar() -> i32 (return inferred: i32):
     x : i32 = {1: i32} [synth]
     y : ptr<i32> = {&{x: i32}: ptr<i32>} [synth]
@@ -523,8 +523,8 @@ def foo<T>(p: ptr<T>):
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def foo<T>(p: ptr<T> (inferred: ptr<T>)) -> Void (return inferred: Void):
-    x : T = {*{p: ptr<T>}: T} [synth]
+def foo<T>(p: ptr<T> (inferred: ptr<#T>)) -> Void (return inferred: Void):
+    x : #T = {*{p: ptr<#T>}: #T} [synth]
 ";
 
     println!("{result}");
@@ -545,8 +545,8 @@ def foo<T>(x: T) -> ptr<T>:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def foo<T>(x: T (inferred: T)) -> ptr<T> (return inferred: ptr<T>):
-    return {&{x: T}: ptr<T>}
+def foo<T>(x: T (inferred: #T)) -> ptr<T> (return inferred: ptr<#T>):
+    return {&{x: #T}: ptr<#T>}
 ";
 
     println!("{result}");
@@ -573,8 +573,8 @@ def bar() -> i32:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def foo<T>(p: ptr<ptr<T>> (inferred: ptr<ptr<T>>)) -> T (return inferred: T):
-    return {*{*{p: ptr<ptr<T>>}: ptr<T>}: T}
+def foo<T>(p: ptr<ptr<T>> (inferred: ptr<ptr<#T>>)) -> T (return inferred: #T):
+    return {*{*{p: ptr<ptr<#T>>}: ptr<#T>}: #T}
 def bar() -> i32 (return inferred: i32):
     x : i32 = {1: i32} [synth]
     y : ptr<i32> = {&{x: i32}: ptr<i32>} [synth]
@@ -602,7 +602,7 @@ def foo<T>(t: T) -> T:
     assert_eq!(&errors.unify_error[0].error.context, "On return statement");
 
     let expected = "
-def foo<T>(t: T (inferred: T)) -> T (return inferred: T):
+def foo<T>(t: T (inferred: #T)) -> T (return inferred: #T):
     return {1: i32}
 ";
 
@@ -627,10 +627,10 @@ def foo<T>(t: T) -> T:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def bar<T>(u: T (inferred: T)) -> T (return inferred: T):
-    return {u: T}
-def foo<T>(t: T (inferred: T)) -> T (return inferred: T):
-    return {{bar: (T) -> T}<T>({t: T}): T}
+def bar<T>(u: T (inferred: #T)) -> T (return inferred: #T):
+    return {u: #T}
+def foo<T>(t: T (inferred: #T)) -> T (return inferred: #T):
+    return {{bar: (#T) -> #T}<#T>({t: #T}): #T}
 ";
 
     println!("{result}");
@@ -654,10 +654,10 @@ def foo<T>(t: T) -> T:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def bar<U>(u: U (inferred: U)) -> U (return inferred: U):
-    return {u: U}
-def foo<T>(t: T (inferred: T)) -> T (return inferred: T):
-    return {{bar: (T) -> T}<T>({t: T}): T}
+def bar<U>(u: U (inferred: #U)) -> U (return inferred: #U):
+    return {u: #U}
+def foo<T>(t: T (inferred: #T)) -> T (return inferred: #T):
+    return {{bar: (#T) -> #T}<#T>({t: #T}): #T}
 ";
 
     println!("{result}");
@@ -681,11 +681,11 @@ def bar<U, T>(u: U, t: T) -> U:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def baz<T, U>(y: ptr<ptr<T>> (inferred: ptr<ptr<T>>), x: ptr<U> (inferred: ptr<U>)) -> T (return inferred: T):
-    return {*{*{y: ptr<ptr<T>>}: ptr<T>}: T}
-def bar<U, T>(u: U (inferred: U), t: T (inferred: T)) -> U (return inferred: U):
-    x : ptr<U> = {&{u: U}: ptr<U>} [synth]
-    return {{baz: (ptr<ptr<U>>, ptr<U>) -> U}<U, U>({&{x: ptr<U>}: ptr<ptr<U>>}, {x: ptr<U>}): U}
+def baz<T, U>(y: ptr<ptr<T>> (inferred: ptr<ptr<#T>>), x: ptr<U> (inferred: ptr<#U>)) -> T (return inferred: #T):
+    return {*{*{y: ptr<ptr<#T>>}: ptr<#T>}: #T}
+def bar<U, T>(u: U (inferred: #U), t: T (inferred: #T)) -> U (return inferred: #U):
+    x : ptr<#U> = {&{u: #U}: ptr<#U>} [synth]
+    return {{baz: (ptr<ptr<#U>>, ptr<#U>) -> #U}<#U, #U>({&{x: ptr<#U>}: ptr<ptr<#U>>}, {x: ptr<#U>}): #U}
 ";
 
     println!("{result}");
@@ -719,11 +719,11 @@ def bar<U, T>(u: U, t: T) -> U:
     );
 
     let expected = "
-def baz<T, U>(x: ptr<ptr<T>> (inferred: ptr<ptr<T>>), y: ptr<U> (inferred: ptr<U>)) -> U (return inferred: U):
-    return {*{y: ptr<U>}: U}
-def bar<U, T>(u: U (inferred: U), t: T (inferred: T)) -> U (return inferred: U):
-    x : ptr<U> = {&{u: U}: ptr<U>} [synth]
-    return {{baz: 't2}({x: ptr<U>}, {&{x: ptr<U>}: ptr<ptr<U>>}): 't4}
+def baz<T, U>(x: ptr<ptr<T>> (inferred: ptr<ptr<#T>>), y: ptr<U> (inferred: ptr<#U>)) -> U (return inferred: #U):
+    return {*{y: ptr<#U>}: #U}
+def bar<U, T>(u: U (inferred: #U), t: T (inferred: #T)) -> U (return inferred: #U):
+    x : ptr<#U> = {&{u: #U}: ptr<#U>} [synth]
+    return {{baz: 't2}({x: ptr<#U>}, {&{x: ptr<#U>}: ptr<ptr<#U>>}): 't4}
 ";
 
     println!("{result}");
@@ -748,7 +748,7 @@ def main() -> i32:
     assert_eq!(errors.len(), 0);
 
     let expected = "
-external def convert<TIn, TOut>(input: TIn (inferred: TIn)) -> TOut (return inferred: TOut):
+external def convert<TIn, TOut>(input: TIn (inferred: #TIn)) -> TOut (return inferred: #TOut):
 def main() -> i32 (return inferred: i32):
     x : f32 = {1.0: f32} [synth]
     return {{convert: (f32) -> i32}<f32, i32>({x: f32}): i32}
@@ -862,10 +862,10 @@ def main():
     assert_eq!(errors.len(), 0);
 
     let expected = "
-struct SomeStruct:
-    x: ptr<T>
-struct SomeOtherStruct:
-    x: T
+struct SomeStruct<T>:
+    x: ptr<#T>
+struct SomeOtherStruct<T>:
+    x: #T
 def main() -> Void (return inferred: Void):
     x : i32 = {1: i32} [synth]
     some_struct : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
@@ -901,10 +901,10 @@ def main():
     assert_eq!(errors.len(), 1);
 
     let expected = "
-struct SomeStruct:
-    x: ptr<T>
-struct SomeOtherStruct:
-    x: T
+struct SomeStruct<T>:
+    x: ptr<#T>
+struct SomeOtherStruct<T>:
+    x: #T
 def main() -> Void (return inferred: Void):
     x : i32 = {1: i32} [synth]
     some_struct : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
@@ -935,11 +935,11 @@ def main():
     assert_eq!(errors.variable_not_found.len(), 1);
 
     let expected = "
-struct SomeStruct:
-    x: ptr<T>
+struct SomeStruct<T>:
+    x: ptr<#T>
 def main() -> Void (return inferred: Void):
     some_struct : SomeStruct<i32> = {SomeStruct<i32>(): SomeStruct<i32>} [synth]
-    {{some_struct: SomeStruct<i32>}.x: ptr<i32>} = {&{value: 't4}: 't5}
+    {{some_struct: SomeStruct<i32>}.x: ptr<i32>} = {&{value: 't5}: 't6}
 ";
     assert_eq!(expected.trim(), result.trim());
 }
@@ -962,8 +962,8 @@ def main():
     assert_eq!(errors.len(), 0);
 
     let expected = "
-def make_ptr<TPtr>(val: TPtr (inferred: TPtr)) -> ptr<TPtr> (return inferred: ptr<TPtr>):
-    return {&{val: TPtr}: ptr<TPtr>}
+def make_ptr<TPtr>(val: TPtr (inferred: #TPtr)) -> ptr<TPtr> (return inferred: ptr<#TPtr>):
+    return {&{val: #TPtr}: ptr<#TPtr>}
 def main() -> Void (return inferred: Void):
     float_ptr : ptr<f32> = {{make_ptr: (f32) -> ptr<f32>}<f32>({1.0: f32}): ptr<f32>} [synth]
 ";
@@ -1321,6 +1321,7 @@ def main():
     );
     println!("{result}");
 
+
     //ignorable error
     typing_result.expect("Compiler should be forgiving skolem mismatches for now");
     assert_eq!(errors.len(), 0);
@@ -1531,6 +1532,45 @@ impl List[i32]:
 
     assert_eq!(expected.trim(), result.trim());
 }
+
+
+#[test]
+fn list_test_with_impl_simplified() {
+    let (.., result, typing_result, errors) = setup(
+        "
+struct Box<T>:
+    b: T
+
+impl Box<T>:
+    def get(self) -> T:
+        return (*self).b
+
+def main():
+    box = Box<i32>()
+    x = box.get()
+",
+    );
+
+    println!("{result}");
+    //ignorable error
+    typing_result.expect("Compiler should be forgiving skolem mismatches for now");
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct Box<T>:
+    b: #T
+impl Box<T>:
+    def get<T>(self) -> T (return inferred: #T):
+        return {{*{self: ptr<Box<#T>>}: Box<#T>}.b: #T}
+def main() -> Void (return inferred: Void):
+    box : Box<i32> = {Box<i32>(): Box<i32>} [synth]
+    x : i32 = {{box: Box<i32>}.get(): i32} [synth]
+";
+
+
+    assert_eq!(expected.trim(), result.trim());
+}
+
 
 #[test]
 fn index_ptr_test() {
@@ -1815,6 +1855,42 @@ intrinsic def ptr_cast[u8,i32](p: ptr<T> (inferred: ptr<u8>)) -> ptr<U> (return 
 }
 
 
+#[test]
+fn struct_with_another_struct_field() {
+    let (.., result, _, errors) = setup_mono(
+        "
+struct Foo:
+    x: i32
+
+struct Bar:
+    foo: Foo
+
+def main():
+    bar = Bar()
+    bar.foo = Foo()
+",
+    );
+
+
+    println!("{result}");
+
+    assert_eq!(errors.len(), 0);
+
+    let expected = "
+struct Foo:
+    x: i32
+struct Bar:
+    foo: Foo
+def main() -> Void (return inferred: Void):
+    bar : Bar = {Bar(): Bar} [synth]
+    {{bar: Bar}.foo: Foo} = {Foo(): Foo}
+";
+
+    println!("{result}");
+
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+
 
 
 #[test]
@@ -1846,3 +1922,43 @@ def main() -> Void (return inferred: Void):
 
     pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
 }
+
+#[test]
+fn method_called_in_generic_impl_should_be_correctly_inferred() {
+    let (.., result, _, errors) = setup(
+        "
+struct A<T>:
+    y: T
+
+impl A<T>:
+    def get_y(self) -> T:
+        return (*self).y
+
+struct B<U>:
+    a: ptr<A<U>>
+
+impl B<U>:
+    def run_get_y(self):
+        a_deref = (*(*self).a)
+        a_deref.get_y()
+",
+    );
+
+    let expected = "
+struct A<T>:
+    y: #T
+impl A<T>:
+    def get_y<T>(self) -> T (return inferred: #T):
+        return {{*{self: ptr<A<#T>>}: A<#T>}.y: #T}
+struct B<U>:
+    a: ptr<A<#U>>
+impl B<U>:
+    def run_get_y<U>(self) -> Void (return inferred: Void):
+        a_deref : A<#U> = {*{{*{self: ptr<B<#U>>}: B<#U>}.a: ptr<A<#U>>}: A<#U>} [synth]
+        {a_deref: A<#U>}.get_y()
+";
+    println!("{result}");
+    assert_eq!(errors.len(), 0);
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+

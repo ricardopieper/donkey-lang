@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Write;
+use std::hash::BuildHasherDefault;
 use std::ops::Deref;
 use std::ops::Index;
 use std::ops::IndexMut;
@@ -17,6 +18,7 @@ use crate::ast::parser::StringSpan;
 use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{AST, ASTType, Expr};
 use crate::commons::float::FloatLiteral;
+use crate::DeterministicMap;
 use crate::interner::InternedString;
 use crate::types::type_constructor_db::TypeConstructor;
 use crate::types::type_constructor_db::TypeConstructorDatabase;
@@ -75,7 +77,7 @@ impl TypeIndex {
 // Index of the HIR node (either an expression or a statement) so that we can store
 // data about it somewhere else.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct NodeIndex(usize);
+pub struct NodeIndex(pub usize);
 
 impl NodeIndex {
     pub fn none() -> NodeIndex {
@@ -144,6 +146,8 @@ impl HIRType {
         generics_in_context: &[TypeParameter],
         use_skolems: bool,
     ) -> PolyType {
+        //if we are using any of the generics in context,
+        //bound_generics will tell us which of them are.
         let bound_generics = self.bound_generics(generics_in_context);
 
         if bound_generics.is_empty() {
@@ -158,7 +162,11 @@ impl HIRType {
                 if is_generic {
                     PolyType {
                         quantifiers: generics_in_context.to_vec(),
-                        mono: MonoType::variable(*s),
+                        mono: if use_skolems {
+                            MonoType::Skolem(TypeVariable(*s))
+                        } else {
+                            MonoType::variable(*s)
+                        },
                     }
                 } else {
                     let ty = type_db.find_by_name(*s).expect("Could not find type");
@@ -170,9 +178,10 @@ impl HIRType {
                 }
             }
             HIRType::Generic(type_name, type_args) => {
-                let ty = type_db
-                    .find_by_name(*type_name)
-                    .expect("Could not find type");
+                let Some(ty) = type_db
+                    .find_by_name(*type_name) else {
+                        panic!("Could not find type {type_name} (generic)")
+                    };
                 let generics: Vec<MonoType> = type_args
                     .iter()
                     .map(|x| x.make_mono(type_db, generics_in_context, use_skolems))
@@ -428,7 +437,7 @@ struct IfTreeNode {
 
 //Refers to quantifiers in a PolyType, like in SomeType<T, U> where T and U are quantifiers.
 //This is also notated like ∀T, U. SomeType<T, U>
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct TypeParameter(pub InternedString);
 
 impl TypeParameter {
@@ -541,7 +550,7 @@ impl MonoType {
     pub fn print_name(&self, type_db: &TypeConstructorDatabase) -> String {
         match self {
             MonoType::Variable(name) => format!("{}", name.0),
-            MonoType::Skolem(name) => format!("{}", name.0),
+            MonoType::Skolem(name) => format!("#{}", name.0),
             MonoType::Application(constructor, args) => {
                 let ctor = type_db.find(*constructor);
                 if ctor.kind == TypeKind::Function && !args.is_empty() {
@@ -643,6 +652,15 @@ impl PolyType {
                 .expect("Function should always have a return type")
                 .clone();
             args.push(return_type);
+
+            /*for arg in args.iter_mut() {
+                if let MonoType::Skolem(x) = arg {
+                    //@TODO: Validate if this can be made bindable, check if x is in type_params
+                    //@TODO ALSO this is a huge hack lol
+                    *arg = MonoType::Variable(x.clone());
+                }
+            }*/
+
             return PolyType::poly(type_params, MonoType::Application(ctor.id, args));
         }
 
@@ -889,7 +907,7 @@ fn expr_to_hir(
     _is_in_assignment_lhs: bool,
     ty: &mut TypeTable,
     meta: &mut MetaTable,
-    decls: &HashMap<InternedString, TypeIndex>,
+    decls: &DeterministicMap<InternedString, TypeIndex>,
     generics_in_context: &[TypeParameter],
 ) -> HIRExpr {
     match expr {
@@ -949,8 +967,10 @@ fn expr_to_hir(
                         .map(|x| HIRUserTypeInfo {
                             user_given_type: Some(x.into()),
                             resolved_type: {
-                                let hir: HIRType = x.into();
-                                ty.next_with(hir.make_poly(type_db, generics_in_context, false))
+                                //REMOVED HERE
+                                //let hir: HIRType = x.into();
+                                //ty.next_with(hir.make_poly(type_db, generics_in_context, false))
+                                ty.next()
                             },
                         })
                         .collect(),
@@ -1082,7 +1102,7 @@ fn ast_to_hir(
     ty: &mut TypeTable,
     meta: &mut MetaTable,
     type_db: &TypeConstructorDatabase,
-    decls: &mut HashMap<InternedString, TypeIndex>,
+    decls: &mut DeterministicMap<InternedString, TypeIndex>,
     generics: &[TypeParameter],
 ) {
     let ast = &ast.ast;
@@ -1099,8 +1119,8 @@ fn ast_to_hir(
                 expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
 
             let typedef: HIRType = (&var.name_type).into();
-            let poly = typedef.make_poly(type_db, generics, false);
-            let ty_var = ty.next_with(poly);
+            //let poly = typedef.make_poly(type_db, generics, false);
+            let ty_var = ty.next();
             decls.insert(var.name.0, ty_var);
             let decl_hir = HIR::Declare {
                 var: var.name.0,
@@ -1164,12 +1184,6 @@ fn ast_to_hir(
 
             match result_expr {
                 HIRExpr::MethodCall(mcall, meta) => {
-                    let mcall = MethodCall {
-                        object: mcall.object,
-                        method_name: mcall.method_name,
-                        args: mcall.args,
-                        return_type: ty.next(),
-                    };
                     accum.push(HIR::MethodCall(mcall, meta));
                 }
                 HIRExpr::FunctionCall(fcall, meta) => {
@@ -1226,7 +1240,7 @@ fn ast_decl_function_to_hir<'source>(
     return_type: &Option<ASTType>,
     is_varargs: bool,
     accum: &mut Vec<HIRRoot>,
-    decls: &mut HashMap<InternedString, TypeIndex>,
+    decls: &mut DeterministicMap<InternedString, TypeIndex>,
     meta: &mut MetaTable,
     is_method: bool,
 ) {
@@ -1322,7 +1336,7 @@ fn ast_decl_function_to_hir<'source>(
 fn create_parameters(
     parameters: &[TypeBoundName],
     ty: &mut TypeTable,
-    decls: &mut HashMap<InternedString, TypeIndex>
+    decls: &mut DeterministicMap<InternedString, TypeIndex>
 ) -> Vec<HIRTypedBoundName> {
     parameters
         .iter()
@@ -1333,7 +1347,7 @@ fn create_parameters(
 fn create_function_param(
     param: &TypeBoundName,
     ty: &mut TypeTable,
-    decls: &mut HashMap<InternedString, TypeIndex>,
+    decls: &mut DeterministicMap<InternedString, TypeIndex>,
 ) -> HIRTypedBoundName {
     let hir_type: HIRType = (&param.name_type).into();
     let ty_var = ty.next_param_or_return();
@@ -1354,8 +1368,8 @@ fn create_struct_field_type(
     ty: &mut TypeTable,
 ) -> HIRTypedBoundName {
     let hir_type: HIRType = (&param.name_type).into();
-    let ty_var = hir_type.make_poly(type_db, type_params, true);
-    let next = ty.next_with(ty_var);
+    //let ty_var = hir_type.make_poly(type_db, type_params, true);
+    let next = ty.next();
     HIRTypedBoundName {
         name: param.name.0,
         type_data: HIRTypeWithTypeVariable {
@@ -1372,7 +1386,7 @@ fn ast_if_to_hir<'source>(
     final_else: &'source Option<Vec<SpanAST>>,
     ty: &mut TypeTable,
     meta: &mut MetaTable,
-    decls: &mut HashMap<InternedString, TypeIndex>,
+    decls: &mut DeterministicMap<InternedString, TypeIndex>,
     generics: &[TypeParameter],
 ) {
     let true_branch_result_expr = expr_to_hir(
@@ -1543,7 +1557,7 @@ fn ast_while_to_hir<'source>(
     body: &'source [SpanAST],
     ty: &mut TypeTable,
     meta: &mut MetaTable,
-    decls: &mut HashMap<InternedString, TypeIndex>,
+    decls: &mut DeterministicMap<InternedString, TypeIndex>,
     generics: &[TypeParameter],
 ) {
     let expr = expr_to_hir(type_db, expression, false, ty, meta, decls, generics);
@@ -1574,7 +1588,7 @@ fn ast_impl_to_hir<'source>(
     meta: &mut MetaTable,
 ) {
     let mut functions = vec![];
-    let mut decls = HashMap::<InternedString, TypeIndex>::new();
+    let mut decls = DeterministicMap::<InternedString, TypeIndex>::new();
     for node in body {
         ast_decl_function_to_hir(
             type_db,
@@ -1690,7 +1704,7 @@ pub fn ast_globals_to_hir(
             is_varargs,
             ..
         }) => {
-            let mut decls = HashMap::<InternedString, TypeIndex>::new();
+            let mut decls = DeterministicMap::<InternedString, TypeIndex>::new();
             ast_decl_function_to_hir(
                 type_db,
                 body,

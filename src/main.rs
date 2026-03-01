@@ -8,6 +8,9 @@
 #![feature(never_type)]
 #![feature(try_trait_v2)]
 #![feature(iter_collect_into)]
+use std::collections::hash_map::DefaultHasher;
+use std::hash::BuildHasherDefault;
+type DeterministicMap<K, V> = BTreeMap<K, V>;
 
 #[macro_use]
 mod interner;
@@ -35,7 +38,7 @@ extern crate quickcheck_macros;
 
 //use crate::lambda_vm::lambda_runner::LambdaRunner;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 
 //use crate::donkey_vm::vm::runner;
@@ -81,9 +84,9 @@ fn main() {
     let mut compiler_errors: Option<TypeErrors> = None;
 
     let mut all_mir = vec![];
-    let mut all_globals = HashMap::new();
-    let mut all_global_defs_for_mono = HashMap::new();
-    let mut all_impls = HashMap::new();
+    let mut all_globals = DeterministicMap::new();
+    let mut all_global_defs_for_mono = DeterministicMap::new();
+    let mut all_impls = DeterministicMap::new();
     for file in source.file_table.iter() {
         let mut parsed = ast_globals_to_hir(&file.ast, &type_db, &mut meta_table);
         let mut typer = Typer::new(&mut type_db);
@@ -122,6 +125,11 @@ fn main() {
             compiler_errors = Some(final_typer.compiler_errors);
         }
         if tc_result_2.is_err() {
+            if print_hir {
+                let printer = HIRPrinter::new(true, &type_db);
+                let printed = printer.print_hir(&monomorphized);
+                println!("{}", printed);
+            }
             eprintln!("Compilation failed");
             break;
         }
@@ -162,8 +170,7 @@ fn main() {
             &source.file_table,
         );
         println!("{printer}");
+    } else {
+        llvm::llvm_backend::generate_llvm(&type_db, &all_mir).unwrap();
     }
-
-    llvm::llvm_backend::generate_llvm(&type_db, &all_mir).unwrap();
-
 }

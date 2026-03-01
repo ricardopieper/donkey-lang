@@ -1,5 +1,5 @@
-use std::{collections::HashMap, fmt::Display};
-
+use std::{collections::{HashMap, HashSet}, fmt::Display};
+use std::collections::{BTreeMap, BTreeSet};
 use crate::{
     interner::*,
     semantic::{
@@ -13,6 +13,12 @@ use crate::{
 use super::hir::{
     FunctionCall, HIR, HIRExpr, HIRRoot, MonoType, TypeTable,
 };
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::BuildHasherDefault;
+type DeterministicMap<K, V> = BTreeMap<K, V>;
+type DeterministicSet<K> = BTreeSet<K>;
+
 
 #[derive(Debug, Clone)]
 enum PolymorphicRoot {
@@ -57,8 +63,8 @@ struct MonomorphizationQueueItem {
 type CompilerError = ();
 
 pub struct Monomorphizer<'compiler_state> {
-    pub global_definitions: HashMap<InternedString, HIRRoot>,
-    pub impl_definitions: HashMap<InternedString, Vec<HIRRoot>>,
+    pub global_definitions: DeterministicMap<InternedString, HIRRoot>,
+    pub impl_definitions: DeterministicMap<InternedString, Vec<HIRRoot>>,
     queue: Vec<MonomorphizationQueueItem>,
     type_db: &'compiler_state TypeConstructorDatabase,
     result: Vec<(HIRRoot, usize)>,
@@ -68,8 +74,8 @@ pub struct Monomorphizer<'compiler_state> {
 impl<'compiler_state> Monomorphizer<'compiler_state> {
     pub fn new(type_db: &'compiler_state TypeConstructorDatabase) -> Self {
         Self {
-            global_definitions: HashMap::new(),
-            impl_definitions: HashMap::new(),
+            global_definitions: DeterministicMap::new(),
+            impl_definitions: DeterministicMap::new(),
             queue: vec![],
             type_db,
             result: vec![],
@@ -170,7 +176,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
             positional_type_arguments: Vec<MonoType>,
         }
 
-        let mut impls: HashMap<MonomorphizedImplKey, (Vec<HIRRoot>, usize)> = HashMap::new();
+        let mut impls: DeterministicMap<MonomorphizedImplKey, (Vec<HIRRoot>, usize)> = DeterministicMap::new();
 
         //start consuming queue
         while let Some(queue_item) = self.queue.pop() {
@@ -259,7 +265,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         Ok(())
     }
 
-    pub fn get_result(mut self) -> (Vec<HIRRoot>, Vec<MonomorphizedStruct>, HashMap<InternedString, HIRRoot>, HashMap<InternedString, Vec<HIRRoot>>) {
+    pub fn get_result(mut self) -> (Vec<HIRRoot>, Vec<MonomorphizedStruct>, DeterministicMap<InternedString, HIRRoot>, DeterministicMap<InternedString, Vec<HIRRoot>>) {
         self.result.sort_by(|a, b| a.1.cmp(&b.1));
         let mono_hir = self.result.into_iter().map(|(hir, _)| hir).collect();
         (mono_hir, self.monomorphized_structs, self.global_definitions, self.impl_definitions)
@@ -307,7 +313,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                         .into_iter()
                         .map(|x| TypeVariable(x.0))
                         .zip(positional_type_arguments.clone())
-                        .collect::<HashMap<TypeVariable, MonoType>>(),
+                        .collect::<DeterministicMap<TypeVariable, MonoType>>(),
                 );
 
                 new_type_table.apply_function_wide_substitution(&substitution);
@@ -380,7 +386,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                         .into_iter()
                         .map(|x| TypeVariable(x.0))
                         .zip(positional_type_arguments.clone())
-                        .collect::<HashMap<TypeVariable, MonoType>>(),
+                        .collect::<DeterministicMap<TypeVariable, MonoType>>(),
                 );
 
                 new_type_table.apply_function_wide_substitution(&substitution);
@@ -480,7 +486,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                         .into_iter()
                         .map(|x| TypeVariable(x.0))
                         .zip(positional_type_arguments.clone())
-                        .collect::<HashMap<TypeVariable, MonoType>>(),
+                        .collect::<DeterministicMap<TypeVariable, MonoType>>(),
                 );
                 new_type_table.apply_function_wide_substitution(&substitution);
 

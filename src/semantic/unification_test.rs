@@ -66,7 +66,7 @@ fn check_substitute_skolem_does_not_turn_skolem_into_variable() {
         &RootElementType::Function("test".into()),
     );
 
-    check(&db, &unification_result, "'t1", "'t0");
+    check(&db, &unification_result, "'t1", "#'t0");
 }
 
 #[test]

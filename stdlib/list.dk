@@ -3,10 +3,26 @@ struct List<T>:
     len: u64
     cap: u64
 
+# Creates a new list
+def list_new<T>() -> List<T>:
+    list = List<T>()
+    list.len = 0
+    list.cap = 0
+
+    return list
+
+
+struct ListIterator<T>:
+    list: ptr<List<T>>
+    current: u64
+
 impl List<T>:
 
     def len(self) -> u64:
         return (*self).len
+
+    def __index_ptr__(self, index: u64) -> ptr<T>:
+        return &(*self).buf[index]
 
     def add(self, item: T):
         len = (*self).len
@@ -41,10 +57,18 @@ impl List<T>:
     def get(self, index: u64) -> T:
         return (*self).buf[index]
 
-# Creates a new list
-def list_new<T>() -> List<T>:
-    list = List<T>()
-    list.len = 0
-    list.cap = 0
+    def __iterator__(self) -> ListIterator<T>:
+        iterator = ListIterator<T>()
+        iterator.list = self
+        iterator.current = 0
+        return iterator
 
-    return list
+impl ListIterator<T>:
+
+    def __has_next__(self) -> bool:
+        return (*self).current < (*(*self).list).len
+
+    def __next__(self):
+        self_deref = *self
+        ls = self_deref.list
+        next = (*ls).__index_ptr__(0)
