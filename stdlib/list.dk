@@ -65,10 +65,10 @@ impl List<T>:
 
 impl ListIterator<T>:
 
-    def __has_next__(self) -> bool:
+    def has_next(self) -> bool:
         return (*self).current < (*(*self).list).len
 
-    def __next__(self):
-        self_deref = *self
-        ls = self_deref.list
-        next = (*ls).__index_ptr__(0)
+    def next(self) -> ptr<T>:
+        next = (*((*self).list)).__index_ptr__((*self).current)
+        (*self).current = (*self).current + 1
+        return next

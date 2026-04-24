@@ -1,22 +1,18 @@
-
 use super::hir::{MonoType, NodeIndex, PolyType, TypeIndex, TypeTable};
 use super::typer::Unifier;
 use crate::interner::InternedString;
+use crate::semantic::hir::HIRType;
 use crate::types::diagnostics::{
-    ArrayExpressionsNotAllTheSameType, AssignContext, CompilerErrorContext, DerefOnNonPointerError, InternalError, OutOfTypeBounds,
-    ReturnTypeContext, RootElementType, TypeErrors, TypeMismatch,
-    UnificationError,
+    ArrayExpressionsNotAllTheSameType, AssignContext, CompilerErrorContext, DerefOnNonPointerError,
+    InternalError, OutOfTypeBounds, ReturnTypeContext, RootElementType, TypeErrors, TypeMismatch,
+    TypeNotFound, UnificationError,
 };
-use crate::types::diagnostics::{
-    IfStatementNotBoolean, UnexpectedTypeFound,
-};
-use crate::types::type_constructor_db::{
-    CommonTypeConstructors, TypeConstructorDatabase,
-};
+use crate::types::diagnostics::{IfStatementNotBoolean, UnexpectedTypeFound};
+use crate::types::type_constructor_db::{CommonTypeConstructors, TypeConstructorDatabase};
 
 use super::mir::{
-    LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue,
-    MIRExprRValue, MIRScope, MIRTopLevelNode,
+    LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue, MIRExprRValue,
+    MIRScope, MIRTopLevelNode,
 };
 
 pub struct TypeCheckContext<'compiler_context> {
@@ -60,9 +56,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                 Ok(())
                 //self.check_expr_method_call(obj, *name, args, *return_type, type_table, *location)
             }
-            MIRExpr::RValue(MIRExprRValue::FunctionCall(
-                ..
-            )) => Ok(()),
+            MIRExpr::RValue(MIRExprRValue::FunctionCall(..)) => Ok(()),
             MIRExpr::RValue(MIRExprRValue::StructInstantiate(..)) => Ok(()),
 
             MIRExpr::RValue(MIRExprRValue::UnaryExpression(..)) => {
@@ -80,7 +74,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                 self.check_ref_expr(obj, *expr_type, type_table, *location)
             }
             MIRExpr::RValue(MIRExprRValue::TypeVariable {
-                type_variable,
+                type_variable: _,
                 type_data,
                 location,
             }) => {
@@ -98,7 +92,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
                 match unify_result {
                     Ok(_) => Ok(()),
-                    Err(e) => {
+                    Err(_e) => {
                         self.errors.internal_error.push(CompilerErrorContext {
                             on_element: self.on_element,
                             location: *location,
@@ -303,7 +297,19 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
         type_table: &TypeTable,
         location: NodeIndex,
     ) -> Result<(), CompilerError> {
-        let array_type = self.type_db.common_types.array;
+        let array_type = self.type_db.find_by_name("array".into());
+        let Some(array_type) = array_type else {
+            self.errors.type_not_found.push(CompilerErrorContext {
+                error: TypeNotFound {
+                    type_name: HIRType::Simple("array".into()),
+                },
+                on_element: self.on_element,
+                location,
+                compiler_code_location: loc!(),
+            });
+            return Err(());
+        };
+        let array_type_id = array_type.id;
 
         let _ = expr_array
             .iter()
@@ -319,7 +325,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
         for t in all_types.iter() {
             let target_type = &type_table[t];
-
+            log!("Target type: {:?}", target_type);
             let unification_result = unifier.unify_strict(
                 &first_type.mono,
                 &target_type.mono,
@@ -347,8 +353,13 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                 }
             }
         }
+
+        Ok(())
+        //TODO there should be a way to check here that the monomorphized array is correct
+        //but array[sometype] doesnt have strutured data to check the type of the items
+        /*log!("Inferred type of array {:?}", &type_table[inferred_type].mono);
         let unification_result = unifier.unify_strict(
-            &MonoType::Application(array_type, vec![first_type.mono.clone()]),
+            &MonoType::Application(array_type_id, vec![first_type.mono.clone()]),
             &type_table[inferred_type].mono,
             location,
             &cloned_self_element,
@@ -372,7 +383,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
 
                 Err(())
             }
-        }
+        }*/
     }
 
     /*
@@ -658,7 +669,7 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
     fn type_check_function(
         &mut self,
         body: &[MIRBlock],
-        scopes: &[MIRScope],
+        _scopes: &[MIRScope],
         return_type: &MonoType,
         type_table: &TypeTable,
     ) -> Result<(), CompilerError> {
@@ -883,15 +894,11 @@ impl<'compiler_context> TypeCheckContext<'compiler_context> {
                     }
                 }
             }
-            MIRBlockNode::FunctionCall {
-                ..
-            } => {
+            MIRBlockNode::FunctionCall { .. } => {
                 //already checked at inference time
                 Ok(())
             }
-            MIRBlockNode::MethodCall {
-               ..
-            } => {
+            MIRBlockNode::MethodCall { .. } => {
                 //already checked at inference time
                 Ok(())
             }
@@ -948,13 +955,14 @@ pub fn typecheck(
 ) -> Result<(), CompilerError> {
     for node in top_nodes {
         if let MIRTopLevelNode::DeclareFunction {
-                function_name,
-                body,
-                scopes,
-                return_type,
-                type_table,
-                ..
-            } = node {
+            function_name,
+            body,
+            scopes,
+            return_type,
+            type_table,
+            ..
+        } = node
+        {
             let mut context = TypeCheckContext {
                 type_db,
                 errors,

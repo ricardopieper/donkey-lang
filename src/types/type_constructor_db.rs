@@ -1,6 +1,6 @@
+use crate::ast::lexer::Operator;
 use crate::semantic::hir::{MonoType, TypeParameter, TypeVariable};
 use crate::semantic::typer::Substitution;
-use crate::ast::lexer::Operator;
 
 use crate::interner::InternedString;
 
@@ -139,16 +139,15 @@ impl TypeConstructor {
     pub fn compute_size(&self, ty_db: &TypeConstructorDatabase) -> Bytes {
         match self.kind {
             TypeKind::Primitive { size } => size,
-            TypeKind::Struct => {
-
-                self.fields.iter()
-                    .map(|field| {
-                        let field_ctor = field.field_type.get_ctor_id();
-                        let ctor = ty_db.find(field_ctor);
-                        ctor.compute_size(ty_db)
-                    })
-                    .sum()
-            },
+            TypeKind::Struct => self
+                .fields
+                .iter()
+                .map(|field| {
+                    let field_ctor = field.field_type.get_ctor_id();
+                    let ctor = ty_db.find(field_ctor);
+                    ctor.compute_size(ty_db)
+                })
+                .sum(),
             //ptr, review this
             TypeKind::Function => Bytes::size_of::<usize>(),
         }
@@ -167,7 +166,6 @@ pub struct CommonTypeConstructors {
     pub u8: TypeConstructorId,
     pub char: TypeConstructorId,
     pub bool: TypeConstructorId,
-    pub array: TypeConstructorId,
     pub ptr: TypeConstructorId,
 }
 
@@ -181,10 +179,8 @@ impl TypeConstructorDatabase {
         let default_type_constructor_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
             //#[cfg(test)]
-            {
-                TypeConstructorId(0, InternedString::new("NONE"))
-            }
-           /* #[cfg(not(test))]
+            TypeConstructorId(0, InternedString::new("NONE"))
+            /* #[cfg(not(test))]
             {
                 TypeConstructorId(0)
             }*/
@@ -203,7 +199,6 @@ impl TypeConstructorDatabase {
                 u8: default_type_constructor_id,
                 char: default_type_constructor_id,
                 bool: default_type_constructor_id,
-                array: default_type_constructor_id,
                 ptr: default_type_constructor_id,
             },
         };
@@ -220,9 +215,7 @@ impl TypeConstructorDatabase {
         let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
             //#[cfg(test)]
-            {
-                TypeConstructorId(self.types.len(), name)
-            }
+            TypeConstructorId(self.types.len(), name)
             /*#[cfg(not(test))]
             {
                 TypeConstructorId(self.types.len())
@@ -249,18 +242,17 @@ impl TypeConstructorDatabase {
     }
 
     pub fn is_integer(&self, ty: TypeConstructorId) -> bool {
-            ty == self.common_types.i32
-                || ty == self.common_types.u32
-                || ty == self.common_types.i64
-                || ty == self.common_types.u64
-                || ty == self.common_types.u8
-                || ty == self.common_types.char
+        ty == self.common_types.i32
+            || ty == self.common_types.u32
+            || ty == self.common_types.i64
+            || ty == self.common_types.u64
+            || ty == self.common_types.u8
+            || ty == self.common_types.char
     }
 
     pub fn is_float(&self, ty: TypeConstructorId) -> bool {
         ty == self.common_types.f32 || ty == self.common_types.f64
     }
-
 
     pub fn add_binary_operator(
         &mut self,
@@ -284,9 +276,7 @@ impl TypeConstructorDatabase {
         let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
             //#[cfg(test)]
-            {
-                TypeConstructorId(self.types.len(), name)
-            }
+            TypeConstructorId(self.types.len(), name)
             /*#[cfg(not(test))]
             {
                 TypeConstructorId(self.types.len())
@@ -317,9 +307,7 @@ impl TypeConstructorDatabase {
         let next_id = {
             //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
             //#[cfg(test)]
-            {
-                TypeConstructorId(self.types.len(), InternedString::new(&generated_name))
-            }
+            TypeConstructorId(self.types.len(), InternedString::new(&generated_name))
             /*#[cfg(not(test))]
             {
                 TypeConstructorId(self.types.len())
@@ -382,6 +370,9 @@ impl TypeConstructorDatabase {
 
     pub fn find_by_name(&self, name: InternedString) -> Option<&TypeConstructor> {
         //@TODO maybe it would be faster to have a map of ids -> instances, this has the potential to grow a lot and be slow
+        for ty in self.types.iter() {
+            // /    println!("Type: {}", ty.name);
+        }
         self.types.iter().find(|t| t.name == name)
     }
 
@@ -481,9 +472,7 @@ impl TypeConstructorDatabase {
             let next_id = {
                 //if test, build with interned, otherwise build without it. DO a compiler cfg test conditional
                 //#[cfg(test)]
-                {
-                    TypeConstructorId(self.types.len(), InternedString::new("fn"))
-                }
+                TypeConstructorId(self.types.len(), InternedString::new("fn"))
                 /*#[cfg(not(test))]
                 {
                     TypeConstructorId(self.types.len())
@@ -554,19 +543,6 @@ impl TypeConstructorDatabase {
             break;
         }
         found
-    }
-
-    pub fn add_simple_field(
-        &mut self,
-        type_id: TypeConstructorId,
-        name: InternedString,
-        field_type: TypeConstructorId,
-    ) {
-        let record = self.types.get_mut(type_id.0).unwrap();
-        record.fields.push(TypeConstructorFieldDeclaration {
-            name,
-            field_type: MonoType::Application(field_type, vec![]),
-        });
     }
 
     pub fn add_field(
@@ -733,65 +709,6 @@ impl TypeConstructorDatabase {
         );
         self.mark_as_intrisic(ptr_type);
         self.common_types.ptr = ptr_type;
-
-        //ptr + num items
-        let arr_type = self.add_generic(
-            TypeKind::Struct,
-            istr("array"),
-            vec![TypeParameter(istr("TItem"))],
-        );
-
-        self.add_function_to_type(
-            arr_type,
-            istr("__index_ptr__"),
-            FunctionSignature {
-                parameters: vec![
-                    MonoType::Application(
-                        ptr_type,
-                        vec![
-                            MonoType::Application(
-                                arr_type,
-                                vec![MonoType::Variable(TypeVariable(istr("TItem")))],
-                            ), //self
-                        ],
-                    ),
-                    MonoType::simple(u32_type),
-                ],
-                return_type: MonoType::Application(
-                    ptr_type,
-                    vec![MonoType::Variable(TypeVariable(istr("TItem")))],
-                ),
-                variadic: Variadic(false),
-                type_parameters: vec![TypeParameter(istr("TItem"))],
-            },
-        );
-
-        self.add_function_to_type(
-            arr_type,
-            istr("len"),
-            FunctionSignature {
-                parameters: vec![
-                    MonoType::Application(
-                        ptr_type,
-                        vec![
-                            MonoType::Application(
-                                arr_type,
-                                vec![MonoType::Variable(TypeVariable(istr("TItem")))],
-                            ), //self
-                        ],
-                    ),
-                    MonoType::simple(u32_type),
-                ],
-                return_type: MonoType::Application(u32_type, vec![]),
-                variadic: Variadic(false),
-                type_parameters: vec![TypeParameter(istr("TItem"))],
-            },
-        );
-
-        //u32_type
-        self.add_simple_field(arr_type, istr("length"), u32_type);
-
-        self.common_types.array = arr_type;
 
         //self cast is ok... silly but ok
         self.add_cast_to_type(self.common_types.i32, self.common_types.i32);

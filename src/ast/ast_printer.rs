@@ -1,4 +1,4 @@
-use super::parser::{ASTIfStatement, Expr, FunctionDeclaration, SpanAST, StringSpan, AST};
+use super::parser::{AST, ASTIfStatement, Expr, FunctionDeclaration, SpanAST, StringSpan};
 
 pub fn print_expr(expr: &Expr, parenthesized: bool) -> String {
     match expr {
@@ -222,13 +222,11 @@ fn print_ast_internal(ast: &AST, indent: &str, parenthesized: bool) -> String {
             }
             None => format!("{indent}return"),
         },
-        AST::Root(r) => {
-            r
-                .iter()
-                .map(|x| print_ast_internal(&x.ast, indent, parenthesized))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
+        AST::Root(r) => r
+            .iter()
+            .map(|x| print_ast_internal(&x.ast, indent, parenthesized))
+            .collect::<Vec<_>>()
+            .join("\n"),
         AST::External(_) => format!("{indent}external"),
         AST::ImplDeclaration {
             struct_name,
@@ -332,8 +330,7 @@ fn join_comma_sep(type_parameters: &[StringSpan]) -> String {
 
 #[allow(dead_code)]
 pub fn print_ast(ast: &[SpanAST]) -> String {
-    ast
-        .iter()
+    ast.iter()
         .map(|x| print_ast_internal(&x.ast, "", false))
         .collect::<Vec<_>>()
         .join("\n")
@@ -341,8 +338,7 @@ pub fn print_ast(ast: &[SpanAST]) -> String {
 
 #[allow(dead_code)]
 pub fn print_fully_parenthesized_ast(ast: &[SpanAST]) -> String {
-    ast
-        .iter()
+    ast.iter()
         .map(|x| print_ast_internal(&x.ast, "", true))
         .collect::<Vec<_>>()
         .join("\n")

@@ -231,6 +231,10 @@ impl<T> FromResidual<LexerResult<!>> for LexerResult<T> {
     }
 }
 
+impl<T> std::ops::Residual<T> for LexerResult<!> {
+    type TryType = LexerResult<T>;
+}
+
 impl<T> Try for LexerResult<T> {
     type Output = T;
 
@@ -432,8 +436,6 @@ impl Lexer {
             self.next();
             let cur = self.peek()?;
 
-            
-
             match cur {
                 '\\' => '\\',
                 '\'' => '\'',
@@ -450,7 +452,10 @@ impl Lexer {
         self.next();
         let ch = self.peek()?;
         if ch != '\'' {
-            return LexerResult::Error(format!("expected \\' after char, instead found {}. Char literals can only be 1 char long, or must be escaped", ch));
+            return LexerResult::Error(format!(
+                "expected \\' after char, instead found {}. Char literals can only be 1 char long, or must be escaped",
+                ch
+            ));
         }
         self.next();
 

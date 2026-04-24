@@ -1,24 +1,16 @@
-use std::{collections::{HashMap, HashSet}, fmt::Display};
-use std::collections::{BTreeMap, BTreeSet};
+use super::hir::{FunctionCall, HIR, HIRExpr, HIRRoot, MonoType, TypeTable};
 use crate::{
     interner::*,
     semantic::{
         hir::{MethodCall, TypeVariable},
         typer::Substitution,
     },
-    types::{
-        type_constructor_db::{TypeConstructorDatabase, TypeConstructorId},
-    },
+    types::type_constructor_db::{TypeConstructorDatabase, TypeConstructorId},
 };
-use super::hir::{
-    FunctionCall, HIR, HIRExpr, HIRRoot, MonoType, TypeTable,
-};
+use std::collections::BTreeMap;
+use std::fmt::Display;
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::BuildHasherDefault;
 type DeterministicMap<K, V> = BTreeMap<K, V>;
-type DeterministicSet<K> = BTreeSet<K>;
-
 
 #[derive(Debug, Clone)]
 enum PolymorphicRoot {
@@ -138,7 +130,6 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                             let HIRRoot::DeclareFunction {
                                 function_name,
                                 type_parameters,
-                                
                                 ..
                             } = method
                             else {
@@ -176,7 +167,8 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
             positional_type_arguments: Vec<MonoType>,
         }
 
-        let mut impls: DeterministicMap<MonomorphizedImplKey, (Vec<HIRRoot>, usize)> = DeterministicMap::new();
+        let mut impls: DeterministicMap<MonomorphizedImplKey, (Vec<HIRRoot>, usize)> =
+            DeterministicMap::new();
 
         //start consuming queue
         while let Some(queue_item) = self.queue.pop() {
@@ -187,10 +179,8 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
             )?;
 
             if let Some(hir) = result {
-
                 //Run typer again
                 //Typer::new(self.type_db);
-
 
                 match &queue_item.polymorphic_root {
                     PolymorphicRoot::Function(..) => {
@@ -210,7 +200,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                                     resulting_name: *resulting_name,
                                 });
                             }
-                            HIRRoot::StructDeclaration {..} => {},
+                            HIRRoot::StructDeclaration { .. } => {}
                             _ => {
                                 panic!("Returned non-struct when struct was expected")
                             }
@@ -265,10 +255,22 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         Ok(())
     }
 
-    pub fn get_result(mut self) -> (Vec<HIRRoot>, Vec<MonomorphizedStruct>, DeterministicMap<InternedString, HIRRoot>, DeterministicMap<InternedString, Vec<HIRRoot>>) {
-        self.result.sort_by(|a, b| a.1.cmp(&b.1));
+    pub fn get_result(
+        mut self,
+    ) -> (
+        Vec<HIRRoot>,
+        Vec<MonomorphizedStruct>,
+        DeterministicMap<InternedString, HIRRoot>,
+        DeterministicMap<InternedString, Vec<HIRRoot>>,
+    ) {
+        self.result.sort_by_key(|a| a.1);
         let mono_hir = self.result.into_iter().map(|(hir, _)| hir).collect();
-        (mono_hir, self.monomorphized_structs, self.global_definitions, self.impl_definitions)
+        (
+            mono_hir,
+            self.monomorphized_structs,
+            self.global_definitions,
+            self.impl_definitions,
+        )
     }
 
     fn monomorphize(
@@ -279,7 +281,6 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
     ) -> Result<Option<HIRRoot>, ()> {
         match polymorphic_root {
             PolymorphicRoot::Function(polymorphic_root) => {
-
                 println!("Trying to find {polymorphic_root}");
 
                 let hir = self
@@ -440,12 +441,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                     };
 
                     let method = methods.iter_mut().find(|x| {
-                        if let HIRRoot::DeclareFunction {
-                            function_name,
-                            
-                            ..
-                        } = x
-                        {
+                        if let HIRRoot::DeclareFunction { function_name, .. } = x {
                             return *function_name == method_name;
                         }
                         false
@@ -457,7 +453,9 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                 }
 
                 let Some(method) = found_method else {
-                    log!("Method {struct_name}::{method_name} not found! Implement better error reporting");
+                    log!(
+                        "Method {struct_name}::{method_name} not found! Implement better error reporting"
+                    );
                     return Err(());
                 };
 
@@ -490,12 +488,7 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                 );
                 new_type_table.apply_function_wide_substitution(&substitution);
 
-                self.find_poly_instantiations_in_hir(
-
-                    body,
-                    original_index,
-                    &mut new_type_table,
-                )?;
+                self.find_poly_instantiations_in_hir(body, original_index, &mut new_type_table)?;
 
                 Ok(Some(HIRRoot::DeclareFunction {
                     function_name: *function_name,
@@ -510,7 +503,6 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                     type_table: new_type_table,
                     has_been_monomorphized: true,
                 }))
-
             }
         }
     }
@@ -521,106 +513,54 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         original_index: usize,
         type_table: &mut TypeTable,
     ) -> Result<(), ()> {
-
         for hir_node in body.iter_mut() {
             match hir_node {
                 HIR::Assign {
-                    path,
-                    expression,
-                    ..
+                    path, expression, ..
                 } => {
-                    self.find_poly_instantiations_in_exprs( path, original_index, type_table)?;
-                    self.find_poly_instantiations_in_exprs(
-
-                        expression,
-                        original_index,
-                        type_table,
-                    )?;
+                    self.find_poly_instantiations_in_exprs(path, original_index, type_table)?;
+                    self.find_poly_instantiations_in_exprs(expression, original_index, type_table)?;
                 }
-                HIR::Declare {
-                    expression,
-                    ..
-                } => {
-                    self.find_poly_instantiations_in_exprs(
-
-                        expression,
-                        original_index,
-                        type_table,
-                    )?;
+                HIR::Declare { expression, .. } => {
+                    self.find_poly_instantiations_in_exprs(expression, original_index, type_table)?;
                 }
-                HIR::SyntheticDeclare {
-                    expression,
-                    ..
-                } => {
-                    self.find_poly_instantiations_in_exprs(
-
-                        expression,
-                        original_index,
-                        type_table,
-                    )?;
+                HIR::SyntheticDeclare { expression, .. } => {
+                    self.find_poly_instantiations_in_exprs(expression, original_index, type_table)?;
                 }
                 HIR::FunctionCall(fcall, ..) => {
-
                     for arg in fcall.args.iter_mut() {
-                        self.find_poly_instantiations_in_exprs(
-
-                            arg,
-                            original_index,
-                            type_table,
-                        )?;
+                        self.find_poly_instantiations_in_exprs(arg, original_index, type_table)?;
                     }
 
                     self.monomorphize_fcall(fcall, original_index, type_table)?;
                 }
                 HIR::MethodCall(mcall, ..) => {
                     self.find_poly_instantiations_in_exprs(
-
                         &mut mcall.object,
                         original_index,
                         type_table,
                     )?;
                     for arg in mcall.args.iter_mut() {
-                        self.find_poly_instantiations_in_exprs(
-
-                            arg,
-                            original_index,
-                            type_table,
-                        )?;
+                        self.find_poly_instantiations_in_exprs(arg, original_index, type_table)?;
                     }
                     self.monomorphize_mcall(mcall, original_index, type_table)?;
                 }
                 HIR::If(condition_expr, true_branch, false_branch, ..) => {
                     self.find_poly_instantiations_in_exprs(
-
                         condition_expr,
                         original_index,
                         type_table,
                     )?;
 
-                    self.find_poly_instantiations_in_hir(
-
-                        true_branch,
-                        original_index,
-                        type_table,
-                    )?;
-                    self.find_poly_instantiations_in_hir(
-
-                        false_branch,
-                        original_index,
-                        type_table,
-                    )?;
+                    self.find_poly_instantiations_in_hir(true_branch, original_index, type_table)?;
+                    self.find_poly_instantiations_in_hir(false_branch, original_index, type_table)?;
                 }
                 HIR::While(condition, body, ..) => {
-                    self.find_poly_instantiations_in_exprs(
-
-                        condition,
-                        original_index,
-                        type_table,
-                    )?;
+                    self.find_poly_instantiations_in_exprs(condition, original_index, type_table)?;
                     self.find_poly_instantiations_in_hir(body, original_index, type_table)?;
                 }
                 HIR::Return(expr, ..) => {
-                    self.find_poly_instantiations_in_exprs( expr, original_index, type_table)?;
+                    self.find_poly_instantiations_in_exprs(expr, original_index, type_table)?;
                 }
                 HIR::EmptyReturn(..) => {}
             }
@@ -739,19 +679,12 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
         type_table: &TypeTable,
     ) -> Result<(), CompilerError> {
         match expr {
-            HIRExpr::Cast(expr,..) => self
-                .find_poly_instantiations_in_exprs(expr, original_index, type_table)?,
+            HIRExpr::Cast(expr, ..) => {
+                self.find_poly_instantiations_in_exprs(expr, original_index, type_table)?
+            }
             HIRExpr::BinaryOperation(lhs, _op, rhs, ..) => {
-                self.find_poly_instantiations_in_exprs(
-                    lhs,
-                    original_index,
-                    type_table,
-                )?;
-                self.find_poly_instantiations_in_exprs(
-                    rhs,
-                    original_index,
-                    type_table,
-                )?;
+                self.find_poly_instantiations_in_exprs(lhs, original_index, type_table)?;
+                self.find_poly_instantiations_in_exprs(rhs, original_index, type_table)?;
             }
             HIRExpr::MethodCall(mcall, ..) => {
                 self.find_poly_instantiations_in_exprs(
@@ -760,68 +693,61 @@ impl<'compiler_state> Monomorphizer<'compiler_state> {
                     type_table,
                 )?;
                 for arg in mcall.args.iter_mut() {
-                    self.find_poly_instantiations_in_exprs(
-                        arg,
-                        original_index,
-                        type_table,
-                    )?;
+                    self.find_poly_instantiations_in_exprs(arg, original_index, type_table)?;
                 }
                 self.monomorphize_mcall(mcall, original_index, type_table)?;
             }
             HIRExpr::FunctionCall(call, ..) => {
                 self.monomorphize_fcall(call, original_index, type_table)?;
             }
-            HIRExpr::StructInstantiate(name, hir_type_args, ..) => {
-                if !hir_type_args.is_empty() {
-                    self.enqueue(MonomorphizationQueueItem {
-                        polymorphic_root: PolymorphicRoot::Struct(*name),
-                        positional_type_arguments: hir_type_args
-                            .iter()
-                            .map(|x| type_table[x.resolved_type].mono.clone())
-                            .collect::<Vec<_>>(),
-                        original_index,
-                        secondary_original_index: 0,
-                    });
-                }
+            HIRExpr::StructInstantiate(name, hir_type_args, ..) if !hir_type_args.is_empty() => {
+                self.enqueue(MonomorphizationQueueItem {
+                    polymorphic_root: PolymorphicRoot::Struct(*name),
+                    positional_type_arguments: hir_type_args
+                        .iter()
+                        .map(|x| type_table[x.resolved_type].mono.clone())
+                        .collect::<Vec<_>>(),
+                    original_index,
+                    secondary_original_index: 0,
+                });
             }
             HIRExpr::Deref(derrefed_expr, ..) => {
-                self.find_poly_instantiations_in_exprs(
-                    derrefed_expr,
-                    original_index,
-                    type_table,
-                )?
+                self.find_poly_instantiations_in_exprs(derrefed_expr, original_index, type_table)?
             }
             HIRExpr::Ref(derrefed_expr, ..) => {
-                self.find_poly_instantiations_in_exprs(
-                    derrefed_expr,
-                    original_index,
-                    type_table,
-                )?
+                self.find_poly_instantiations_in_exprs(derrefed_expr, original_index, type_table)?
             }
             HIRExpr::UnaryExpression(_op, expr, ..) => {
-                self.find_poly_instantiations_in_exprs(
-                    expr,
-                    original_index,
-                    type_table,
-                )?;
+                self.find_poly_instantiations_in_exprs(expr, original_index, type_table)?;
             }
             HIRExpr::MemberAccess(obj, ..) => {
-                self.find_poly_instantiations_in_exprs(
-
-                    obj,
-                    original_index,
-                    type_table,
-                )?;
+                self.find_poly_instantiations_in_exprs(obj, original_index, type_table)?;
             }
-            HIRExpr::Array(items, ..) => {
+            HIRExpr::Array(items, .., ty) => {
                 for item in items {
-                    self.find_poly_instantiations_in_exprs(
-
-                        item,
-                        original_index,
-                        type_table,
-                    )?;
+                    self.find_poly_instantiations_in_exprs(item, original_index, type_table)?;
                 }
+                let type_data = &type_table[ty];
+                match &type_data.mono {
+                    MonoType::Variable(_) => {
+                        panic!("Shouldn't get a variable here")
+                    }
+                    MonoType::Skolem(_) => {
+                        panic!("Shouldn't get a skolem here")
+                    }
+                    MonoType::Application(_array, tyargs) => {
+                        self.enqueue(MonomorphizationQueueItem {
+                            polymorphic_root: PolymorphicRoot::Struct("array".into()),
+                            positional_type_arguments: tyargs.clone(),
+                            original_index,
+                            secondary_original_index: 0,
+                        });
+                    }
+                }
+
+
+
+                //register the array type for monomorphization
             }
 
             _ => {}

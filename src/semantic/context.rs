@@ -1,10 +1,9 @@
 use core::panic;
 use std::fs;
 
-
 use crate::ast::lexer::{TokenSpanIndex, TokenTable};
 use crate::ast::parser::AST;
-use crate::ast::parser::{print_errors, AstSpan, Parser};
+use crate::ast::parser::{AstSpan, Parser, print_errors};
 use crate::ast::{lexer, parser};
 
 #[derive(Eq, PartialEq, Hash, Debug, Copy, Clone)]
@@ -95,6 +94,8 @@ impl Source {
         self.load_file("./stdlib/llvm_intrinsics.dk");
         self.load_file("./stdlib/asserts.dk");
         self.load_file("./stdlib/list.dk");
+        self.load_file("./stdlib/range.dk");
+        self.load_file("./stdlib/array.dk");
         true
     }
 }

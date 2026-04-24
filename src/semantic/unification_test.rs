@@ -1,10 +1,7 @@
 #[cfg(test)]
-use crate::{
-    semantic::{ typer::Typer},
-    types::{ type_constructor_db::TypeConstructorDatabase},
-};
-#[cfg(test)]
 use super::hir::{MonoType, NodeIndex};
+#[cfg(test)]
+use crate::{semantic::typer::Typer, types::type_constructor_db::TypeConstructorDatabase};
 
 #[cfg(test)]
 use super::hir::TypeVariable;

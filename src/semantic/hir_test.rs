@@ -2,12 +2,12 @@
 use crate::semantic::{hir_printer::HIRPrinter, monomorph::MonomorphizedStruct};
 
 #[cfg(test)]
+use super::context::test_utils;
+#[cfg(test)]
 use crate::{
     semantic::{hir::MetaTable, typer::Typer},
     types::{diagnostics::TypeErrorPrinter, type_constructor_db::TypeConstructorDatabase},
 };
-#[cfg(test)]
-use super::context::test_utils;
 
 #[cfg(test)]
 use super::hir::ast_globals_to_hir;
@@ -84,8 +84,6 @@ fn setup_mono(
     Result<(), ()>,
     TypeErrors,
 ) {
-    
-
     let mut type_db = TypeConstructorDatabase::new();
     let mut meta_table = MetaTable::new();
     let original_src = test_utils::parse_no_stdlib(src);
@@ -93,9 +91,7 @@ fn setup_mono(
     let parsed = ast_globals_to_hir(&original_src.file_table[0].ast, &type_db, &mut meta_table);
 
     //Run type check + monomorphization
-    let (compiler_errors, new_hir, tc_result, ..) =
-        run_type_checker(&mut type_db, parsed, true);
-
+    let (compiler_errors, new_hir, tc_result, ..) = run_type_checker(&mut type_db, parsed, true);
 
     let hir_string = {
         let printer = HIRPrinter::new(true, &type_db);
@@ -150,7 +146,6 @@ fn run_type_checker(
     mono.run(&parsed).unwrap();
     let (mut new_parsed, monomorphized_structs, _, _) = mono.get_result();
 
-
     let replacements = uniformizer::uniformize(type_db, &mut new_parsed, &monomorphized_structs);
 
     let mut final_typer = Typer::new(type_db);
@@ -161,11 +156,11 @@ fn run_type_checker(
     //uniformize again - typer will redo some types
     uniformizer::uniformize(type_db, &mut new_parsed, &monomorphized_structs);
 
-     (
-         full_compiler_errors,
-         new_parsed,
-         tc_result_2,
-         monomorphized_structs,
+    (
+        full_compiler_errors,
+        new_parsed,
+        tc_result_2,
+        monomorphized_structs,
     )
 }
 
@@ -1050,7 +1045,7 @@ struct SomeStruct:
 }
 
 #[test]
-fn monomprthization_test_simple() {
+fn monomorphization_test_simple() {
     let (.., result, typing_result, errors) = setup_mono(
         "
 def foo<T>(t: T) -> i32:
@@ -1321,7 +1316,6 @@ def main():
     );
     println!("{result}");
 
-
     //ignorable error
     typing_result.expect("Compiler should be forgiving skolem mismatches for now");
     assert_eq!(errors.len(), 0);
@@ -1533,7 +1527,6 @@ impl List[i32]:
     assert_eq!(expected.trim(), result.trim());
 }
 
-
 #[test]
 fn list_test_with_impl_simplified() {
     let (.., result, typing_result, errors) = setup(
@@ -1567,10 +1560,8 @@ def main() -> Void (return inferred: Void):
     x : i32 = {{box: Box<i32>}.get(): i32} [synth]
 ";
 
-
     assert_eq!(expected.trim(), result.trim());
 }
-
 
 #[test]
 fn index_ptr_test() {
@@ -1805,7 +1796,6 @@ def main() -> Void (return inferred: Void):
     pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
 }
 
-
 #[test]
 fn memalloc_test() {
     let (.., result, _, errors) = setup_mono(
@@ -1830,7 +1820,6 @@ def main():
 ",
     );
 
-
     println!("{result}");
 
     assert_eq!(errors.len(), 0);
@@ -1854,7 +1843,6 @@ intrinsic def ptr_cast[u8,i32](p: ptr<T> (inferred: ptr<u8>)) -> ptr<U> (return 
     pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
 }
 
-
 #[test]
 fn struct_with_another_struct_field() {
     let (.., result, _, errors) = setup_mono(
@@ -1870,7 +1858,6 @@ def main():
     bar.foo = Foo()
 ",
     );
-
 
     println!("{result}");
 
@@ -1891,8 +1878,6 @@ def main() -> Void (return inferred: Void):
     pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
 }
 
-
-
 #[test]
 fn coercion_on_binary_expr_test() {
     let (.., result, _, errors) = setup_mono(
@@ -1903,7 +1888,6 @@ def main():
         x = 0
 ",
     );
-
 
     println!("{result}");
 
@@ -1962,3 +1946,126 @@ impl B<U>:
     pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
 }
 
+#[test]
+fn casting_to_generic_type() {
+    let (.., result, _, errors) = setup(
+        "
+def cast_test<T>():
+    a = 11 as T
+",
+    );
+
+    let expected = "
+def cast_test<T>() -> Void (return inferred: Void):
+    a : #T = {{11: i32} as #T: #T} [synth]
+";
+    println!("{result}");
+    assert_eq!(errors.len(), 0);
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn casting_to_non_generic_type() {
+    let (.., result, _, errors) = setup(
+        "
+def main():
+    a = 11 as u64
+",
+    );
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    a : u64 = {{11: i32} as u64: u64} [synth]
+";
+    println!("{result}");
+    assert_eq!(errors.len(), 0);
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn autoinfer_generics() {
+    let (.., result, _, errors) = setup(
+        "
+struct A<T>:
+    a: T
+    b: T
+
+def make_a<T>(a: T, b: T) -> A<T>:
+    sa = A<T>()
+    sa.a = a
+    sa.b = b
+    return sa
+
+def main():
+    a = 2 as i32
+    b = 9
+    r = make_a(a, b)
+",
+    );
+
+    let expected = "
+struct A<T>:
+    a: #T
+    b: #T
+def make_a<T>(a: T (inferred: #T), b: T (inferred: #T)) -> A<T> (return inferred: A<#T>):
+    sa : A<T> = {A<T>(): A<T>} [synth]
+    {{sa: A<T>}.a: T} = {a: #T}
+    {{sa: A<T>}.b: T} = {b: #T}
+    return {sa: A<T>}
+def main() -> Void (return inferred: Void):
+    a : i32 = {{2: i32} as i32: i32} [synth]
+    b : i32 = {9: i32} [synth]
+    r : A<i32> = {{make_a: (i32, i32) -> A<i32>}<i32>({a: i32}, {b: i32}): A<i32>} [synth]
+";
+    println!("{result}");
+    assert_eq!(errors.len(), 0);
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn for_loops() {
+    let (.., result, _, errors) = setup_mono(
+        "
+def main():
+    x = [1,2,3]
+    for y in x:
+        *y = *y
+",
+    );
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    x : array<i32> = {[{1: i32}, {2: i32}, {3: i32}]: array<i32>} [synth]
+    __iterator__<0> : ArrayIterator<i32> = {{x: array<i32>}.__iterator__(): ArrayIterator<i32>} [synth]
+    while {{__iterator__<0>: ArrayIterator<i32>}.has_next(): bool}:
+        y : ptr<i32> = {{__iterator__<0>: ArrayIterator<i32>}.next(): ptr<i32>} [synth]
+        {*{y: ptr<i32>}: i32} = {*{y: ptr<i32>}: i32}
+
+";
+    println!("{result}");
+    assert_eq!(errors.len(), 0);
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}
+
+#[test]
+fn for_loops_inlined_arrays() {
+    let (.., result, _, errors) = setup_mono(
+        "
+def main():
+    for y in [1,2,3]:
+        *y = *y
+",
+    );
+
+    let expected = "
+def main() -> Void (return inferred: Void):
+    __iterator__<0> : ArrayIterator<i32> = {{[{1: i32}, {2: i32}, {3: i32}]: array<i32>}.__iterator__(): ArrayIterator<i32>} [synth]
+    while {{__iterator__<0>: ArrayIterator<i32>}.has_next(): bool}:
+        y : ptr<i32> = {{__iterator__<0>: ArrayIterator<i32>}.next(): ptr<i32>} [synth]
+        {*{y: ptr<i32>}: i32} = {*{y: ptr<i32>}: i32}
+
+";
+    println!("{result}");
+    assert_eq!(errors.len(), 0);
+    pretty_assertions::assert_str_eq!(expected.trim(), result.trim());
+}

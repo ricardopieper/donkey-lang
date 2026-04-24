@@ -1,0 +1,31 @@
+struct array<T>:
+    length: u64
+    base: ptr<T>
+
+impl array<T>:
+
+    def len(self) -> u64:
+        return (*self).length
+
+    def __index_ptr__(self, index: u64) -> ptr<T>:
+        return &(*self).base[index]
+
+    def __iterator__(self) -> ArrayIterator<T>:
+        iterator = ArrayIterator<T>()
+        iterator.array = self
+        iterator.current = 0
+        return iterator
+
+struct ArrayIterator<T>:
+    array: ptr<array<T>>
+    current: u64
+
+impl ArrayIterator<T>:
+
+    def __has_next__(self) -> bool:
+        return (*self).current < (*(*self).array).length
+
+    def __next__(self) -> T:
+        previous = (*self).current
+        (*self).current = (*self).current + 1
+        return (*(*self).array).base[previous]

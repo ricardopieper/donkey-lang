@@ -24,7 +24,7 @@ impl RootElementType {
 
     pub fn diag_name(&self) -> String {
         match self {
-           // RootElementType::Struct(s) => format!("In struct {}", s),
+            // RootElementType::Struct(s) => format!("In struct {}", s),
             RootElementType::Function(s) => format!("In function {}", s),
             //RootElementType::Impl(s) => format!("In impl {}", s),
             RootElementType::ImplMethod(i, m) => format!("In method {m} of impl {i}"),
@@ -39,22 +39,6 @@ use std::fmt::Display;
 
 use super::type_constructor_db::{TypeConstructorDatabase, TypeConstructorId};
 
-pub trait ErrorReporter {
-    fn report<T: CompilerErrorData>(
-        &self,
-        error: T,
-        span: &impl Spanned,
-        compiler_code_location: &'static str,
-    ) -> CompilerErrorContext<T>;
-}
-
-#[macro_export]
-macro_rules! report {
-    ($self:ident, $span:expr, $error:expr) => {
-        $self.report($error, $span, loc!())
-    };
-}
-
 pub struct CompilerErrorContext<T>
 where
     T: CompilerErrorData,
@@ -66,31 +50,6 @@ where
 }
 
 pub trait CompilerErrorData {}
-
-pub trait ContextualizedCompilerError<T: CompilerErrorData> {
-    fn at(
-        self,
-        on_element: RootElementType,
-        location: NodeIndex,
-        compiler_code_location: &'static str,
-    ) -> CompilerErrorContext<T>;
-}
-
-impl<T: Sized + CompilerErrorData> ContextualizedCompilerError<T> for T {
-    fn at(
-        self,
-        on_element: RootElementType,
-        location: NodeIndex,
-        compiler_code_location: &'static str,
-    ) -> CompilerErrorContext<T> {
-        CompilerErrorContext {
-            error: self,
-            on_element,
-            location,
-            compiler_code_location,
-        }
-    }
-}
 
 pub trait CompilerErrorDisplay {
     fn fmt_err(
@@ -161,7 +120,9 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<AssignContext>> 
         let var_type_str = self.error.expected.to_string(type_db);
         let expr_type_str = self.error.actual.to_string(type_db);
 
-        write!(f, "Assigned type mismatch: {on_element}, assignment to variable {var}: variable has type {var_type_str} but got assigned a value of type {expr_type_str}",
+        write!(
+            f,
+            "Assigned type mismatch: {on_element}, assignment to variable {var}: variable has type {var_type_str} but got assigned a value of type {expr_type_str}",
             on_element = self.on_element.diag_name(),
             var = self.error.context.assign_lvalue_expr,
         )
@@ -178,7 +139,9 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<ReturnTypeContex
     ) -> std::fmt::Result {
         let passed_name = self.error.actual.to_string(type_db);
         let expected_name = self.error.expected.to_string(type_db);
-        write!(f, "Return type mismatch: {on_element} returns {return_type_name} but expression returns {expr_return_type_name}",
+        write!(
+            f,
+            "Return type mismatch: {on_element} returns {return_type_name} but expression returns {expr_return_type_name}",
             on_element = self.on_element.diag_name(),
             return_type_name = expected_name,
             expr_return_type_name = passed_name,
@@ -219,14 +182,18 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<FunctionCallCont
         let expected_name = self.error.expected.to_string(type_db);
         match &self.error.context.called_function_name {
             FunctionName::Function(function_name) => {
-                write!(f, "Function argument type mismatch: {on_element}, call to function {function_called} parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
+                write!(
+                    f,
+                    "Function argument type mismatch: {on_element}, call to function {function_called} parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
                     on_element = self.on_element.diag_name(),
                     function_called = *function_name,
                     position = self.error.context.argument_position
                 )
             }
             FunctionName::IndexAccess => {
-                write!(f, "Function argument type mismatch: {on_element}, on index operator, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
+                write!(
+                    f,
+                    "Function argument type mismatch: {on_element}, on index operator, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
                     on_element = self.on_element.diag_name(),
                     position = self.error.context.argument_position
                 )
@@ -234,13 +201,14 @@ impl CompilerErrorDisplay for CompilerErrorContext<TypeMismatch<FunctionCallCont
             FunctionName::Method {
                 function_name,
                 type_name,
-            } =>
-                write!(f, "Function argument type mismatch: {on_element}, on call to method {method} of {type_name}, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
-                    on_element = self.on_element.diag_name(),
-                    position = self.error.context.argument_position,
-                    type_name = type_name,
-                    method = function_name
-                )
+            } => write!(
+                f,
+                "Function argument type mismatch: {on_element}, on call to method {method} of {type_name}, parameter on position {position} has incorrect type: Expected {expected_name} but passed {passed_name}",
+                on_element = self.on_element.diag_name(),
+                position = self.error.context.argument_position,
+                type_name = type_name,
+                method = function_name
+            ),
         }
     }
 }
@@ -260,7 +228,9 @@ impl CompilerErrorDisplay for CompilerErrorContext<FunctionCallArgumentCountMism
     ) -> std::fmt::Result {
         match &self.error.called_function_name {
             FunctionName::Function(call_name) => {
-                write!(f, "Argument count mismatch: {on_element}, call to function {function_called} expects {expected_args} arguments, but {passed_args} were passed",
+                write!(
+                    f,
+                    "Argument count mismatch: {on_element}, call to function {function_called} expects {expected_args} arguments, but {passed_args} were passed",
                     on_element = self.on_element.diag_name(),
                     function_called = *call_name,
                     expected_args = self.error.expected_count,
@@ -268,7 +238,9 @@ impl CompilerErrorDisplay for CompilerErrorContext<FunctionCallArgumentCountMism
                 )
             }
             FunctionName::IndexAccess => {
-                write!(f, "Argument count mismatch: {on_element}, index operator expects {expected_args} arguments, but {passed_args} were passed",
+                write!(
+                    f,
+                    "Argument count mismatch: {on_element}, index operator expects {expected_args} arguments, but {passed_args} were passed",
                     on_element = self.on_element.diag_name(),
                     expected_args = self.error.expected_count,
                     passed_args = self.error.passed_count,
@@ -278,7 +250,9 @@ impl CompilerErrorDisplay for CompilerErrorContext<FunctionCallArgumentCountMism
                 function_name,
                 type_name,
             } => {
-                write!(f, "Argument count mismatch: {on_element}, call to method {method} of {type_name} expects {expected_args} arguments, but {passed_args} were passed",
+                write!(
+                    f,
+                    "Argument count mismatch: {on_element}, call to method {method} of {type_name} expects {expected_args} arguments, but {passed_args} were passed",
                     on_element = self.on_element.diag_name(),
                     method = function_name,
                     type_name = type_name,

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use super::hir::{
-    FunctionCall, HIR, HIRExpr, HIRRoot, HIRTypedBoundName, LiteralHIRExpr, MethodCall, NodeIndex,
+    FunctionCall, HIR, HIRExpr, HIRRoot, LiteralHIRExpr, MethodCall, NodeIndex,
     TypeIndex, TypeTable,
 };
 use crate::ast::parser::SpannedOperator;
@@ -9,8 +9,7 @@ use crate::commons::float::FloatLiteral;
 use crate::interner::InternedString;
 
 use crate::types::diagnostics::{
-    CompilerErrorContext, DerefOnNonPointerError, RootElementType,
-    TypeErrors,
+    CompilerErrorContext, DerefOnNonPointerError, RootElementType, TypeErrors,
 };
 
 type CompilerError = ();
@@ -363,10 +362,8 @@ fn simplify_expression(expr: HIRExpr) -> (HIRExpr, bool) {
             )
         }
         HIRExpr::Array(items, location, ty) => {
-            let (items, simplified_items): (Vec<_>, Vec<_>) = items
-                .into_iter()
-                .map(simplify_expression)
-                .unzip();
+            let (items, simplified_items): (Vec<_>, Vec<_>) =
+                items.into_iter().map(simplify_expression).unzip();
             let simplified = simplified_items.iter().any(|simplified| *simplified);
             (HIRExpr::Array(items, location, ty), simplified)
         }
@@ -768,7 +765,7 @@ impl<'errors> MIRFunctionEmitter<'errors> {
                 //schedule groups
                 for ((group, (scope, block)), finish) in groups
                     .into_iter()
-                    .zip(groups_blocks.into_iter())
+                    .zip(groups_blocks)
                     .zip(default_finishes)
                 {
                     self.queue.push_back(CodegenJob {
@@ -1199,12 +1196,11 @@ pub fn hir_to_mir(
                             method_of,
                             ..
                         } => {
-
                             let mut mir_parameters = vec![];
                             if let Some(struct_type) = method_of {
                                 mir_parameters.push(MIRTypedBoundName {
                                     name: "self".into(),
-                                    type_instance: struct_type
+                                    type_instance: struct_type,
                                 });
                             }
                             parameters

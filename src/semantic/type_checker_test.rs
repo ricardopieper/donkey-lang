@@ -71,7 +71,6 @@ fn setup(
         let (mut monomorphized, mono_structs, _, _) = mono.get_result();
         let replacements = uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
 
-
         let mut final_typer = Typer::new(&mut type_db);
         final_typer.set_monomorphized_versions(replacements);
         let tc_result_2 = final_typer.assign_types(&mut monomorphized);
@@ -79,7 +78,6 @@ fn setup(
 
         //uniformize again - typer will redo some types
         uniformizer::uniformize(&mut type_db, &mut monomorphized, &mono_structs);
-
 
         parsed = monomorphized;
         (full_compiler_errors, tc_result_2)

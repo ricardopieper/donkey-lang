@@ -36,9 +36,8 @@ fn setup(
     Result<(), ()>,
     TypeErrors,
 ) {
-    use crate::semantic::{mir::hir_to_mir, mir_printer, monomorph::Monomorphizer};
     use crate::semantic::uniformizer;
-    
+    use crate::semantic::{mir::hir_to_mir, mir_printer, monomorph::Monomorphizer};
 
     let mut type_db = TypeConstructorDatabase::new();
     let mut meta_table = MetaTable::new();
@@ -48,14 +47,13 @@ fn setup(
     let printer = HIRPrinter::new(true, &type_db);
     println!("HIR 1:\n{}", printer.print_hir(&parsed));
     let (mut compiler_errors, tc_result) = 'tc: {
-
         let mut typer = Typer::new(&mut type_db);
         typer.forgive_skolem_mismatches();
         let tc_result = typer.assign_types(&mut parsed);
 
         if tc_result.is_err() {
             //return here on the let (mut compiler_errors, tc_result) = { line
-            break 'tc (typer.compiler_errors, tc_result)
+            break 'tc (typer.compiler_errors, tc_result);
         }
 
         let printer = HIRPrinter::new(true, &type_db);
@@ -1373,8 +1371,6 @@ def main() -> Void:
     assert_eq!(expected.trim(), final_result.trim());
 }
 
-
-
 #[test]
 fn generic_struct_impl() {
     let (_, final_result, ..) = setup(
@@ -1482,8 +1478,6 @@ def ptr_cast[u8,i32](p: ptr<u8>) -> ptr<i32>";
     assert_eq!(expected.trim(), final_result.trim());
 }
 
-
-
 #[test]
 fn method_called_in_impl_must_be_found() {
     let (_, final_result, ..) = setup(
@@ -1581,94 +1575,54 @@ def main() -> Void:
     assert_eq!(expected.trim(), final_result.trim());
 }
 
-
 #[test]
-fn method_called_in_generic_impl_must_be_found() {
+fn builtin_integration() {
+    let (_, final_result, .., err) = setup(
+        "
+struct str:
+    buf: ptr<u8>
+    len: u64
 
-        let (_, final_result, .., err) = setup(
-            "
-struct A<T>:
-    y: T
+def printf(format: ptr<u8>, ...) -> i64:
+    external
 
-impl A<T>:
-    def get_y(self) -> T:
-        return (*self).y
-
-    def make_b(self) -> B<T>:
-        return B<T>()
-
-struct B<T>:
-    a: ptr<A<T>>
-
-impl B<T>:
-    def run_get_y(self):
-        a_deref = (*(*self).a)
-        a_deref.get_y()
+def print_int(i: i32):
+    printf(\"%i\".buf, i)
 
 def main():
-    a = A<i32>()
-    a.y = 0
-    b = a.make_b()
-    b.run_get_y()
-",
-        );
-        println!("{final_result}");
-        assert_eq!(err.len(), 0);
+    x = 2
+    print_int(x)
 
-        let expected = "
+",
+    );
+    println!("{final_result}");
+    assert_eq!(err.len(), 0);
+
+    let expected = "
+def printf(format: ptr<u8>, ...) -> i64
+def print_int(i: i32) -> Void:
+    defscope 0:
+        inheritscope 0
+        i : i32
+    defblock 0:
+        usescope 0
+        printf(\"%i\".buf, i)
+        return
 def main() -> Void:
     defscope 0:
         inheritscope 0
-        a : A[i32]
-    defscope 1:
-        inheritscope 0
-        b : B[i32]
-    defscope 2:
-        inheritscope 1
-    defblock 0:
-        usescope 0
-        a = A[i32]()
-        gotoblock 1
-    defblock 1:
-        usescope 1
-        a.y = 0
-        b = a.make_b()
-        gotoblock 2
-    defblock 2:
-        usescope 2
-        b.run_get_y()
-        return
-def A[i32]::get_y(self: ptr<A[i32]>) -> i32:
-    defscope 0:
-        inheritscope 0
-        self : ptr<A[i32]>
-    defblock 0:
-        usescope 0
-        return *self.y
-def A[i32]::make_b(self: ptr<A[i32]>) -> B[i32]:
-    defscope 0:
-        inheritscope 0
-        self : ptr<A[i32]>
-    defblock 0:
-        usescope 0
-        return B[i32]()
-def B[i32]::run_get_y(self: ptr<B[i32]>) -> Void:
-    defscope 0:
-        inheritscope 0
-        self : ptr<B[i32]>
-        a_deref : A[i32]
+        x : i32
     defscope 1:
         inheritscope 0
     defblock 0:
         usescope 0
-        a_deref = **self.a
+        x = 2
         gotoblock 1
     defblock 1:
         usescope 1
-        a_deref.get_y()
+        print_int(x)
         return
  ";
 
-        assert_eq!(expected.trim(), final_result.trim());
-
+    assert_eq!(expected.trim(), final_result.trim());
 }

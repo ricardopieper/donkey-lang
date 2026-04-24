@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::{
     semantic::{
@@ -7,9 +7,6 @@ use crate::{
     },
     types::type_constructor_db::{TypeConstructorDatabase, TypeKind},
 };
-use crate::semantic::hir::PolyType;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::BuildHasherDefault;
 type DeterministicMap<K, V> = BTreeMap<K, V>;
 
 #[derive(Debug)]
@@ -86,12 +83,7 @@ pub fn uniformize(
 
         for root in hir.iter_mut() {
             match root {
-                HIRRoot::DeclareFunction {
-                    type_table,
-                    
-                    
-                    ..
-                } => {
+                HIRRoot::DeclareFunction { type_table, .. } => {
                     type_table.apply_function_wide_mono_substitution(&mono_to_find, &mono_target);
                 }
                 HIRRoot::StructDeclaration { type_table, .. } => {
@@ -99,7 +91,11 @@ pub fn uniformize(
                 }
                 HIRRoot::ImplDeclaration { methods, .. } => {
                     for method in methods {
-                        if let HIRRoot::DeclareFunction { type_table, method_of, .. } = method {
+                        if let HIRRoot::DeclareFunction {
+                            type_table,
+                            ..
+                        } = method
+                        {
                             /*if let Some(method_of) = method_of {
                                 type_table[method_of] = PolyType::mono(
                                     MonoType::Application(
@@ -108,10 +104,8 @@ pub fn uniformize(
                                     )
                                 )
                             }*/
-                            type_table.apply_function_wide_mono_substitution(
-                                &mono_to_find,
-                                &mono_target,
-                            );
+                            type_table
+                                .apply_function_wide_mono_substitution(&mono_to_find, &mono_target);
                         }
                     }
                 }

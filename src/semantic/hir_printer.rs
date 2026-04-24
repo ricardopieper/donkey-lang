@@ -105,9 +105,9 @@ impl<'type_db> HIRExprPrinter<'type_db> {
                 let struct_type_name = ty.print_name(type_table, self.type_db);
                 format!("{struct_type_name}()")
             }
-            HIRExpr::TypeName { type_variable, .. } => {
-                type_variable.print_name(type_table, self.type_db).to_string()
-            }
+            HIRExpr::TypeName { type_variable, .. } => type_variable
+                .print_name(type_table, self.type_db)
+                .to_string(),
             HIRExpr::SelfValue(..) => "self".into(),
         };
 
@@ -353,23 +353,20 @@ impl<'type_db> HIRPrinter<'type_db> {
                 type_table,
                 ..
             } => {
-
                 let type_params = if type_parameters.is_empty() {
                     "".to_string()
                 } else {
-                    format!("<{}>", type_parameters
-                        .iter()
-                        .map(|x| x.0.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "))
+                    format!(
+                        "<{}>",
+                        type_parameters
+                            .iter()
+                            .map(|x| x.0.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 };
 
-                let mut structdecl = format!(
-                    "{}struct {}{}:\n",
-                     indent,
-                     struct_name,
-                    type_params
-                );
+                let mut structdecl = format!("{}struct {}{}:\n", indent, struct_name, type_params);
                 let mut printed_fields = vec![];
 
                 for field in body {
@@ -393,22 +390,19 @@ impl<'type_db> HIRPrinter<'type_db> {
                 methods,
                 ..
             } => {
-
                 let type_params = if type_parameters.is_empty() {
                     "".to_string()
                 } else {
-                    format!("<{}>", type_parameters
-                        .iter()
-                        .map(|x| x.0.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "))
+                    format!(
+                        "<{}>",
+                        type_parameters
+                            .iter()
+                            .map(|x| x.0.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 };
-                let mut impldecl = format!(
-                    "{}impl {}{}:\n",
-                    indent,
-                    struct_name,
-                    type_params
-                );
+                let mut impldecl = format!("{}impl {}{}:\n", indent, struct_name, type_params);
                 let indent_block = format!("{indent}    ");
                 for method in methods {
                     impldecl.push_str(&self.print_hir_item(method, &indent_block));

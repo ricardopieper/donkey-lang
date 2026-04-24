@@ -521,6 +521,10 @@ impl<T> FromResidual<ParsingEvent<!>> for ParsingEvent<T> {
     }
 }
 
+impl<T> std::ops::Residual<T> for ParsingEvent<!> {
+    type TryType = ParsingEvent<T>;
+}
+
 impl<T> Try for ParsingEvent<T> {
     type Output = T;
 
@@ -1379,16 +1383,12 @@ impl<'tok> Parser<'tok> {
         let parsed_expr = self.parse_expr();
         match parsed_expr {
             Ok(result) => {
-                ParsingEvent::Success(
-                    AST::StandaloneExpr(result.resulting_expr).self_spanning(),
-                )
+                ParsingEvent::Success(AST::StandaloneExpr(result.resulting_expr).self_spanning())
             }
-            Err(e) => {
-                self.grammar_fail(ParsingErrorDetails::ContextForError(
-                    "Expected expression".into(),
-                    e.into(),
-                ))
-            }
+            Err(e) => self.grammar_fail(ParsingErrorDetails::ContextForError(
+                "Expected expression".into(),
+                e.into(),
+            )),
         }
     }
 
@@ -2294,7 +2294,8 @@ mod tests {
         }
     }
 
-    use std::{assert_matches::assert_matches, ops::Deref};
+    use std::assert_matches;
+    use std::ops::Deref;
 
     use crate::{
         ast::ast_printer::{print_ast, print_fully_parenthesized_ast},
@@ -3529,5 +3530,25 @@ read<List<T>>(list_ptr)
     #[test]
     fn cast_binary_expr_on_both_sides() {
         parse_and_compare_parenthesized("1 as f32 + 1 as f32", "((1 as f32) + (1 as f32))");
+    }
+
+    #[test]
+    fn for_statement() {
+        parse_and_print_back_to_original(
+            "
+for x in y:
+    print(x)
+        ",
+        );
+    }
+
+    #[test]
+    fn for_statement_with_mcall() {
+        parse_and_print_back_to_original(
+            "
+for x in obj.some_call(y):
+    print(x)
+        ",
+        );
     }
 }

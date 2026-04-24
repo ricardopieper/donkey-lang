@@ -1,0 +1,21 @@
+struct NumericIterator<T>:
+    until: T
+    current: T
+
+impl NumericIterator<T>:
+
+    def __has_next__(self) -> bool:
+        return (*self).current < (*self).until
+
+    def __next__(self) -> T:
+        previous = (*self).current
+        (*self).current = (*self).current + 1
+        return previous
+
+def range<T>(from: T, to: T) -> NumericIterator<T>:
+    ni = NumericIterator<T>()
+    ni.current = from
+    ni.until = to
+    return ni
+
+

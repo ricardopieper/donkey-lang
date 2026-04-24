@@ -1,12 +1,11 @@
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Write;
-use std::hash::BuildHasherDefault;
 use std::ops::Deref;
 use std::ops::Index;
 use std::ops::IndexMut;
 
+use crate::DeterministicMap;
 use crate::ast::lexer::Operator;
 use crate::ast::parser::ASTIfStatement;
 use crate::ast::parser::AstSpan;
@@ -18,7 +17,6 @@ use crate::ast::parser::StringSpan;
 use crate::ast::parser::TypeBoundName;
 use crate::ast::parser::{AST, ASTType, Expr};
 use crate::commons::float::FloatLiteral;
-use crate::DeterministicMap;
 use crate::interner::InternedString;
 use crate::types::type_constructor_db::TypeConstructor;
 use crate::types::type_constructor_db::TypeConstructorDatabase;
@@ -151,9 +149,7 @@ impl HIRType {
         let bound_generics = self.bound_generics(generics_in_context);
 
         if bound_generics.is_empty() {
-            return PolyType::mono(
-                self.make_mono(type_db, generics_in_context, use_skolems),
-            );
+            return PolyType::mono(self.make_mono(type_db, generics_in_context, use_skolems));
         }
 
         match self {
@@ -178,10 +174,9 @@ impl HIRType {
                 }
             }
             HIRType::Generic(type_name, type_args) => {
-                let Some(ty) = type_db
-                    .find_by_name(*type_name) else {
-                        panic!("Could not find type {type_name} (generic)")
-                    };
+                let Some(ty) = type_db.find_by_name(*type_name) else {
+                    panic!("Could not find type {type_name} (generic)")
+                };
                 let generics: Vec<MonoType> = type_args
                     .iter()
                     .map(|x| x.make_mono(type_db, generics_in_context, use_skolems))
@@ -463,7 +458,6 @@ pub enum MonoType {
 }
 
 impl MonoType {
-
     pub fn get_ctor_id(&self) -> TypeConstructorId {
         match self {
             MonoType::Application(id, _) => *id,
@@ -488,9 +482,7 @@ impl MonoType {
                 }
                 any
             }
-            _ => {
-                false
-            }
+            _ => false,
         }
     }
 
@@ -759,9 +751,10 @@ impl TypeTable {
             match entry.mono {
                 MonoType::Variable(tv) => {
                     if entry.quantifiers.is_empty()
-                        && let Some(sub) = substitution.get(&tv) {
-                            entry.mono = sub.clone();
-                        }
+                        && let Some(sub) = substitution.get(&tv)
+                    {
+                        entry.mono = sub.clone();
+                    }
                 }
                 MonoType::Application(_, ref mut args) => {
                     for arg in args {
@@ -924,7 +917,7 @@ fn expr_to_hir(
         Expr::StringValue(s) => HIRExpr::Literal(
             LiteralHIRExpr::String(s.0),
             meta.next(s),
-            ty.next_with(load_stdlib_builtin(type_db, "str").expect("str type not found")),
+            ty.next(),
         ),
         Expr::CharValue(c, span) => HIRExpr::Literal(
             LiteralHIRExpr::Char(*c),
@@ -1092,586 +1085,13 @@ fn expr_to_hir(
             ));
             HIRExpr::Cast(casted_expr, typ, meta.next(span), ty.next())
         }
-        Expr::SelfValue(span) => HIRExpr::SelfValue(meta.next(span), ty.get_self_type().expect("Self type should have been generated previously")),
+        Expr::SelfValue(span) => HIRExpr::SelfValue(
+            meta.next(span),
+            ty.get_self_type()
+                .expect("Self type should have been generated previously"),
+        ),
     }
 }
-
-fn ast_to_hir(
-    ast: &SpanAST,
-    accum: &mut Vec<HIR>,
-    ty: &mut TypeTable,
-    meta: &mut MetaTable,
-    type_db: &TypeConstructorDatabase,
-    decls: &mut DeterministicMap<InternedString, TypeIndex>,
-    generics: &[TypeParameter],
-) {
-    let ast = &ast.ast;
-    match ast {
-        AST::Declare { var, expression } => {
-            //expr: we have to decompose the expression into HIR declarations
-            //because the assigned/declared expression has to be sufficiently simple
-            //to decrease complexity for the other compiler phases (typechecking, type inference)
-
-            //maybe a way to do it is by calling reduce_expr_to_hir_declarations, and the function
-            //itself returns a HIRExpr. It will also add to the HIR any declarations needed
-            //for the decomposition.
-            let result_expr =
-                expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
-
-            let typedef: HIRType = (&var.name_type).into();
-            //let poly = typedef.make_poly(type_db, generics, false);
-            let ty_var = ty.next();
-            decls.insert(var.name.0, ty_var);
-            let decl_hir = HIR::Declare {
-                var: var.name.0,
-                typedef: HIRTypeWithTypeVariable {
-                    type_variable: ty_var,
-                    hir_type: typedef,
-                },
-                expression: result_expr,
-                location: meta.next(&expression.span),
-            };
-
-            accum.push(decl_hir);
-        }
-        AST::Assign { path, expression } => {
-            let path_expr = expr_to_hir(type_db, &path.expr, true, ty, meta, decls, generics);
-            let result_expr =
-                expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
-            if let HIRExpr::Variable(name, meta, _) = &path_expr {
-                if decls.get(name).is_some() {
-                    let decl_hir = HIR::Assign {
-                        path: path_expr.clone(),
-                        expression: result_expr,
-                        location: *meta,
-                    };
-                    accum.push(decl_hir);
-                } else {
-                    let ty_var = result_expr.get_type();
-                    decls.insert(*name, ty_var);
-                    let decl_hir = HIR::SyntheticDeclare {
-                        var: *name,
-                        typedef: ty_var,
-                        expression: result_expr,
-                        location: *meta,
-                    };
-                    accum.push(decl_hir);
-                }
-            } else {
-                let decl_hir = HIR::Assign {
-                    path: path_expr.clone(),
-                    expression: result_expr,
-                    location: path_expr.get_node_index(),
-                };
-                accum.push(decl_hir);
-            }
-        }
-        AST::Return(ast, expr) => match expr {
-            None => {
-                accum.push(HIR::EmptyReturn(meta.next(ast)));
-            }
-            Some(e) => {
-                let result_expr = expr_to_hir(type_db, &e.expr, false, ty, meta, decls, generics);
-                accum.push(HIR::Return(result_expr, meta.next(ast)));
-            }
-        },
-        AST::StandaloneExpr(expr) => {
-            let Expr::FunctionCall(..) = expr.deref() else {
-                panic!("Can only lower function call standalone expr: {expr:#?}");
-            };
-
-            let result_expr: HIRExpr = expr_to_hir(type_db, expr, false, ty, meta, decls, generics);
-
-            match result_expr {
-                HIRExpr::MethodCall(mcall, meta) => {
-                    accum.push(HIR::MethodCall(mcall, meta));
-                }
-                HIRExpr::FunctionCall(fcall, meta) => {
-                    accum.push(HIR::FunctionCall(*fcall, meta));
-                }
-                _ => {
-                    panic!("Lowering of function call returned invalid result: {result_expr:?}");
-                }
-            }
-        }
-        AST::IfStatement {
-            true_branch,
-            elifs,
-            final_else,
-        } => {
-            ast_if_to_hir(
-                type_db,
-                true_branch,
-                accum,
-                elifs,
-                final_else,
-                ty,
-                meta,
-                decls,
-                generics,
-            );
-        }
-        AST::WhileStatement { expression, body } => {
-            ast_while_to_hir(
-                type_db,
-                &expression.expr,
-                accum,
-                body,
-                ty,
-                meta,
-                decls,
-                generics,
-            );
-        }
-        AST::Intrinsic(_) => panic!("Cannot use intrinsic keyword"),
-
-        ast => {
-            todo!("Not implemented HIR for {ast:?}")
-        },
-    }
-}
-
-fn ast_decl_function_to_hir<'source>(
-    type_db: &TypeConstructorDatabase,
-    body: &'source [SpanAST],
-    function_name: InternedString,
-    type_parameters: &'source [StringSpan],
-    parameters: &'source [TypeBoundName],
-    return_type: &Option<ASTType>,
-    is_varargs: bool,
-    accum: &mut Vec<HIRRoot>,
-    decls: &mut DeterministicMap<InternedString, TypeIndex>,
-    meta: &mut MetaTable,
-    is_method: bool,
-) {
-    let mut ty = TypeTable::new();
-    let self_ty = if is_method {
-        Some(ty.make_self())
-    } else {
-        None
-    };
-    let type_parameters: Vec<_> = type_parameters.iter().map(|x| TypeParameter(x.0)).collect();
-    let parameters = create_parameters(parameters, &mut ty, decls);
-    let hir_return = match return_type {
-        Some(x) => x.into(),
-        None => HIRType::Simple(InternedString::new("Void")),
-    };
-
-    let return_ty = ty.next_param_or_return(); /*(PolyType::mono(hir_return.make_mono(
-    type_db,
-    &type_parameters,
-    true,
-    )));*/
-
-    let return_type = HIRTypeWithTypeVariable {
-        hir_type: hir_return,
-        type_variable: return_ty,
-    };
-
-    if body.len() == 1 {
-        if let AST::Intrinsic(_) = &body[0].ast {
-            accum.push(HIRRoot::DeclareFunction {
-                function_name,
-                type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
-                parameters,
-                body: vec![],
-                is_intrinsic: true,
-                is_external: false,
-                is_varargs,
-                return_type,
-                method_of: self_ty,
-                type_table: ty,
-                has_been_monomorphized: false,
-            });
-            return;
-        }
-
-        if let AST::External(_) = &body[0].ast {
-            accum.push(HIRRoot::DeclareFunction {
-                function_name,
-                type_parameters,
-                parameters,
-                body: vec![],
-                is_intrinsic: false,
-                is_external: true,
-                is_varargs,
-                return_type,
-                method_of: self_ty,
-                type_table: ty,
-                has_been_monomorphized: false,
-            });
-            return;
-        }
-    }
-
-    let mut function_body = vec![];
-    for node in body {
-        ast_to_hir(
-            node,
-            &mut function_body,
-            &mut ty,
-            meta,
-            type_db,
-            decls,
-            &type_parameters,
-        );
-    }
-
-    let decl_hir: HIRRoot = HIRRoot::DeclareFunction {
-        function_name,
-        parameters,
-        type_parameters,
-        body: function_body,
-        is_intrinsic: false,
-        is_external: false,
-        is_varargs,
-        return_type,
-        method_of: self_ty,
-        type_table: ty,
-        has_been_monomorphized: false,
-    };
-    accum.push(decl_hir);
-}
-
-fn create_parameters(
-    parameters: &[TypeBoundName],
-    ty: &mut TypeTable,
-    decls: &mut DeterministicMap<InternedString, TypeIndex>
-) -> Vec<HIRTypedBoundName> {
-    parameters
-        .iter()
-        .map(|it| create_function_param(it, ty, decls))
-        .collect()
-}
-
-fn create_function_param(
-    param: &TypeBoundName,
-    ty: &mut TypeTable,
-    decls: &mut DeterministicMap<InternedString, TypeIndex>,
-) -> HIRTypedBoundName {
-    let hir_type: HIRType = (&param.name_type).into();
-    let ty_var = ty.next_param_or_return();
-    decls.insert(param.name.0, ty_var);
-    HIRTypedBoundName {
-        name: param.name.0,
-        type_data: HIRTypeWithTypeVariable {
-            hir_type,
-            type_variable: ty_var,
-        },
-    }
-}
-
-fn create_struct_field_type(
-    param: &TypeBoundName,
-    type_db: &TypeConstructorDatabase,
-    type_params: &[TypeParameter], //not args, params
-    ty: &mut TypeTable,
-) -> HIRTypedBoundName {
-    let hir_type: HIRType = (&param.name_type).into();
-    //let ty_var = hir_type.make_poly(type_db, type_params, true);
-    let next = ty.next();
-    HIRTypedBoundName {
-        name: param.name.0,
-        type_data: HIRTypeWithTypeVariable {
-            hir_type,
-            type_variable: next,
-        },
-    }
-}
-fn ast_if_to_hir<'source>(
-    type_db: &TypeConstructorDatabase,
-    true_branch: &'source ASTIfStatement,
-    accum: &mut Vec<HIR>,
-    elifs: &'source [ASTIfStatement],
-    final_else: &'source Option<Vec<SpanAST>>,
-    ty: &mut TypeTable,
-    meta: &mut MetaTable,
-    decls: &mut DeterministicMap<InternedString, TypeIndex>,
-    generics: &[TypeParameter],
-) {
-    let true_branch_result_expr = expr_to_hir(
-        type_db,
-        &true_branch.expression.expr,
-        false,
-        ty,
-        meta,
-        decls,
-        generics,
-    );
-
-    let mut true_body_hir = vec![];
-    let mut true_branch_scope = decls.clone();
-    for node in &true_branch.statements {
-        ast_to_hir(
-            node,
-            &mut true_body_hir,
-            ty,
-            meta,
-            type_db,
-            &mut true_branch_scope,
-            generics,
-        );
-    }
-    /*
-      The HIR representation is simpler, but that means we have to do work to simplify it.
-      HIR is only condition, true branch, false branch so the rest of the else ifs go inside the false branch.
-
-      Let's just rewrite whatever the user wrote lmao
-
-      First we have to handle some base cases, i.e. no more elifs ou elses, no more elifs but there is an else, etc.
-    */
-    if elifs.is_empty() && final_else.is_none() {
-        //Just like function declarations, the intermediaries created here don't escape the context.
-        //This is different than python, where all variables declared are scoped to the entire function;
-        accum.push(HIR::If(
-            true_branch_result_expr,
-            true_body_hir,
-            vec![],
-            meta.next(&true_branch.expression.span),
-        ));
-    } else if elifs.is_empty() && final_else.is_some() {
-        //in this case we have a final else, just generate a false branch
-        let mut false_body_hir = vec![];
-
-        match final_else {
-            None => unreachable!("Shouldn't happen!"),
-            Some(nodes) => {
-                let mut false_branch_scope = decls.clone();
-
-                for node in nodes.iter() {
-                    ast_to_hir(
-                        node,
-                        &mut false_body_hir,
-                        ty,
-                        meta,
-                        type_db,
-                        &mut false_branch_scope,
-                        generics,
-                    );
-                }
-
-                accum.push(HIR::If(
-                    true_branch_result_expr,
-                    true_body_hir,
-                    false_body_hir,
-                    meta.next(&true_branch.expression.span),
-                ));
-            }
-        }
-    } else {
-        //in this case we have elifs, so we build the "tree"
-        //and we don't actually need to store the false body because we'll connect everything later.
-        //it's not actually a tree... it's more like a linked list.
-
-        //let mut current_if_tree = HIR::If(literal_true_branch_expr, true_body_hir, ());
-        let mut nodes = vec![];
-
-        let root_node = IfTreeNode {
-            condition: true_branch_result_expr,
-            true_body: true_body_hir,
-        };
-
-        nodes.push(root_node);
-
-        for item in elifs {
-            let elif_true_branch_result_expr = expr_to_hir(
-                type_db,
-                &item.expression.expr,
-                false,
-                ty,
-                meta,
-                decls,
-                generics,
-            );
-
-            let mut if_node = IfTreeNode {
-                condition: elif_true_branch_result_expr,
-                true_body: vec![],
-            };
-            let mut elif_scope = decls.clone();
-            for node in &item.statements {
-                ast_to_hir(
-                    node,
-                    &mut if_node.true_body,
-                    ty,
-                    meta,
-                    type_db,
-                    &mut elif_scope,
-                    generics,
-                );
-            }
-            nodes.push(if_node);
-        }
-        let mut final_else_body = vec![];
-        let mut final_else_scope = decls.clone();
-        if let Some(statements) = final_else {
-            for node in statements.iter() {
-                ast_to_hir(
-                    node,
-                    &mut final_else_body,
-                    ty,
-                    meta,
-                    type_db,
-                    &mut final_else_scope,
-                    generics,
-                );
-            }
-        }
-
-        let mut final_if_chain = None;
-
-        if !final_else_body.is_empty() {
-            let first_node = nodes.pop().unwrap(); //there MUST be a node here
-            let node_idx = first_node.condition.get_node_index();
-            final_if_chain = Some(HIR::If(
-                first_node.condition,
-                first_node.true_body,
-                final_else_body,
-                node_idx,
-            ));
-        }
-
-        nodes.reverse();
-        //we navigate through the nodes in reverse and build the final HIR tree
-        for node in nodes {
-            let node_idx = node.condition.get_node_index();
-            let new_node = match final_if_chain {
-                None => HIR::If(node.condition, node.true_body, vec![], node_idx),
-                Some(current_chain) => HIR::If(
-                    node.condition,
-                    node.true_body,
-                    vec![current_chain],
-                    node_idx,
-                ),
-            };
-            final_if_chain = Some(new_node);
-        }
-        accum.push(final_if_chain.unwrap());
-    }
-}
-
-fn ast_while_to_hir<'source>(
-    type_db: &TypeConstructorDatabase,
-    expression: &'source Expr,
-    accum: &mut Vec<HIR>,
-    body: &'source [SpanAST],
-    ty: &mut TypeTable,
-    meta: &mut MetaTable,
-    decls: &mut DeterministicMap<InternedString, TypeIndex>,
-    generics: &[TypeParameter],
-) {
-    let expr = expr_to_hir(type_db, expression, false, ty, meta, decls, generics);
-
-    let mut true_body_hir = vec![];
-    let mut while_scope = decls.clone();
-    for node in body {
-        ast_to_hir(
-            node,
-            &mut true_body_hir,
-            ty,
-            meta,
-            type_db,
-            &mut while_scope,
-            generics,
-        );
-    }
-
-    accum.push(HIR::While(expr, true_body_hir, meta.next(expression)))
-}
-
-fn ast_impl_to_hir<'source>(
-    type_db: &TypeConstructorDatabase,
-    body: &'source [FunctionDeclaration],
-    struct_name: InternedString,
-    type_parameters: &'source [StringSpan],
-    accum: &mut Vec<HIRRoot>,
-    meta: &mut MetaTable,
-) {
-    let mut functions = vec![];
-    let mut decls = DeterministicMap::<InternedString, TypeIndex>::new();
-    for node in body {
-        ast_decl_function_to_hir(
-            type_db,
-            &node.body,
-            node.function_name.0,
-            type_parameters,
-            &node.parameters,
-            &node.return_type,
-            node.is_varargs,
-            &mut functions,
-            &mut decls,
-            meta,
-            true,
-        );
-    }
-
-    accum.push(HIRRoot::ImplDeclaration {
-        struct_name,
-        type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
-        methods: functions,
-        has_been_monomorphized: false,
-    });
-}
-
-/*
-fn try_literal_promotion(
-    type_db: &TypeConstructorDatabase,
-    literal: &LiteralHIRExpr,
-    type_hint: &TypeConstructorId,
-) -> Result<(), String> {
-    match literal {
-        LiteralHIRExpr::Integer(i) => {
-            //we need to check for promotions and the attempted promoted type
-            //and see if it's in range, i.e. we can't promote 23752432 to an u8
-
-            macro_rules! check_promotion {
-                ($type:ty, $type_id:expr) => {
-                    if *type_hint == $type_id {
-                        if *i >= <$type>::MIN as i128 && *i <= <$type>::MAX as i128 {
-                            return Ok(());
-                        }
-                        else {
-                            return Err("Emit out of bounds error".into())
-                            /*return self.ctx.errors.out_of_bounds_constructor.push_inference_error(report!(self, meta, OutOfTypeBoundsTypeConstructor {
-                                expr: meta, //@TODO unecessary, at_spanned already contains the metadata
-                                typ: TypeConstructParams::simple($type_id),
-                            }))?;*/
-                        }
-                    }
-                };
-            }
-            macro_rules! check_promotions {
-                ($($type:ty: $type_id:expr),*) => {
-                    $(
-                        check_promotion!($type, $type_id);
-                    )*
-                };
-            }
-            check_promotions!(
-                u8: type_db.common_types.u8,
-                u32: type_db.common_types.u32,
-                u64: type_db.common_types.u64,
-                i32: type_db.common_types.i32,
-                i64: type_db.common_types.i64
-            );
-
-            Err("Emit type promotion failure error".into())
-
-            // return self
-            //     .ctx
-            //     .errors
-            //     .type_promotion_failure
-            //     .push_inference_error(report!(
-            //         self,
-            //         meta,
-            //         TypePromotionFailure {
-            //             target_type: TypeConstructParams::simple(type_constructor_id)
-            //         }
-            //     ))?;
-        }
-        _ => panic!("Cannot promote value: {:#?}", literal),
-    }
-}*/
 
 fn load_stdlib_builtin(type_db: &TypeConstructorDatabase, name: &str) -> Option<PolyType> {
     //check if instance already exists
@@ -1688,11 +1108,685 @@ fn load_stdlib_builtin(type_db: &TypeConstructorDatabase, name: &str) -> Option<
     }
 }
 
+struct HIRBuilder {
+    iterator_next_var: u32,
+}
+
+impl HIRBuilder {
+    fn ast_to_hir(
+        &mut self,
+        ast: &SpanAST,
+        accum: &mut Vec<HIR>,
+        ty: &mut TypeTable,
+        meta: &mut MetaTable,
+        type_db: &TypeConstructorDatabase,
+        decls: &mut DeterministicMap<InternedString, TypeIndex>,
+        generics: &[TypeParameter],
+    ) {
+        let ast = &ast.ast;
+        match ast {
+            AST::Declare { var, expression } => {
+                //expr: we have to decompose the expression into HIR declarations
+                //because the assigned/declared expression has to be sufficiently simple
+                //to decrease complexity for the other compiler phases (typechecking, type inference)
+
+                //maybe a way to do it is by calling reduce_expr_to_hir_declarations, and the function
+                //itself returns a HIRExpr. It will also add to the HIR any declarations needed
+                //for the decomposition.
+                let result_expr =
+                    expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
+
+                let typedef: HIRType = (&var.name_type).into();
+                //let poly = typedef.make_poly(type_db, generics, false);
+                let ty_var = ty.next();
+                decls.insert(var.name.0, ty_var);
+                let decl_hir = HIR::Declare {
+                    var: var.name.0,
+                    typedef: HIRTypeWithTypeVariable {
+                        type_variable: ty_var,
+                        hir_type: typedef,
+                    },
+                    expression: result_expr,
+                    location: meta.next(&expression.span),
+                };
+
+                accum.push(decl_hir);
+            }
+            AST::Assign { path, expression } => {
+                let path_expr = expr_to_hir(type_db, &path.expr, true, ty, meta, decls, generics);
+                let result_expr =
+                    expr_to_hir(type_db, &expression.expr, false, ty, meta, decls, generics);
+                if let HIRExpr::Variable(name, meta, _) = &path_expr {
+                    if decls.get(name).is_some() {
+                        let decl_hir = HIR::Assign {
+                            path: path_expr.clone(),
+                            expression: result_expr,
+                            location: *meta,
+                        };
+                        accum.push(decl_hir);
+                    } else {
+                        let ty_var = result_expr.get_type();
+                        decls.insert(*name, ty_var);
+                        let decl_hir = HIR::SyntheticDeclare {
+                            var: *name,
+                            typedef: ty_var,
+                            expression: result_expr,
+                            location: *meta,
+                        };
+                        accum.push(decl_hir);
+                    }
+                } else {
+                    let decl_hir = HIR::Assign {
+                        path: path_expr.clone(),
+                        expression: result_expr,
+                        location: path_expr.get_node_index(),
+                    };
+                    accum.push(decl_hir);
+                }
+            }
+            AST::Return(ast, expr) => match expr {
+                None => {
+                    accum.push(HIR::EmptyReturn(meta.next(ast)));
+                }
+                Some(e) => {
+                    let result_expr =
+                        expr_to_hir(type_db, &e.expr, false, ty, meta, decls, generics);
+                    accum.push(HIR::Return(result_expr, meta.next(ast)));
+                }
+            },
+            AST::StandaloneExpr(expr) => {
+                let Expr::FunctionCall(..) = expr.deref() else {
+                    panic!("Can only lower function call standalone expr: {expr:#?}");
+                };
+
+                let result_expr: HIRExpr =
+                    expr_to_hir(type_db, expr, false, ty, meta, decls, generics);
+
+                match result_expr {
+                    HIRExpr::MethodCall(mcall, meta) => {
+                        accum.push(HIR::MethodCall(mcall, meta));
+                    }
+                    HIRExpr::FunctionCall(fcall, meta) => {
+                        accum.push(HIR::FunctionCall(*fcall, meta));
+                    }
+                    _ => {
+                        panic!(
+                            "Lowering of function call returned invalid result: {result_expr:?}"
+                        );
+                    }
+                }
+            }
+            AST::IfStatement {
+                true_branch,
+                elifs,
+                final_else,
+            } => {
+                self.ast_if_to_hir(
+                    type_db,
+                    true_branch,
+                    accum,
+                    elifs,
+                    final_else,
+                    ty,
+                    meta,
+                    decls,
+                    generics,
+                );
+            }
+            AST::WhileStatement { expression, body } => {
+                self.ast_while_to_hir(
+                    type_db,
+                    &expression.expr,
+                    accum,
+                    body,
+                    ty,
+                    meta,
+                    decls,
+                    generics,
+                );
+            }
+            AST::Intrinsic(_) => panic!("Cannot use intrinsic keyword"),
+            AST::ForStatement {
+                item_name,
+                list_expression,
+                body,
+            } => {
+                let current_iterator = self.iterator_next_var;
+                let location = meta.next(&list_expression.span);
+                let obj_hir = expr_to_hir(
+                    type_db,
+                    &list_expression.expr,
+                    false,
+                    ty,
+                    meta,
+                    decls,
+                    generics,
+                );
+                let call_to_iterator = HIRExpr::MethodCall(
+                    MethodCall {
+                        object: Box::new(obj_hir),
+                        method_name: "__iterator__".into(),
+                        args: vec![],
+                        return_type: ty.next(),
+                    },
+                    location,
+                );
+
+                let var = format!("__iterator__<{current_iterator}>").into();
+                self.iterator_next_var += 1;
+
+                let iterator_var_type = ty.next();
+                let assign = HIR::SyntheticDeclare {
+                    var,
+                    typedef: iterator_var_type,
+                    expression: call_to_iterator,
+                    location,
+                };
+                decls.insert(var, iterator_var_type);
+
+                accum.push(assign);
+
+                let call_to_has_next = HIRExpr::MethodCall(
+                    MethodCall {
+                        object: Box::new(HIRExpr::Variable(var, location, iterator_var_type)),
+                        method_name: "has_next".into(),
+                        args: vec![],
+                        return_type: ty.next(),
+                    },
+                    location,
+                );
+
+                let return_type_of_next = ty.next();
+                let call_to_next = HIRExpr::MethodCall(
+                    MethodCall {
+                        object: Box::new(HIRExpr::Variable(var, location, iterator_var_type)),
+                        method_name: "next".into(),
+                        args: vec![],
+                        return_type: return_type_of_next,
+                    },
+                    location,
+                );
+                let mut new_body = vec![];
+                new_body.push(HIR::SyntheticDeclare {
+                    var: format!("{}", item_name.0).into(),
+                    typedef: return_type_of_next,
+                    expression: call_to_next,
+                    location,
+                });
+
+                decls.insert(item_name.0, return_type_of_next);
+
+                for item in body {
+                    self.ast_to_hir(item, &mut new_body, ty, meta, type_db, decls, generics);
+                }
+
+                let while_loop = HIR::While(call_to_has_next, new_body, location);
+
+                accum.push(while_loop);
+            }
+            ast => {
+                todo!("Not implemented HIR for {ast:?}")
+            }
+        }
+    }
+
+    fn ast_decl_function_to_hir<'source>(
+        &mut self,
+        type_db: &TypeConstructorDatabase,
+        body: &'source [SpanAST],
+        function_name: InternedString,
+        type_parameters: &'source [StringSpan],
+        parameters: &'source [TypeBoundName],
+        return_type: &Option<ASTType>,
+        is_varargs: bool,
+        accum: &mut Vec<HIRRoot>,
+        decls: &mut DeterministicMap<InternedString, TypeIndex>,
+        meta: &mut MetaTable,
+        is_method: bool,
+    ) {
+        let mut ty = TypeTable::new();
+        let self_ty = if is_method {
+            Some(ty.make_self())
+        } else {
+            None
+        };
+        let type_parameters: Vec<_> = type_parameters.iter().map(|x| TypeParameter(x.0)).collect();
+        let parameters = self.create_parameters(parameters, &mut ty, decls);
+        let hir_return = match return_type {
+            Some(x) => x.into(),
+            None => HIRType::Simple(InternedString::new("Void")),
+        };
+
+        let return_ty = ty.next_param_or_return(); /*(PolyType::mono(hir_return.make_mono(
+        type_db,
+        &type_parameters,
+        true,
+        )));*/
+
+        let return_type = HIRTypeWithTypeVariable {
+            hir_type: hir_return,
+            type_variable: return_ty,
+        };
+
+        if body.len() == 1 {
+            if let AST::Intrinsic(_) = &body[0].ast {
+                accum.push(HIRRoot::DeclareFunction {
+                    function_name,
+                    type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
+                    parameters,
+                    body: vec![],
+                    is_intrinsic: true,
+                    is_external: false,
+                    is_varargs,
+                    return_type,
+                    method_of: self_ty,
+                    type_table: ty,
+                    has_been_monomorphized: false,
+                });
+                return;
+            }
+
+            if let AST::External(_) = &body[0].ast {
+                accum.push(HIRRoot::DeclareFunction {
+                    function_name,
+                    type_parameters,
+                    parameters,
+                    body: vec![],
+                    is_intrinsic: false,
+                    is_external: true,
+                    is_varargs,
+                    return_type,
+                    method_of: self_ty,
+                    type_table: ty,
+                    has_been_monomorphized: false,
+                });
+                return;
+            }
+        }
+
+        let mut function_body = vec![];
+        for node in body {
+            self.ast_to_hir(
+                node,
+                &mut function_body,
+                &mut ty,
+                meta,
+                type_db,
+                decls,
+                &type_parameters,
+            );
+        }
+
+        let decl_hir: HIRRoot = HIRRoot::DeclareFunction {
+            function_name,
+            parameters,
+            type_parameters,
+            body: function_body,
+            is_intrinsic: false,
+            is_external: false,
+            is_varargs,
+            return_type,
+            method_of: self_ty,
+            type_table: ty,
+            has_been_monomorphized: false,
+        };
+        accum.push(decl_hir);
+    }
+
+    fn create_parameters(
+        &self,
+        parameters: &[TypeBoundName],
+        ty: &mut TypeTable,
+        decls: &mut DeterministicMap<InternedString, TypeIndex>,
+    ) -> Vec<HIRTypedBoundName> {
+        parameters
+            .iter()
+            .map(|it| self.create_function_param(it, ty, decls))
+            .collect()
+    }
+
+    fn create_function_param(
+        &self,
+        param: &TypeBoundName,
+        ty: &mut TypeTable,
+        decls: &mut DeterministicMap<InternedString, TypeIndex>,
+    ) -> HIRTypedBoundName {
+        let hir_type: HIRType = (&param.name_type).into();
+        let ty_var = ty.next_param_or_return();
+        decls.insert(param.name.0, ty_var);
+        HIRTypedBoundName {
+            name: param.name.0,
+            type_data: HIRTypeWithTypeVariable {
+                hir_type,
+                type_variable: ty_var,
+            },
+        }
+    }
+
+    fn create_struct_field_type(
+        &self,
+        param: &TypeBoundName,
+        _type_db: &TypeConstructorDatabase,
+        _type_params: &[TypeParameter], //not args, params
+        ty: &mut TypeTable,
+    ) -> HIRTypedBoundName {
+        let hir_type: HIRType = (&param.name_type).into();
+        //let ty_var = hir_type.make_poly(type_db, type_params, true);
+        let next = ty.next();
+        HIRTypedBoundName {
+            name: param.name.0,
+            type_data: HIRTypeWithTypeVariable {
+                hir_type,
+                type_variable: next,
+            },
+        }
+    }
+    fn ast_if_to_hir<'source>(
+        &mut self,
+        type_db: &TypeConstructorDatabase,
+        true_branch: &'source ASTIfStatement,
+        accum: &mut Vec<HIR>,
+        elifs: &'source [ASTIfStatement],
+        final_else: &'source Option<Vec<SpanAST>>,
+        ty: &mut TypeTable,
+        meta: &mut MetaTable,
+        decls: &mut DeterministicMap<InternedString, TypeIndex>,
+        generics: &[TypeParameter],
+    ) {
+        let true_branch_result_expr = expr_to_hir(
+            type_db,
+            &true_branch.expression.expr,
+            false,
+            ty,
+            meta,
+            decls,
+            generics,
+        );
+
+        let mut true_body_hir = vec![];
+        let mut true_branch_scope = decls.clone();
+        for node in &true_branch.statements {
+            self.ast_to_hir(
+                node,
+                &mut true_body_hir,
+                ty,
+                meta,
+                type_db,
+                &mut true_branch_scope,
+                generics,
+            );
+        }
+        /*
+          The HIR representation is simpler, but that means we have to do work to simplify it.
+          HIR is only condition, true branch, false branch so the rest of the else ifs go inside the false branch.
+
+          Let's just rewrite whatever the user wrote lmao
+
+          First we have to handle some base cases, i.e. no more elifs ou elses, no more elifs but there is an else, etc.
+        */
+        if elifs.is_empty() && final_else.is_none() {
+            //Just like function declarations, the intermediaries created here don't escape the context.
+            //This is different than python, where all variables declared are scoped to the entire function;
+            accum.push(HIR::If(
+                true_branch_result_expr,
+                true_body_hir,
+                vec![],
+                meta.next(&true_branch.expression.span),
+            ));
+        } else if elifs.is_empty() && final_else.is_some() {
+            //in this case we have a final else, just generate a false branch
+            let mut false_body_hir = vec![];
+
+            match final_else {
+                None => unreachable!("Shouldn't happen!"),
+                Some(nodes) => {
+                    let mut false_branch_scope = decls.clone();
+
+                    for node in nodes.iter() {
+                        self.ast_to_hir(
+                            node,
+                            &mut false_body_hir,
+                            ty,
+                            meta,
+                            type_db,
+                            &mut false_branch_scope,
+                            generics,
+                        );
+                    }
+
+                    accum.push(HIR::If(
+                        true_branch_result_expr,
+                        true_body_hir,
+                        false_body_hir,
+                        meta.next(&true_branch.expression.span),
+                    ));
+                }
+            }
+        } else {
+            //in this case we have elifs, so we build the "tree"
+            //and we don't actually need to store the false body because we'll connect everything later.
+            //it's not actually a tree... it's more like a linked list.
+
+            //let mut current_if_tree = HIR::If(literal_true_branch_expr, true_body_hir, ());
+            let mut nodes = vec![];
+
+            let root_node = IfTreeNode {
+                condition: true_branch_result_expr,
+                true_body: true_body_hir,
+            };
+
+            nodes.push(root_node);
+
+            for item in elifs {
+                let elif_true_branch_result_expr = expr_to_hir(
+                    type_db,
+                    &item.expression.expr,
+                    false,
+                    ty,
+                    meta,
+                    decls,
+                    generics,
+                );
+
+                let mut if_node = IfTreeNode {
+                    condition: elif_true_branch_result_expr,
+                    true_body: vec![],
+                };
+                let mut elif_scope = decls.clone();
+                for node in &item.statements {
+                    self.ast_to_hir(
+                        node,
+                        &mut if_node.true_body,
+                        ty,
+                        meta,
+                        type_db,
+                        &mut elif_scope,
+                        generics,
+                    );
+                }
+                nodes.push(if_node);
+            }
+            let mut final_else_body = vec![];
+            let mut final_else_scope = decls.clone();
+            if let Some(statements) = final_else {
+                for node in statements.iter() {
+                    self.ast_to_hir(
+                        node,
+                        &mut final_else_body,
+                        ty,
+                        meta,
+                        type_db,
+                        &mut final_else_scope,
+                        generics,
+                    );
+                }
+            }
+
+            let mut final_if_chain = None;
+
+            if !final_else_body.is_empty() {
+                let first_node = nodes.pop().unwrap(); //there MUST be a node here
+                let node_idx = first_node.condition.get_node_index();
+                final_if_chain = Some(HIR::If(
+                    first_node.condition,
+                    first_node.true_body,
+                    final_else_body,
+                    node_idx,
+                ));
+            }
+
+            nodes.reverse();
+            //we navigate through the nodes in reverse and build the final HIR tree
+            for node in nodes {
+                let node_idx = node.condition.get_node_index();
+                let new_node = match final_if_chain {
+                    None => HIR::If(node.condition, node.true_body, vec![], node_idx),
+                    Some(current_chain) => HIR::If(
+                        node.condition,
+                        node.true_body,
+                        vec![current_chain],
+                        node_idx,
+                    ),
+                };
+                final_if_chain = Some(new_node);
+            }
+            accum.push(final_if_chain.unwrap());
+        }
+    }
+
+    fn ast_while_to_hir<'source>(
+        &mut self,
+        type_db: &TypeConstructorDatabase,
+        expression: &'source Expr,
+        accum: &mut Vec<HIR>,
+        body: &'source [SpanAST],
+        ty: &mut TypeTable,
+        meta: &mut MetaTable,
+        decls: &mut DeterministicMap<InternedString, TypeIndex>,
+        generics: &[TypeParameter],
+    ) {
+        let expr = expr_to_hir(type_db, expression, false, ty, meta, decls, generics);
+
+        let mut true_body_hir = vec![];
+        let mut while_scope = decls.clone();
+        for node in body {
+            self.ast_to_hir(
+                node,
+                &mut true_body_hir,
+                ty,
+                meta,
+                type_db,
+                &mut while_scope,
+                generics,
+            );
+        }
+
+        accum.push(HIR::While(expr, true_body_hir, meta.next(expression)))
+    }
+
+    fn ast_impl_to_hir<'source>(
+        &mut self,
+        type_db: &TypeConstructorDatabase,
+        body: &'source [FunctionDeclaration],
+        struct_name: InternedString,
+        type_parameters: &'source [StringSpan],
+        accum: &mut Vec<HIRRoot>,
+        meta: &mut MetaTable,
+    ) {
+        let mut functions = vec![];
+        let mut decls = DeterministicMap::<InternedString, TypeIndex>::new();
+        for node in body {
+            self.ast_decl_function_to_hir(
+                type_db,
+                &node.body,
+                node.function_name.0,
+                type_parameters,
+                &node.parameters,
+                &node.return_type,
+                node.is_varargs,
+                &mut functions,
+                &mut decls,
+                meta,
+                true,
+            );
+        }
+
+        accum.push(HIRRoot::ImplDeclaration {
+            struct_name,
+            type_parameters: type_parameters.iter().map(|x| TypeParameter(x.0)).collect(),
+            methods: functions,
+            has_been_monomorphized: false,
+        });
+    }
+
+    /*
+    fn try_literal_promotion(
+        type_db: &TypeConstructorDatabase,
+        literal: &LiteralHIRExpr,
+        type_hint: &TypeConstructorId,
+    ) -> Result<(), String> {
+        match literal {
+            LiteralHIRExpr::Integer(i) => {
+                //we need to check for promotions and the attempted promoted type
+                //and see if it's in range, i.e. we can't promote 23752432 to an u8
+
+                macro_rules! check_promotion {
+                    ($type:ty, $type_id:expr) => {
+                        if *type_hint == $type_id {
+                            if *i >= <$type>::MIN as i128 && *i <= <$type>::MAX as i128 {
+                                return Ok(());
+                            }
+                            else {
+                                return Err("Emit out of bounds error".into())
+                                /*return self.ctx.errors.out_of_bounds_constructor.push_inference_error(report!(self, meta, OutOfTypeBoundsTypeConstructor {
+                                    expr: meta, //@TODO unecessary, at_spanned already contains the metadata
+                                    typ: TypeConstructParams::simple($type_id),
+                                }))?;*/
+                            }
+                        }
+                    };
+                }
+                macro_rules! check_promotions {
+                    ($($type:ty: $type_id:expr),*) => {
+                        $(
+                            check_promotion!($type, $type_id);
+                        )*
+                    };
+                }
+                check_promotions!(
+                    u8: type_db.common_types.u8,
+                    u32: type_db.common_types.u32,
+                    u64: type_db.common_types.u64,
+                    i32: type_db.common_types.i32,
+                    i64: type_db.common_types.i64
+                );
+
+                Err("Emit type promotion failure error".into())
+
+                // return self
+                //     .ctx
+                //     .errors
+                //     .type_promotion_failure
+                //     .push_inference_error(report!(
+                //         self,
+                //         meta,
+                //         TypePromotionFailure {
+                //             target_type: TypeConstructParams::simple(type_constructor_id)
+                //         }
+                //     ))?;
+            }
+            _ => panic!("Cannot promote value: {:#?}", literal),
+        }
+    }*/
+}
 pub fn ast_globals_to_hir(
     ast: &AST,
     type_db: &TypeConstructorDatabase,
     meta: &mut MetaTable,
 ) -> Vec<HIRRoot> {
+    let mut builder = HIRBuilder {
+        iterator_next_var: 0,
+    };
     let mut accum = vec![];
     match ast {
         AST::DeclareFunction(FunctionDeclaration {
@@ -1705,7 +1799,7 @@ pub fn ast_globals_to_hir(
             ..
         }) => {
             let mut decls = DeterministicMap::<InternedString, TypeIndex>::new();
-            ast_decl_function_to_hir(
+            builder.ast_decl_function_to_hir(
                 type_db,
                 body,
                 function_name.0,
@@ -1729,7 +1823,7 @@ pub fn ast_globals_to_hir(
             type_parameters,
             body,
         } => {
-            ast_impl_to_hir(
+            builder.ast_impl_to_hir(
                 type_db,
                 body,
                 struct_name.0,
@@ -1748,7 +1842,9 @@ pub fn ast_globals_to_hir(
                 type_parameters.iter().map(|x| TypeParameter(x.0)).collect();
             let fields: Vec<_> = body
                 .iter()
-                .map(|field| create_struct_field_type(field, type_db, &type_parameters, &mut ty))
+                .map(|field| {
+                    builder.create_struct_field_type(field, type_db, &type_parameters, &mut ty)
+                })
                 .collect();
 
             accum.push(HIRRoot::StructDeclaration {

@@ -1,15 +1,10 @@
 #![allow(incomplete_features)]
-#![feature(assert_matches)]
 #![feature(generic_const_exprs)]
 #![feature(const_trait_impl)]
-#![feature(thread_local)]
-#![feature(negative_impls)]
-#![feature(type_alias_impl_trait)]
 #![feature(never_type)]
 #![feature(try_trait_v2)]
 #![feature(iter_collect_into)]
-use std::collections::hash_map::DefaultHasher;
-use std::hash::BuildHasherDefault;
+#![feature(try_trait_v2_residual)]
 type DeterministicMap<K, V> = BTreeMap<K, V>;
 
 #[macro_use]
@@ -22,8 +17,8 @@ mod debug;
 //mod lambda_vm;
 #[macro_use]
 mod semantic;
-mod types;
 mod llvm;
+mod types;
 
 #[cfg(test)]
 #[macro_use(quickcheck)]
@@ -38,7 +33,7 @@ extern crate quickcheck_macros;
 
 //use crate::lambda_vm::lambda_runner::LambdaRunner;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::env;
 
 //use crate::donkey_vm::vm::runner;
@@ -47,18 +42,18 @@ use std::env;
 //use donkey_vm::asm::assembler::DonkeyProgram;
 //use donkey_vm::vm::runner::DonkeyVMRunner;
 
-use semantic::{
-    context::Source,
-    hir::{ast_globals_to_hir, MetaTable},
-};
+use crate::semantic::hir_printer::HIRPrinter;
 use crate::semantic::mir::hir_to_mir;
 use crate::semantic::monomorph::Monomorphizer;
+use crate::semantic::type_checker::typecheck;
 use crate::semantic::typer::Typer;
 use crate::semantic::{mir_printer, uniformizer};
-use crate::semantic::hir_printer::HIRPrinter;
-use crate::semantic::type_checker::typecheck;
 use crate::types::diagnostics::{TypeErrorPrinter, TypeErrors};
 use crate::types::type_constructor_db::TypeConstructorDatabase;
+use semantic::{
+    context::Source,
+    hir::{MetaTable, ast_globals_to_hir},
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -106,7 +101,8 @@ fn main() {
         all_globals = typer.globals;
 
         let mut mono = Monomorphizer::new(&type_db);
-        mono.global_definitions.extend(all_global_defs_for_mono.clone());
+        mono.global_definitions
+            .extend(all_global_defs_for_mono.clone());
         mono.impl_definitions.extend(all_impls.clone());
         mono.run(&parsed).unwrap();
 
@@ -128,7 +124,7 @@ fn main() {
             if print_hir {
                 let printer = HIRPrinter::new(true, &type_db);
                 let printed = printer.print_hir(&monomorphized);
-                println!("{}", printed);
+                println!("PRINTED HIR:\n{}", printed);
             }
             eprintln!("Compilation failed");
             break;
@@ -162,13 +158,9 @@ fn main() {
     }
 
     if let Some(errors) = compiler_errors
-        && errors.len() > 0 {
-        let printer = TypeErrorPrinter::new(
-            &errors,
-            &type_db,
-            &meta_table,
-            &source.file_table,
-        );
+        && errors.len() > 0
+    {
+        let printer = TypeErrorPrinter::new(&errors, &type_db, &meta_table, &source.file_table);
         println!("{printer}");
     } else {
         llvm::llvm_backend::generate_llvm(&type_db, &all_mir).unwrap();
