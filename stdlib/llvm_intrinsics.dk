@@ -1,6 +1,9 @@
 def print_int(i: i32):
     printf("%i\n".buf, i)
 
+def print_u64(i: u64):
+    printf("%i\n".buf, i)
+
 def print_uint(u: u32):
     printf("%i\n".buf, u)
 

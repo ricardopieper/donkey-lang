@@ -22,10 +22,10 @@ struct ArrayIterator<T>:
 
 impl ArrayIterator<T>:
 
-    def __has_next__(self) -> bool:
+    def has_next(self) -> bool:
         return (*self).current < (*(*self).array).length
 
-    def __next__(self) -> T:
-        previous = (*self).current
+    def next(self) -> ptr<T>:
+        retval = &(*(*self).array)[(*self).current]
         (*self).current = (*self).current + 1
-        return (*(*self).array).base[previous]
+        return retval

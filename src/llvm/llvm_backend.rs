@@ -16,14 +16,11 @@ use inkwell::values::{
     PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, OptimizationLevel};
-
+use inkwell::basic_block::BasicBlock;
 use crate::ast::lexer::Operator;
 use crate::llvm::linker::{LinkerError, link};
 
-use crate::semantic::mir::{
-    LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue, MIRExprRValue,
-    MIRScope, MIRTopLevelNode, MIRTypedBoundName, ScopeId,
-};
+use crate::semantic::mir::{BlockId, LiteralMIRExpr, MIRBlock, MIRBlockFinal, MIRBlockNode, MIRExpr, MIRExprLValue, MIRExprRValue, MIRScope, MIRTopLevelNode, MIRTypedBoundName, ScopeId};
 
 type DeterministicMap<K, V> = BTreeMap<K, V>;
 use crate::interner::InternedString;
@@ -141,6 +138,7 @@ pub struct CodeGen<'codegen_scope, 'ctx> {
     context: &'ctx Context,
     builder: &'codegen_scope Builder<'ctx>,
     module: &'codegen_scope Module<'ctx>,
+    target_machine: TargetMachine,
     type_db: &'codegen_scope TypeConstructorDatabase,
     type_cache: DeterministicMap<TypeConstructorId, AnyTypeEnum<'ctx>>,
     functions: DeterministicMap<InternedString, FunctionValue<'ctx>>,
@@ -153,6 +151,14 @@ pub struct CodeGen<'codegen_scope, 'ctx> {
     codegen_queue: VecDeque<&'codegen_scope MIRTopLevelNode>,
     top_lvl_names: DeterministicMap<InternedString, &'codegen_scope MIRTopLevelNode>,
     //    fpm: PassManager<FunctionValue<'ctx>>
+}
+
+struct CodegenCtx<'codegen_ctx, 'llvm_ctx> {
+    block: &'codegen_ctx MIRBlock,
+    basic_blocks: &'codegen_ctx [BasicBlock<'llvm_ctx>],
+    function: FunctionValue<'llvm_ctx>,
+    symbol_table: &'codegen_ctx FunctionSymbolTable<'llvm_ctx>,
+    type_table: &'codegen_ctx TypeTable
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -234,12 +240,10 @@ impl<'ctx> BuiltinArrayType<'ctx> {
             .unwrap();
 
         codegen
-            .builder
-            .build_store(
+            .build_aligned_store(
                 length_field,
                 codegen.context.i64_type().const_int(length, false),
-            )
-            .unwrap();
+            );
     }
     pub fn set_array<'codegen_scope>(
         &mut self,
@@ -257,17 +261,8 @@ impl<'ctx> BuiltinArrayType<'ctx> {
             )
             .unwrap();
 
-        codegen.builder.build_store(base_field, array).unwrap();
-    }
+        codegen.build_aligned_store(base_field, array);
 
-    pub fn allocate<'codegen_scope>(
-        &self,
-        codegen: &mut CodeGen<'codegen_scope, 'ctx>,
-    ) -> PointerValue<'ctx> {
-        codegen
-            .builder
-            .build_alloca(self.self_type, &codegen.make_temp("alloc_array"))
-            .unwrap()
     }
 }
 
@@ -294,23 +289,22 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
     }
 
     pub fn load_any(
-        &self,
+        &mut self,
         ptr: PointerValue<'ctx>,
         ty: AnyTypeEnum<'ctx>,
         name: &str,
     ) -> BasicValueEnum<'ctx> {
         match ty {
-            AnyTypeEnum::ArrayType(t) => self.builder.build_load(t, ptr, name),
-            AnyTypeEnum::FloatType(t) => self.builder.build_load(t, ptr, name),
+            AnyTypeEnum::ArrayType(t) => self.build_aligned_load(t, ptr, name),
+            AnyTypeEnum::FloatType(t) => self.build_aligned_load(t, ptr, name),
             AnyTypeEnum::FunctionType(_t) => panic!("load lvalue of type function"),
-            AnyTypeEnum::IntType(t) => self.builder.build_load(t, ptr, name),
-            AnyTypeEnum::PointerType(t) => self.builder.build_load(t, ptr, name),
-            AnyTypeEnum::StructType(t) => self.builder.build_load(t, ptr, name),
-            AnyTypeEnum::VectorType(t) => self.builder.build_load(t, ptr, name),
-            AnyTypeEnum::ScalableVectorType(t) => self.builder.build_load(t, ptr, name),
+            AnyTypeEnum::IntType(t) => self.build_aligned_load(t, ptr, name),
+            AnyTypeEnum::PointerType(t) => self.build_aligned_load(t, ptr, name),
+            AnyTypeEnum::StructType(t) => self.build_aligned_load(t, ptr, name),
+            AnyTypeEnum::VectorType(t) => self.build_aligned_load(t, ptr, name),
+            AnyTypeEnum::ScalableVectorType(t) => self.build_aligned_load(t, ptr, name),
             AnyTypeEnum::VoidType(_t) => panic!("load lvalue of type void"),
         }
-        .unwrap()
     }
     pub fn make_llvm_type(&mut self, instance: TypeConstructorId) -> AnyTypeEnum<'ctx> {
         if let Some(t) = self.type_cache.get(&instance) {
@@ -364,6 +358,39 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
         self.type_cache.insert(instance, llvm_any_type);
 
         llvm_any_type
+    }
+
+    pub fn build_aligned_store<V: BasicValue<'ctx>>(
+        &self,
+        ptr: PointerValue<'ctx>,
+        value: V,
+    ) -> inkwell::values::InstructionValue<'ctx> {
+        let value = value.as_basic_value_enum();
+        let inst = self.builder.build_store(ptr, value).unwrap();
+        let align = self.target_machine
+          .get_target_data()
+          .get_abi_alignment(&value.get_type());
+        inst.set_alignment(align).unwrap();
+        inst
+    }
+
+    pub fn build_aligned_load<T: BasicType<'ctx>>(
+        &mut self,
+        ty: T,
+        ptr: PointerValue<'ctx>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        let ty = ty.as_basic_type_enum();
+        let name = self.make_temp(name);
+        let load = self.builder.build_load(ty, ptr, &name).unwrap();
+        let align = self.target_machine
+          .get_target_data()
+          .get_abi_alignment(&ty);
+        load.as_instruction_value()
+          .unwrap()
+          .set_alignment(align)
+          .unwrap();
+        load
     }
 
     pub fn create_function(
@@ -438,22 +465,58 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
         var_name: &str,
         var_type: MonoType,
     ) -> (PointerValue<'ctx>, BasicTypeEnum<'ctx>) {
+        let llvm_type = self.make_llvm_type(var_type.get_ctor_id());
+        let llvm_type = self.as_basic_type(llvm_type);
+        let ptr = self.alloca_on_entry(function, var_name, llvm_type);
+        (ptr, llvm_type)
+    }
+
+    fn alloca_on_entry(
+        &mut self,
+        function: FunctionValue<'ctx>,
+        var_name: &str,
+        llvm_type: BasicTypeEnum<'ctx>,
+    ) -> PointerValue<'ctx> {
+        
         //we create a new builder here because we want to ensure we create the variables in the very beginning
         let builder = self.context.create_builder();
         let first_block = function
-            .get_first_basic_block()
-            .expect("Function has no entry basic block");
+          .get_first_basic_block()
+          .expect("Function has no entry basic block");
 
         match first_block.get_first_instruction() {
             Some(instr) => builder.position_before(&instr),
             None => builder.position_at_end(first_block),
         };
 
-        let llvm_type = self.make_llvm_type(var_type.get_ctor_id());
-        let llvm_type = self.as_basic_type(llvm_type);
-
         let result_ptr = builder.build_alloca(llvm_type, var_name).unwrap();
-        (result_ptr, llvm_type)
+        result_ptr
+    }
+
+
+    fn alloca_array_on_entry(
+        &mut self,
+        function: FunctionValue<'ctx>,
+        var_name: &str,
+        llvm_type: BasicTypeEnum<'ctx>,
+        num_elements: usize,
+    ) -> PointerValue<'ctx> {
+        //we create a new builder here because we want to ensure we create the variables in the very beginning
+        let builder = self.context.create_builder();
+        let first_block = function
+          .get_first_basic_block()
+          .expect("Function has no entry basic block");
+
+        match first_block.get_first_instruction() {
+            Some(instr) => builder.position_before(&instr),
+            None => builder.position_at_end(first_block),
+        };
+
+        let int_val_size =
+          self.context.i32_type().const_int(num_elements as u64, false);
+
+        let result_ptr = builder.build_array_alloca(llvm_type, int_val_size, var_name).unwrap();
+        result_ptr
     }
 
     /// Registers the top-level declaration in LLVM without generating its code.
@@ -565,7 +628,8 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                         .builder
                         .build_alloca(param.get_type(), param_name.to_string().as_str())
                         .unwrap();
-                    self.builder.build_store(alloca, param).unwrap();
+                    self.build_aligned_store(alloca, param);
+                    //self.builder.build_store(alloca, param).unwrap();
                     llvm_variables.insert(*param_name, (alloca, param.get_type()));
                 }
 
@@ -588,7 +652,8 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                         let mono_type = &type_table[type_instance];
                         let ptr = self.create_variable_stack_alloc(
                             function_signature,
-                            name.to_string().as_str(),
+                            //name.to_string().as_str(),
+                            &format!("{}_{}", name.to_string().as_str(), block_scope.id.0),
                             mono_type.mono.clone(),
                         );
                         llvm_variables.insert(*name, ptr);
@@ -606,16 +671,16 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
 
                 luckily we have the function variable layout calculated already
                 */
-
+                log!("LLVM vars: {:#?}", llvm_variables);
                 let symbol_table =
                     build_function_symbol_table(body, scopes, &function_layout, llvm_variables);
 
                 let mut llvm_basic_blocks = vec![];
                 //foreach block, generate the blocks
-                for (i, _) in body.iter().enumerate() {
+                for block in body.iter() {
                     let block = self
                         .context
-                        .append_basic_block(function_signature, &format!("block_{i}"));
+                        .append_basic_block(function_signature, &format!("block_{}", block.index));
                     llvm_basic_blocks.push(block);
                 }
                 //make the entry point go towards the first block
@@ -625,8 +690,17 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                     .build_unconditional_branch(llvm_basic_blocks[0])
                     .unwrap();
 
-                for (i, block) in body.iter().enumerate() {
-                    let basic_block = llvm_basic_blocks[i];
+
+                for block in body.iter() {
+                    let codegen_ctx = CodegenCtx {
+                        basic_blocks: &llvm_basic_blocks,
+                        block,
+                        symbol_table: &symbol_table,
+                        function: function_signature,
+                        type_table: &type_table,
+                    };
+
+                    let basic_block = llvm_basic_blocks[block.index];
                     self.builder.position_at_end(basic_block);
                     for node in block.nodes.iter() {
                         match node {
@@ -634,20 +708,18 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                                 path, expression, ..
                             } => {
                                 let LlvmLValue(ptr, _) = self.compile_expr_lvalue(
-                                    block.scope,
-                                    &symbol_table,
-                                    &MIRExpr::LValue(path.clone()),
-                                    type_table,
+                                    &codegen_ctx,
+                                    &MIRExpr::LValue(path.clone())
                                 );
                                 let value_to_write = self
                                     .compile_expr_rvalue(
-                                        block.scope,
-                                        &symbol_table,
+                                        &codegen_ctx,
                                         expression,
-                                        type_table,
+                                        Some(ptr)
                                     )
                                     .get_value();
-                                self.builder.build_store(ptr, value_to_write).unwrap();
+                                self.build_aligned_store(ptr, value_to_write);
+                                //self.builder.build_store(ptr, value_to_write).unwrap();
                             }
 
                             MIRBlockNode::FunctionCall { function, args, .. } => {
@@ -656,10 +728,9 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                                     .iter()
                                     .map(|x| {
                                         self.compile_expr_rvalue(
-                                            block.scope,
-                                            &symbol_table,
+                                            &codegen_ctx,
                                             x,
-                                            type_table,
+                                            None
                                         )
                                         .get_value()
                                         .into()
@@ -681,20 +752,17 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                                 );
                                 let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![];
                                 let LlvmLValue(ptr, _) = self.compile_expr_lvalue(
-                                    block.scope,
-                                    &symbol_table,
-                                    object,
-                                    type_table,
+                                    &codegen_ctx,
+                                    object
                                 );
                                 //TODO deduplicate this code
                                 let call_args: Vec<BasicMetadataValueEnum> = args
                                     .iter()
                                     .map(|x| {
                                         self.compile_expr_rvalue(
-                                            block.scope,
-                                            &symbol_table,
+                                            &codegen_ctx,
                                             x,
-                                            type_table,
+                                            None
                                         )
                                         .get_value()
                                         .into()
@@ -722,24 +790,24 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                     match &block.finish {
                         MIRBlockFinal::If(expr, true_branch, false_branch, _) => {
                             let expr_compiled = self
-                                .compile_expr_rvalue(block.scope, &symbol_table, expr, type_table)
+                                .compile_expr_rvalue(&codegen_ctx, expr, None)
                                 .get_value();
                             self.builder
                                 .build_conditional_branch(
                                     expr_compiled.into_int_value(),
-                                    llvm_basic_blocks[true_branch.0],
-                                    llvm_basic_blocks[false_branch.0],
+                                    codegen_ctx.basic_blocks[true_branch.0],
+                                    codegen_ctx.basic_blocks[false_branch.0],
                                 )
                                 .unwrap();
                         }
                         MIRBlockFinal::GotoBlock(block) => {
                             self.builder
-                                .build_unconditional_branch(llvm_basic_blocks[block.0])
+                                .build_unconditional_branch(codegen_ctx.basic_blocks[block.0])
                                 .unwrap();
                         }
                         MIRBlockFinal::Return(expr, _) => {
                             let expr_compiled = self
-                                .compile_expr_rvalue(block.scope, &symbol_table, expr, type_table)
+                                .compile_expr_rvalue(&codegen_ctx, expr, None)
                                 .get_value();
                             self.builder.build_return(Some(&expr_compiled)).unwrap();
                         }
@@ -813,10 +881,9 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
 
     pub fn compile_expr_rvalue(
         &mut self,
-        current_scope: ScopeId,
-        symbol_table: &FunctionSymbolTable<'ctx>,
+        ctx: &CodegenCtx<'_, 'ctx>,
         expression: &MIRExpr,
-        type_table: &TypeTable,
+        storage: Option<PointerValue<'ctx>>,
     ) -> LlvmRValue<'ctx> {
         match expression {
             MIRExpr::RValue(rvalue) => {
@@ -824,22 +891,18 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
 
                 match rvalue {
                     MIRExprRValue::Literal(literal, ty, _) => {
-                        self.build_literal(literal, types, &type_table[*ty].mono.get_ctor_id())
+                        self.build_literal(literal, types, &ctx.type_table[*ty].mono.get_ctor_id())
                     }
                     MIRExprRValue::BinaryOperation(lhs, op, rhs, _ty, _) => self.build_binary_expr(
                         lhs,
                         rhs,
-                        current_scope,
-                        symbol_table,
+                        ctx,
                         op,
-                        types,
-                        type_table,
+                        &self.type_db.common_types
                     ),
                     MIRExprRValue::MethodCall(object, method_name, args, _ty, _) => self
                         .build_method_call(
-                            current_scope,
-                            symbol_table,
-                            type_table,
+                            ctx,
                             object,
                             method_name,
                             args,
@@ -857,7 +920,7 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                             .iter()
                             .map(|x| {
                                 let expr_compiled = self
-                                    .compile_expr_rvalue(current_scope, symbol_table, x, type_table)
+                                    .compile_expr_rvalue(ctx, x, None)
                                     .get_value();
                                 expr_compiled.into()
                             })
@@ -883,19 +946,17 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                         //then we do a compile_expr on that variable. The result is an lvalue which contains the pointer.
 
                         let LlvmLValue(ptr, _) = self.compile_expr_lvalue(
-                            current_scope,
-                            symbol_table,
-                            &MIRExpr::LValue(*expr.clone()),
-                            type_table,
+                            ctx,
+                            &MIRExpr::LValue(*expr.clone())
                         );
                         LlvmRValue(ptr.as_basic_value_enum())
                     }
                     MIRExprRValue::UnaryExpression(op, expr, _, _) => {
                         let lhs_type = expr.get_type();
                         let LlvmRValue(compiled) =
-                            self.compile_expr_rvalue(current_scope, symbol_table, expr, type_table);
+                            self.compile_expr_rvalue(ctx, expr, None);
 
-                        let lhs_type = type_table[lhs_type].mono.get_ctor_id();
+                        let lhs_type = ctx.type_table[lhs_type].mono.get_ctor_id();
 
                         let expr = match op.0 {
                             Operator::Plus => compiled,
@@ -927,35 +988,39 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                         LlvmRValue(expr)
                     }
                     MIRExprRValue::Array(items, ty, _) => {
-                        let array_type_constructor = &type_table[*ty].mono;
+                        let array_type_constructor = &ctx.type_table[*ty].mono;
                         let mut builtin_array = BuiltinArrayType::new(array_type_constructor, self);
-
-                        let allocation = builtin_array.allocate(self);
-                        builtin_array.set_length(self, allocation, items.len() as u64);
-                        // let array_byte_size = builtin_array.item_byte_size.0 * items.len() as u32;
-
-                        let int_val_size =
-                            self.context.i32_type().const_int(items.len() as u64, false);
-
                         let basic_item_type: BasicTypeEnum =
-                            builtin_array.item_type.try_into().unwrap();
+                          builtin_array.item_type.try_into().unwrap();
 
-                        let allocated_base = self
-                            .builder
-                            .build_array_alloca(
-                                basic_item_type,
-                                int_val_size,
-                                &self.make_temp("array_alloc"),
-                            )
-                            .unwrap();
+
+                        let allocation = storage.or_else(|| {
+                            let name = &self.make_temp("alloc_array");
+
+                            Some(self.alloca_on_entry(
+                                ctx.function,
+                                name,
+                                builtin_array.self_type.into()
+                            ))
+                        }).unwrap();
+                        builtin_array.set_length(self, allocation, items.len() as u64);
+                        let name = &self.make_temp("alloc_array_backing_store");
+                        // let array_byte_size = builtin_array.item_byte_size.0 * items.len() as u32;
+                        let allocated_base = self.alloca_array_on_entry(
+                            ctx.function,
+                            name,
+                            basic_item_type,
+                            items.len()
+                        );
+
+                        self.builder.position_at_end(ctx.basic_blocks[ctx.block.index]);
 
                         for (i, item) in items.iter().enumerate() {
                             let index = self.context.i32_type().const_int(i as u64, false);
                             let compiled = self.compile_expr_rvalue(
-                                current_scope,
-                                symbol_table,
+                                ctx,
                                 item,
-                                type_table,
+                                None
                             );
                             let gep = unsafe {
                                 self.builder.build_in_bounds_gep(
@@ -966,49 +1031,51 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                                 )
                             }
                             .unwrap();
-                            self.builder.build_store(gep, compiled.0).unwrap();
+                            //self.builder.build_store(gep, compiled.0).unwrap();
+                            self.build_aligned_store(gep, compiled.0);
                         }
 
                         builtin_array.set_array(self, allocation, allocated_base);
 
-                        let load = self.builder.build_load(
+                        let load = self.build_aligned_load(
                             builtin_array.self_type,
                             allocation,
-                            &self.make_temp("load_array")
-                        ).unwrap();
+                            "load_array"
+                        );
 
                         LlvmRValue(load)
                     }
                     MIRExprRValue::StructInstantiate(ty, _) => {
-                        let ctor = type_table[*ty].mono.get_ctor_id();
+                        let ctor = ctx.type_table[*ty].mono.get_ctor_id();
                         let ctor = self.type_db.find(ctor);
-                        let llvm_str_type = self.make_llvm_type(type_table[*ty].mono.get_ctor_id());
-                        let llvm_struct = self
+                        let llvm_str_type = self.make_llvm_type(ctx.type_table[*ty].mono.get_ctor_id());
+                        let llvm_struct = storage.or_else(||  self
                             .builder
                             .build_alloca(
                                 llvm_str_type.into_struct_type(),
                                 &self.make_temp("struct"),
-                            )
+                            ).ok()
+                        )
                             .unwrap();
                         let ctor_name = ctor.name.to_string();
                         LlvmRValue(self.load_any(llvm_struct, llvm_str_type, &ctor_name))
                     }
                     MIRExprRValue::Cast(expr, casted_type, _) => {
                         let LlvmRValue(expr_compiled) =
-                            self.compile_expr_rvalue(current_scope, symbol_table, expr, type_table);
+                            self.compile_expr_rvalue(ctx, expr, None);
 
                         let llvm_casted_type =
-                            self.make_llvm_type(type_table[casted_type].mono.get_ctor_id());
+                            self.make_llvm_type(ctx.type_table[casted_type].mono.get_ctor_id());
 
                         //generate a numeric cast, i.e. i32 -> i64, f32 -> f64, i32 -> f64, etc
 
                         let casted: BasicValueEnum = if self
                             .type_db
-                            .is_integer(type_table[expr.get_type()].mono.get_ctor_id())
+                            .is_integer(ctx.type_table[expr.get_type()].mono.get_ctor_id())
                         {
                             if self
                                 .type_db
-                                .is_integer(type_table[casted_type].mono.get_ctor_id())
+                                .is_integer(ctx.type_table[casted_type].mono.get_ctor_id())
                             {
                                 self.builder
                                     .build_int_cast(
@@ -1020,7 +1087,7 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                                     .into()
                             } else if self
                                 .type_db
-                                .is_float(type_table[casted_type].mono.get_ctor_id())
+                                .is_float(ctx.type_table[casted_type].mono.get_ctor_id())
                             {
                                 self.builder
                                     .build_signed_int_to_float(
@@ -1035,11 +1102,11 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                             }
                         } else if self
                             .type_db
-                            .is_float(type_table[expr.get_type()].mono.get_ctor_id())
+                            .is_float(ctx.type_table[expr.get_type()].mono.get_ctor_id())
                         {
                             if self
                                 .type_db
-                                .is_integer(type_table[casted_type].mono.get_ctor_id())
+                                .is_integer(ctx.type_table[casted_type].mono.get_ctor_id())
                             {
                                 self.builder
                                     .build_float_to_signed_int(
@@ -1051,7 +1118,7 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                                     .into()
                             } else if self
                                 .type_db
-                                .is_float(type_table[casted_type].mono.get_ctor_id())
+                                .is_float(ctx.type_table[casted_type].mono.get_ctor_id())
                             {
                                 self.builder
                                     .build_float_cast(
@@ -1073,31 +1140,27 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                     MIRExprRValue::TypeVariable { type_variable, .. } => {
                         let type_data_type = self.type_db.find_by_name("TypeData".into()).unwrap();
                         let llvm_type_data_type = self.make_llvm_type(type_data_type.id);
-                        let ctor_id = type_table[*type_variable].mono.get_ctor_id();
+                        let ctor_id = ctx.type_table[*type_variable].mono.get_ctor_id();
                         let global = self.type_data.get(&ctor_id);
                         match global {
                             Some(type_data) => {
                                 let loaded_global_var = self
-                                    .builder
-                                    .build_load(
+                                    .build_aligned_load(
                                         llvm_type_data_type.into_struct_type(),
                                         type_data.as_pointer_value(),
                                         "loaded_type_data",
-                                    )
-                                    .unwrap();
+                                    );
                                 LlvmRValue(loaded_global_var)
                             }
                             None => {
                                 self.add_type_data(ctor_id);
                                 let global = self.type_data.get(&ctor_id).unwrap();
                                 let loaded_global_var = self
-                                    .builder
-                                    .build_load(
+                                    .build_aligned_load(
                                         llvm_type_data_type.into_struct_type(),
                                         global.as_pointer_value(),
                                         "loaded_type_data",
-                                    )
-                                    .unwrap();
+                                    );
                                 LlvmRValue(loaded_global_var)
                             }
                         }
@@ -1111,10 +1174,10 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                             "LValue compile, name = {} {:?}, {}",
                             name,
                             name,
-                            symbol_table.len()
+                            ctx.symbol_table.len()
                         );
 
-                        match symbol_table.get(&(*name, current_scope)) {
+                        match ctx.symbol_table.get(&(*name, ctx.block.scope)) {
                             Some((ptr, ty)) => {
                                 let as_any = self.as_any_type(*ty);
                                 let loaded = self.load_any(*ptr, as_any, name.as_ref());
@@ -1130,11 +1193,11 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                     }
                     MIRExprLValue::MemberAccess(obj, member, _, _) => {
                         let LlvmLValue(llvm_expr, llvm_expr_ty) =
-                            self.compile_expr_lvalue(current_scope, symbol_table, obj, type_table);
+                            self.compile_expr_lvalue(ctx, obj);
 
                         let type_ctor = self
                             .type_db
-                            .find(type_table[obj.get_type()].mono.get_ctor_id());
+                            .find(ctx.type_table[obj.get_type()].mono.get_ctor_id());
                         let (index, field) = type_ctor
                             .fields
                             .iter()
@@ -1177,7 +1240,7 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
 
                         //So yes, even if the value came from an RValue, through the deref it can become an lvalue, like so:
                         // *get_string_buf("abc") = 1
-                        let mono = &type_table[expr.get_type()].mono;
+                        let mono = &ctx.type_table[expr.get_type()].mono;
 
                         let MonoType::Application(ctor_id, param) = mono else {
                             panic!("deref on non-application type")
@@ -1194,7 +1257,7 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                         let type_ctor = self.make_llvm_type(pointee.get_ctor_id());
 
                         let LlvmRValue(basic) =
-                            self.compile_expr_rvalue(current_scope, symbol_table, expr, type_table);
+                            self.compile_expr_rvalue(ctx, expr, None);
 
                         //basic needs to be a pointer. If it was a variable, compile_expr_rvalue would have loaded it already.
                         //if it was a field, then the field type itself if a ptr, like buf in str
@@ -1214,17 +1277,12 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
 
     fn build_method_call(
         &mut self,
-        current_scope: ScopeId,
-        symbol_table: &BTreeMap<
-            (InternedString, ScopeId),
-            (PointerValue<'ctx>, BasicTypeEnum<'ctx>),
-        >,
-        type_table: &TypeTable,
+        ctx: &CodegenCtx<'_, 'ctx>,
         object: &Box<MIRExpr>,
         method_name: &InternedString,
         args: &Vec<MIRExpr>,
     ) -> LlvmRValue<'ctx> {
-        let mono = &type_table[object.get_type()].mono;
+        let mono = &ctx.type_table[object.get_type()].mono;
         let MonoType::Application(ctor, param) = mono else {
             panic!("Unsupported type on method call: {mono:?}")
         };
@@ -1234,17 +1292,16 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
 
             if method_name == "__index_ptr__" {
                 let self_value = self
-                    .compile_expr_rvalue(current_scope, symbol_table, object, type_table)
+                    .compile_expr_rvalue(ctx, object, None)
                     .get_value()
                     .into_pointer_value();
 
                 let pointee = self.make_llvm_type(param.first().unwrap().get_ctor_id());
                 let index_arg = self
                     .compile_expr_rvalue(
-                        current_scope,
-                        symbol_table,
+                        ctx,
                         args.first().unwrap(),
-                        type_table,
+                        None
                     )
                     .get_value();
 
@@ -1309,12 +1366,12 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
             let method_name = self.get_method_name_type_id(*ctor, *method_name);
             let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![];
             let self_value =
-                self.compile_expr_lvalue(current_scope, symbol_table, object, type_table);
+                self.compile_expr_lvalue(ctx, object);
             //TODO deduplicate this code
             let call_args: Vec<BasicMetadataValueEnum> = args
                 .iter()
                 .map(|x| {
-                    self.compile_expr_rvalue(current_scope, symbol_table, x, type_table)
+                    self.compile_expr_rvalue(ctx, x, None)
                         .get_value()
                         .into()
                 })
@@ -1343,10 +1400,8 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
 
     pub fn compile_expr_lvalue(
         &mut self,
-        current_scope: ScopeId,
-        symbol_table: &FunctionSymbolTable<'ctx>,
-        expression: &MIRExpr,
-        type_table: &TypeTable,
+        codegen_ctx: &CodegenCtx<'_, 'ctx>,
+        expression: &MIRExpr
     ) -> LlvmLValue<'ctx> {
         match expression {
             MIRExpr::RValue(rvalue) => {
@@ -1382,10 +1437,8 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                         //then we do a compile_expr on that variable. The result is an lvalue which contains the pointer.
 
                         self.compile_expr_lvalue(
-                            current_scope,
-                            symbol_table,
-                            &MIRExpr::LValue(*expr.clone()),
-                            type_table,
+                           codegen_ctx,
+                            &MIRExpr::LValue(*expr.clone())
                         )
                     }
                     MIRExprRValue::UnaryExpression(_op, _expr, _, _) => {
@@ -1403,7 +1456,7 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                     MIRExprRValue::TypeVariable { type_variable, .. } => {
                         let type_data_type = self.type_db.find_by_name("TypeData".into()).unwrap();
                         let llvm_type_data_type = self.make_llvm_type(type_data_type.id);
-                        let ctor_id = type_table[*type_variable].mono.get_ctor_id();
+                        let ctor_id = codegen_ctx.type_table[*type_variable].mono.get_ctor_id();
                         let global = self.type_data.get(&ctor_id);
 
                         match global {
@@ -1426,10 +1479,10 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                             "LValue compile, name = {} {:?}, {}",
                             name,
                             name,
-                            symbol_table.len()
+                            codegen_ctx.symbol_table.len()
                         );
 
-                        match symbol_table.get(&(*name, current_scope)) {
+                        match codegen_ctx.symbol_table.get(&(*name, codegen_ctx.block.scope)) {
                             Some((ptr, ty)) => {
                                 let as_any = self.as_any_type(*ty);
                                 LlvmLValue(*ptr, as_any)
@@ -1446,11 +1499,11 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                     MIRExprLValue::MemberAccess(obj, member, _, _) => {
                         //need to compile as lvalue because we need the place of obj
                         let LlvmLValue(llvm_expr, llvm_expr_ty) =
-                            self.compile_expr_lvalue(current_scope, symbol_table, obj, type_table);
+                            self.compile_expr_lvalue(codegen_ctx, obj);
 
                         let type_ctor = self
                             .type_db
-                            .find(type_table[obj.get_type()].mono.get_ctor_id());
+                            .find(codegen_ctx.type_table[obj.get_type()].mono.get_ctor_id());
                         let (index, field) = type_ctor
                             .fields
                             .iter()
@@ -1493,7 +1546,7 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
 
                         //So yes, even if the value came from an RValue, through the deref it can become an lvalue, like so:
                         // *get_string_buf("abc") = 1
-                        let mono = &type_table[expr.get_type()].mono;
+                        let mono = &codegen_ctx.type_table[expr.get_type()].mono;
 
                         let MonoType::Application(ctor_id, param) = mono else {
                             panic!("deref on non-application type")
@@ -1510,7 +1563,7 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                         let type_ctor = self.make_llvm_type(pointee.get_ctor_id());
 
                         let LlvmRValue(basic) =
-                            self.compile_expr_rvalue(current_scope, symbol_table, expr, type_table);
+                            self.compile_expr_rvalue(codegen_ctx, expr, None);
 
                         //basic needs to be a pointer. If it was a variable, compile_expr_rvalue would have loaded it already.
                         //if it was a field, then the field type itself if a ptr, like buf in str
@@ -1528,14 +1581,12 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
         &mut self,
         lhs: &MIRExpr,
         rhs: &MIRExpr,
-        current_scope: ScopeId,
-        symbol_table: &FunctionSymbolTable<'ctx>,
+        ctx: &CodegenCtx<'_, 'ctx>,
         op: &crate::ast::parser::SpannedOperator,
-        types: &crate::types::type_constructor_db::CommonTypeConstructors,
-        type_table: &TypeTable,
+        types: &crate::types::type_constructor_db::CommonTypeConstructors
     ) -> LlvmRValue<'ctx> {
-        let lhs_type = type_table[lhs.get_type()].mono.get_ctor_id();
-        let rhs_type = type_table[rhs.get_type()].mono.get_ctor_id();
+        let lhs_type = ctx.type_table[lhs.get_type()].mono.get_ctor_id();
+        let rhs_type = ctx.type_table[rhs.get_type()].mono.get_ctor_id();
 
         if lhs_type != rhs_type {
             panic!(
@@ -1543,11 +1594,11 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
             )
         }
         let lhs = self
-            .compile_expr_rvalue(current_scope, symbol_table, lhs, type_table)
+            .compile_expr_rvalue(ctx, lhs, None)
             .get_value();
 
         let rhs = self
-            .compile_expr_rvalue(current_scope, symbol_table, rhs, type_table)
+            .compile_expr_rvalue(ctx, rhs, None)
             .get_value();
 
         use paste::paste;
@@ -2008,7 +2059,8 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                 .builder
                 .build_struct_gep(llvm_str_type.into_struct_type(), str_alloc, 0, "_str_buf")
                 .unwrap();
-            self.builder.build_store(ptr_to_buf, buf_val).unwrap();
+            //self.builder.build_store(ptr_to_buf, buf_val).unwrap();
+            self.build_aligned_store(ptr_to_buf, buf_val);
         }
 
         {
@@ -2016,7 +2068,8 @@ impl<'ctx, 'codegen_scope> CodeGen<'codegen_scope, 'ctx> {
                 .builder
                 .build_struct_gep(llvm_str_type.into_struct_type(), str_alloc, 1, "_str_len")
                 .unwrap();
-            self.builder.build_store(ptr_to_len, len_val).unwrap();
+            //self.builder.build_store(ptr_to_len, len_val).unwrap();
+            self.build_aligned_store(ptr_to_len, len_val);
         }
         (str_alloc, llvm_str_type)
     }
@@ -2134,9 +2187,9 @@ fn build_function_symbol_table<'mir, 'function_layout, 'ctx>(
 
         let variables_on_scope = &function_layout.variables_for_each_scope[block.scope.0];
 
-        for (name, (_, _declaring_scope)) in variables_on_scope {
+        for (name, (_, declaring_scope)) in variables_on_scope {
             let variable_llvm = llvm_variables
-                .get(name)
+                .get(&(format!("{}", name).into()))
                 .expect("Should find the variable here");
 
             //log!("Symbol table insert: {:?} -> {:?}", name, variable_llvm);
@@ -2167,11 +2220,13 @@ pub fn generate_llvm(
     let context = Context::create();
     let module = context.create_module("program");
     let builder = context.create_builder();
+    let target_machine = get_native_target_machine();
 
     let mut codegen = CodeGen {
         context: &context,
         module: &module,
         builder: &builder,
+        target_machine,
         type_db,
         type_cache: DeterministicMap::new(),
         next_temporary: 0,
@@ -2244,7 +2299,6 @@ pub fn generate_llvm(
         }
     }
 
-    let target_machine = get_native_target_machine();
 
     //optimize_module(&target_machine, &module);
 
@@ -2253,11 +2307,11 @@ pub fn generate_llvm(
     //let elapsed = now.elapsed();
     //println!("Code took {}s to run, {out}", elapsed.as_secs_f64() / 1.0);
 
-    let asm_buffer = target_machine
+    let asm_buffer = codegen.target_machine
         .write_to_memory_buffer(codegen.module, FileType::Assembly)
         .unwrap();
 
-    let obj_buffer = target_machine
+    let obj_buffer = codegen.target_machine
         .write_to_memory_buffer(codegen.module, FileType::Object)
         .unwrap();
     // let object_file = obj_buffer.create_object_file().unwrap();
